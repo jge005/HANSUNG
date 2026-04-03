@@ -1,0 +1,843 @@
+import React, { useEffect, useRef, useState } from "react";
+import {
+  LockKeyhole,
+  ArrowRight,
+  FileSpreadsheet,
+  Settings2,
+  ScrollText,
+  FolderKanban,
+  ClipboardList,
+  Tags,
+  Building2,
+  ArrowLeft,
+} from "lucide-react";
+
+const shellBg =
+  "min-h-screen bg-[linear-gradient(180deg,#fff9ef_0%,#f8f1ff_48%,#eef6ff_100%)] text-[#4e4564]";
+const panel =
+  "rounded-[30px] border border-white/70 bg-white/80 shadow-[0_20px_60px_rgba(131,103,181,0.15)] backdrop-blur";
+const field =
+  "h-11 w-full rounded-2xl border border-[#eadff6] bg-white/92 px-4 text-[13px] outline-none focus:border-[#c3a7ff] focus:ring-2 focus:ring-[#f1e8ff]";
+const primaryButton =
+  "inline-flex items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#d8b7ff,#9fd2ff)] px-5 py-2.5 text-white shadow-[0_10px_24px_rgba(156,126,219,0.24)]";
+const softButton =
+  "inline-flex items-center justify-center rounded-2xl bg-white px-4 py-2 text-sm shadow";
+const roleCard =
+  "min-w-[180px] rounded-[24px] border border-white/90 bg-white/88 p-8 text-left shadow-[0_10px_28px_rgba(131,103,181,0.10)] transition hover:-translate-y-1 hover:bg-white";
+const salesSubTab = "rounded-2xl px-4 py-2 text-sm shadow-sm transition";
+
+const roleCards = [
+  { key: "accounting", title: "경리", icon: ScrollText },
+  { key: "manager", title: "실장", icon: FileSpreadsheet },
+  { key: "orders", title: "발주", icon: FolderKanban },
+  { key: "work", title: "작업", icon: Settings2 },
+] as const;
+
+const salesTabs = [
+  { key: "manage", label: "매출관리", icon: FileSpreadsheet },
+  { key: "status", label: "매출현황", icon: ClipboardList },
+  { key: "work", label: "거래작업", icon: ScrollText },
+  { key: "statement", label: "거래명세서", icon: FolderKanban },
+  { key: "price", label: "매출단가", icon: Tags },
+  { key: "client", label: "업체리스트", icon: Building2 },
+] as const;
+
+type RoleKey = (typeof roleCards)[number]["key"];
+type SalesTabKey = (typeof salesTabs)[number]["key"];
+type MainTab = "sales" | "purchase" | "closing" | null;
+type CellKey =
+  | "date"
+  | "client"
+  | "code"
+  | "name"
+  | "qty"
+  | "price"
+  | "amount"
+  | "note1"
+  | "note2";
+
+type CellPosition = { row: number; col: number };
+type SalesRow = Record<CellKey, string>;
+type Rect = { top: number; bottom: number; left: number; right: number };
+
+const salesColumns: { key: CellKey; label: string; widthClass: string }[] = [
+  { key: "date", label: "월일", widthClass: "w-[72px]" },
+  { key: "client", label: "업체", widthClass: "w-[120px]" },
+  { key: "code", label: "코드", widthClass: "w-[90px]" },
+  { key: "name", label: "품명", widthClass: "w-[170px]" },
+  { key: "qty", label: "수량", widthClass: "w-[70px]" },
+  { key: "price", label: "단가", widthClass: "w-[90px]" },
+  { key: "amount", label: "금액", widthClass: "w-[100px]" },
+  { key: "note1", label: "비고1", widthClass: "w-[110px]" },
+  { key: "note2", label: "비고2", widthClass: "w-[110px]" },
+];
+
+function createEmptyRow(): SalesRow {
+  return {
+    date: "",
+    client: "",
+    code: "",
+    name: "",
+    qty: "",
+    price: "",
+    amount: "",
+    note1: "",
+    note2: "",
+  };
+}
+
+function EmptyPage({ label }: { label: string }) {
+  return (
+    <div className="flex h-[520px] items-center justify-center rounded-2xl bg-white text-gray-400">
+      {label} 페이지 (비워둠)
+    </div>
+  );
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function rectFromPoints(a: CellPosition, b: CellPosition): Rect {
+  return {
+    top: Math.min(a.row, b.row),
+    bottom: Math.max(a.row, b.row),
+    left: Math.min(a.col, b.col),
+    right: Math.max(a.col, b.col),
+  };
+}
+
+function SalesTable() {
+  const [rows, setRows] = useState<SalesRow[]>(() =>
+    Array.from({ length: 40 }, () => createEmptyRow())
+  );
+  const [selectedCell, setSelectedCell] = useState<CellPosition>({ row: 0, col: 0 });
+  const [selectedKeys, setSelectedKeys] = useState<string[]>(["0:0"]);
+  const [dragging, setDragging] = useState(false);
+  const [isComposing, setIsComposing] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+
+  const tableRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const dragStartRef = useRef<CellPosition | null>(null);
+  const dragModeRef = useRef<"replace" | "add" | "remove">("replace");
+  const dragBaseKeysRef = useRef<string[]>([]);
+  const undoStackRef = useRef<SalesRow[][]>([]);
+  const redoStackRef = useRef<SalesRow[][]>([]);
+  const editOriginRef = useRef<{ row: number; col: number; value: string }>({
+    row: 0,
+    col: 0,
+    value: "",
+  });
+
+  const rowCount = rows.length;
+  const colCount = salesColumns.length;
+
+  const cellKey = (row: number, col: number) => `${row}:${col}`;
+
+  const keysFromPoints = (a: CellPosition, b: CellPosition) => {
+    const rect = rectFromPoints(a, b);
+    const keys: string[] = [];
+    for (let r = rect.top; r <= rect.bottom; r += 1) {
+      for (let c = rect.left; c <= rect.right; c += 1) {
+        keys.push(cellKey(r, c));
+      }
+    }
+    return keys;
+  };
+
+  const selectionBounds = () => {
+    const coords = selectedKeys.map((key) => key.split(":").map(Number) as [number, number]);
+    const rowsOnly = coords.map(([r]) => r);
+    const colsOnly = coords.map(([, c]) => c);
+    return {
+      top: Math.min(...rowsOnly),
+      bottom: Math.max(...rowsOnly),
+      left: Math.min(...colsOnly),
+      right: Math.max(...colsOnly),
+    };
+  };
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    requestAnimationFrame(() => {
+      if (!inputRef.current) return;
+      const len = inputRef.current.value.length;
+      if (editMode) {
+        inputRef.current.setSelectionRange(len, len);
+      } else {
+        inputRef.current.setSelectionRange(0, len);
+      }
+    });
+  }, [selectedCell, editMode]);
+
+  useEffect(() => {
+    const handleMouseUp = () => setDragging(false);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => window.removeEventListener("mouseup", handleMouseUp);
+  }, []);
+
+  useEffect(() => {
+    if (!editMode) {
+      editOriginRef.current = {
+        row: selectedCell.row,
+        col: selectedCell.col,
+        value: getValue(selectedCell.row, selectedCell.col),
+      };
+    }
+  }, [selectedCell, rows, editMode]);
+
+  const cloneRows = (source: SalesRow[]) => source.map((row) => ({ ...row }));
+
+  const getValue = (row: number, col: number) => rows[row]?.[salesColumns[col].key] ?? "";
+
+  const applyRowsChange = (
+    producer: (current: SalesRow[]) => SalesRow[],
+    options?: { trackHistory?: boolean }
+  ) => {
+    const trackHistory = options?.trackHistory ?? true;
+    const before = cloneRows(rows);
+    const after = producer(cloneRows(rows));
+
+    if (JSON.stringify(before) === JSON.stringify(after)) return;
+
+    if (trackHistory) {
+      undoStackRef.current.push(before);
+      if (undoStackRef.current.length > 200) undoStackRef.current.shift();
+      redoStackRef.current = [];
+    }
+
+    setRows(after);
+  };
+
+  const undo = () => {
+    const previous = undoStackRef.current.pop();
+    if (!previous) return;
+    redoStackRef.current.push(cloneRows(rows));
+    setRows(cloneRows(previous));
+    setEditMode(false);
+    setIsComposing(false);
+  };
+
+  const redo = () => {
+    const next = redoStackRef.current.pop();
+    if (!next) return;
+    undoStackRef.current.push(cloneRows(rows));
+    setRows(cloneRows(next));
+    setEditMode(false);
+    setIsComposing(false);
+  };
+
+  const setValue = (row: number, col: number, value: string) => {
+    const key = salesColumns[col].key;
+    if (getValue(row, col) === value) return;
+    applyRowsChange((current) => {
+      current[row] = { ...current[row], [key]: value };
+      return current;
+    });
+  };
+
+  const moveSelection = (row: number, col: number) => {
+    const nextRow = clamp(row, 0, rowCount - 1);
+    const nextCol = clamp(col, 0, colCount - 1);
+    setSelectedCell({ row: nextRow, col: nextCol });
+    setSelectedKeys([cellKey(nextRow, nextCol)]);
+    setEditMode(false);
+    setIsComposing(false);
+  };
+
+  const clearSelection = () => {
+    applyRowsChange((current) => {
+      selectedKeys.forEach((key) => {
+        const [rText, cText] = key.split(":");
+        const r = Number(rText);
+        const c = Number(cText);
+        const row = { ...current[r] };
+        row[salesColumns[c].key] = "";
+        current[r] = row;
+      });
+      return current;
+    });
+  };
+
+  const copySelection = async () => {
+    if (!selectedKeys.length) return;
+    const { top, bottom, left, right } = selectionBounds();
+    const lines: string[] = [];
+
+    for (let r = top; r <= bottom; r += 1) {
+      const cols: string[] = [];
+      for (let c = left; c <= right; c += 1) {
+        cols.push(getValue(r, c));
+      }
+      lines.push(cols.join("\t"));
+    }
+
+    const text = lines.join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // ignore clipboard failures in preview
+    }
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const text = e.clipboardData.getData("text/plain") || e.clipboardData.getData("text");
+    if (!text) return;
+
+    const startRow = selectedCell.row;
+    const startCol = selectedCell.col;
+    const lines = text.replace(/\r/g, "").split("\n");
+
+    applyRowsChange((current) => {
+      lines.forEach((line, rowOffset) => {
+        const cols = line.split("	");
+        cols.forEach((value, colOffset) => {
+          const row = startRow + rowOffset;
+          const col = startCol + colOffset;
+          if (row < current.length && col < salesColumns.length) {
+            current[row] = { ...current[row], [salesColumns[col].key]: value };
+          }
+        });
+      });
+      return current;
+    });
+
+    const pastedRows = Math.max(lines.length, 1);
+    const pastedCols = Math.max(...lines.map((line) => line.split("\t").length), 1);
+    const endRow = clamp(startRow + pastedRows - 1, 0, rowCount - 1);
+    const endCol = clamp(startCol + pastedCols - 1, 0, colCount - 1);
+    setSelectedCell({ row: endRow, col: endCol });
+    setSelectedKeys(keysFromPoints({ row: startRow, col: startCol }, { row: endRow, col: endCol }));
+    setEditMode(false);
+  };
+
+  const handleTableKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (editMode) return;
+
+    if (e.ctrlKey || e.metaKey) {
+      const key = e.key.toLowerCase();
+      if (key === "c") {
+        e.preventDefault();
+        void copySelection();
+        return;
+      }
+      if (key === "z") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          redo();
+        } else {
+          undo();
+        }
+        return;
+      }
+      if (key === "y") {
+        e.preventDefault();
+        redo();
+        return;
+      }
+      return;
+    }
+
+    if (e.altKey) {
+      if (e.key === "F2") {
+        e.preventDefault();
+        setEditMode(true);
+      }
+      return;
+    }
+
+    if (e.key === "Delete") {
+      e.preventDefault();
+      clearSelection();
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      moveSelection(e.shiftKey ? selectedCell.row - 1 : selectedCell.row + 1, selectedCell.col);
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      moveSelection(selectedCell.row - 1, selectedCell.col);
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      moveSelection(selectedCell.row + 1, selectedCell.col);
+      return;
+    }
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      moveSelection(selectedCell.row, selectedCell.col - 1);
+      return;
+    }
+    if (e.key === "ArrowRight") {
+      e.preventDefault();
+      moveSelection(selectedCell.row, selectedCell.col + 1);
+      return;
+    }
+    if (e.key === "F2") {
+      e.preventDefault();
+      setEditMode(true);
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      const { row, col, value } = editOriginRef.current;
+      applyRowsChange((current) => {
+        current[row] = { ...current[row], [salesColumns[col].key]: value };
+        return current;
+      });
+      moveSelection(row, col);
+    }
+  };
+
+  return (
+    <div className="rounded-2xl bg-white p-4 shadow-sm">
+      <div
+        ref={tableRef}
+        tabIndex={0}
+        onKeyDown={handleTableKeyDown}
+        onPaste={handlePaste}
+        className="max-h-[600px] overflow-auto rounded-2xl border border-[#e9def5] outline-none"
+      >
+        <table className="w-full table-fixed border-collapse text-[12px]">
+          <thead className="sticky top-0 z-10 bg-[linear-gradient(90deg,#fff8ea_0%,#f8f1ff_52%,#eef6ff_100%)]">
+            <tr>
+              {salesColumns.map((column) => (
+                <th
+                  key={column.key}
+                  className={`border border-[#eadff6] px-1 py-1 text-left font-semibold text-[#6d6387] ${column.widthClass}`}
+                >
+                  {column.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((rowData, rowIndex) => (
+              <tr key={rowIndex} className="bg-white">
+                {salesColumns.map((column, colIndex) => {
+                  const selected = selectedCell.row === rowIndex && selectedCell.col === colIndex;
+                  const inSelection = selectedKeys.includes(cellKey(rowIndex, colIndex));
+                  const value = rowData[column.key] ?? "";
+
+                  return (
+                    <td
+                      key={`${rowIndex}-${column.key}`}
+                      onMouseDown={(e) => {
+                        const pos = { row: rowIndex, col: colIndex };
+                        setDragging(true);
+                        dragStartRef.current = pos;
+                        setSelectedCell(pos);
+                        setEditMode(false);
+                        dragBaseKeysRef.current = selectedKeys;
+
+                        const alreadySelected = selectedKeys.includes(cellKey(rowIndex, colIndex));
+                        if (e.ctrlKey || e.metaKey) {
+                          dragModeRef.current = alreadySelected ? "remove" : "add";
+                          if (alreadySelected) {
+                            setSelectedKeys((prev) => prev.filter((key) => key !== cellKey(rowIndex, colIndex)));
+                          } else {
+                            setSelectedKeys((prev) => Array.from(new Set([...prev, cellKey(rowIndex, colIndex)])));
+                          }
+                        } else {
+                          dragModeRef.current = "replace";
+                          setSelectedKeys([cellKey(rowIndex, colIndex)]);
+                        }
+
+                        requestAnimationFrame(() => {
+                          if (!inputRef.current) return;
+                          inputRef.current.focus();
+                          const len = inputRef.current.value.length;
+                          inputRef.current.setSelectionRange(0, len);
+                        });
+                      }}
+                      onMouseEnter={() => {
+                        if (!dragging || !dragStartRef.current) return;
+                        const current = { row: rowIndex, col: colIndex };
+                        setSelectedCell(current);
+                        setEditMode(false);
+                        const rectKeys = keysFromPoints(dragStartRef.current, current);
+
+                        if (dragModeRef.current === "replace") {
+                          setSelectedKeys(rectKeys);
+                        } else if (dragModeRef.current === "add") {
+                          setSelectedKeys(Array.from(new Set([...dragBaseKeysRef.current, ...rectKeys])));
+                        } else {
+                          setSelectedKeys(dragBaseKeysRef.current.filter((key) => !rectKeys.includes(key)));
+                        }
+                      }}
+                      onClick={() => {
+                        setSelectedCell({ row: rowIndex, col: colIndex });
+                        setSelectedKeys([cellKey(rowIndex, colIndex)]);
+                        setEditMode(false);
+                        requestAnimationFrame(() => {
+                          if (!inputRef.current) return;
+                          inputRef.current.focus();
+                          const len = inputRef.current.value.length;
+                          inputRef.current.setSelectionRange(0, len);
+                        });
+                      }}
+                      onDoubleClick={() => {
+                        setSelectedCell({ row: rowIndex, col: colIndex });
+                        setSelectedKeys([cellKey(rowIndex, colIndex)]);
+                        setEditMode(true);
+                        requestAnimationFrame(() => {
+                          if (!inputRef.current) return;
+                          inputRef.current.focus();
+                          const len = inputRef.current.value.length;
+                          inputRef.current.setSelectionRange(len, len);
+                        });
+                      }}
+                      className={`border border-[#efe5f8] px-1 py-0.5 align-middle transition-colors duration-100 ${column.widthClass} ${
+                        selected
+                          ? "relative z-10 bg-[#f7fbff] outline outline-2 outline-blue-400"
+                          : inSelection
+                            ? "bg-[#eef4ff]"
+                            : ""
+                      }`}
+                    >
+                      <div className="relative min-h-[24px] px-1 py-0.5 text-[#514867]">
+                        {selected ? (
+                          <>
+                            <input
+                              ref={inputRef}
+                              value={value}
+                              onChange={(e) => {
+                                if (!editMode) setEditMode(true);
+                                setValue(rowIndex, colIndex, e.target.value);
+                              }}
+                              onCompositionStart={() => {
+                                setIsComposing(true);
+                                if (!editMode) setEditMode(true);
+                              }}
+                              onCompositionEnd={(e) => {
+                                setIsComposing(false);
+                                setValue(rowIndex, colIndex, e.currentTarget.value);
+                              }}
+                              onFocus={(e) => {
+                                const len = e.currentTarget.value.length;
+                                if (editMode) {
+                                  e.currentTarget.setSelectionRange(len, len);
+                                } else {
+                                  e.currentTarget.setSelectionRange(0, len);
+                                }
+                              }}
+                              onMouseUp={(e) => {
+                                if (!editMode) {
+                                  e.preventDefault();
+                                  const len = e.currentTarget.value.length;
+                                  e.currentTarget.setSelectionRange(0, len);
+                                }
+                              }}
+                              onSelect={(e) => {
+                                if (!editMode) {
+                                  const len = e.currentTarget.value.length;
+                                  e.currentTarget.setSelectionRange(0, len);
+                                }
+                              }}
+                              onKeyDown={(e) => {
+                                if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+                                  e.preventDefault();
+                                  if (e.shiftKey) {
+                                    redo();
+                                  } else {
+                                    undo();
+                                  }
+                                  return;
+                                }
+                                if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
+                                  e.preventDefault();
+                                  redo();
+                                  return;
+                                }
+                                if (e.key === "Escape") {
+                                  e.preventDefault();
+                                  const { row, col, value } = editOriginRef.current;
+                                  applyRowsChange((current) => {
+                                    current[row] = { ...current[row], [salesColumns[col].key]: value };
+                                    return current;
+                                  });
+                                  moveSelection(row, col);
+                                  return;
+                                }
+                                if (isComposing || e.nativeEvent.isComposing) return;
+
+                                const input = e.currentTarget;
+                                const start = input.selectionStart ?? 0;
+                                const end = input.selectionEnd ?? 0;
+                                const len = input.value.length;
+
+                                if (!editMode) {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    moveSelection(e.shiftKey ? rowIndex - 1 : rowIndex + 1, colIndex);
+                                    return;
+                                  }
+                                  if (e.key === "ArrowUp") {
+                                    e.preventDefault();
+                                    moveSelection(rowIndex - 1, colIndex);
+                                    return;
+                                  }
+                                  if (e.key === "ArrowDown") {
+                                    e.preventDefault();
+                                    moveSelection(rowIndex + 1, colIndex);
+                                    return;
+                                  }
+                                  if (e.key === "ArrowLeft") {
+                                    e.preventDefault();
+                                    moveSelection(rowIndex, colIndex - 1);
+                                    return;
+                                  }
+                                  if (e.key === "ArrowRight") {
+                                    e.preventDefault();
+                                    moveSelection(rowIndex, colIndex + 1);
+                                    return;
+                                  }
+                                  if (e.key === "F2") {
+                                    e.preventDefault();
+                                    setEditMode(true);
+                                  }
+                                  return;
+                                }
+
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  moveSelection(e.shiftKey ? rowIndex - 1 : rowIndex + 1, colIndex);
+                                  return;
+                                }
+                                if (e.key === "ArrowUp") {
+                                  e.preventDefault();
+                                  moveSelection(rowIndex - 1, colIndex);
+                                  return;
+                                }
+                                if (e.key === "ArrowDown") {
+                                  e.preventDefault();
+                                  moveSelection(rowIndex + 1, colIndex);
+                                  return;
+                                }
+                                if (e.key === "ArrowLeft" && start === 0 && end === 0) {
+                                  e.preventDefault();
+                                  moveSelection(rowIndex, colIndex - 1);
+                                  return;
+                                }
+                                if (e.key === "ArrowRight" && start === len && end === len) {
+                                  e.preventDefault();
+                                  moveSelection(rowIndex, colIndex + 1);
+                                  return;
+                                }
+                              }}
+                              className={`absolute inset-0 z-[2] h-[24px] w-full bg-transparent outline-none ${
+                                editMode
+                                  ? "text-[#514867] caret-auto"
+                                  : "text-transparent caret-transparent selection:bg-transparent"
+                              }`}
+                            />
+                            <div className="relative z-[1] h-[24px] whitespace-nowrap leading-[24px] pointer-events-none">
+                              {editMode ? "" : value}
+                            </div>
+                          </>
+                        ) : (
+                          <div className="h-[24px] whitespace-nowrap leading-[24px]">{value}</div>
+                        )}
+                      </div>
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  const [entered, setEntered] = useState(false);
+  const [role, setRole] = useState<RoleKey | null>(null);
+  const [mainTab, setMainTab] = useState<MainTab>(null);
+  const [subTab, setSubTab] = useState<SalesTabKey>("manage");
+  const [defaultClient, setDefaultClient] = useState("대영전자");
+  const [lockClient, setLockClient] = useState(true);
+
+  const loginRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!entered) loginRef.current?.focus();
+  }, [entered]);
+
+  const handleEnter = () => setEntered(true);
+
+  const logout = () => {
+    setEntered(false);
+    setRole(null);
+    setMainTab(null);
+    setSubTab("manage");
+  };
+
+  const goBack = () => {
+    if (mainTab) {
+      setMainTab(null);
+      return;
+    }
+    setRole(null);
+  };
+
+  if (!entered) {
+    return (
+      <div
+        ref={loginRef}
+        tabIndex={0}
+        onKeyDown={(e) => e.key === "Enter" && handleEnter()}
+        className={shellBg}
+      >
+        <div className="flex min-h-screen items-center justify-center">
+          <div className={`${panel} w-[420px] p-10`}>
+            <div className="mb-4 flex items-center gap-3">
+              <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-white/90 bg-white shadow-[0_8px_24px_rgba(131,103,181,0.10)]">
+                <LockKeyhole className="h-5 w-5 text-[#9e7cf6]" />
+              </div>
+              <div>
+                <div className="text-xl font-semibold text-[#4b3f66]">로그인</div>
+                <div className="text-sm text-[#8b82a3]">엔터만 눌러도 바로 넘어가도록 설정됨</div>
+              </div>
+            </div>
+            <input placeholder="아이디" className={field} />
+            <input placeholder="비밀번호" className={`${field} mt-3`} />
+            <button onClick={handleEnter} className={`${primaryButton} mt-4 w-full`}>
+              들어가기 <ArrowRight className="ml-1 h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!role) {
+    return (
+      <div className={shellBg}>
+        <div className="flex min-h-screen items-center justify-center gap-6 px-4">
+          {roleCards.map((card) => {
+            const Icon = card.icon;
+            return (
+              <button key={card.key} onClick={() => setRole(card.key)} className={roleCard}>
+                <div className="mb-4 inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#f8f0ff_0%,#eef7ff_100%)] text-[#8b72d9]">
+                  <Icon className="h-5 w-5" />
+                </div>
+                <div className="text-[19px] font-semibold tracking-[-0.02em] text-[#4b3f66]">
+                  {card.title}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  if (role === "accounting") {
+    return (
+      <div className={shellBg}>
+        <div className="flex justify-between p-4">
+          <button onClick={goBack} className={softButton}>
+            <ArrowLeft className="mr-1 inline h-4 w-4" /> 이전
+          </button>
+          <button onClick={logout} className={softButton}>
+            로그아웃
+          </button>
+        </div>
+
+        <div className="px-6 pb-6">
+          {!mainTab ? (
+            <div className="flex min-h-[70vh] items-center justify-center gap-6">
+              <button
+                onClick={() => setMainTab("sales")}
+                className="min-w-[180px] rounded-2xl bg-white p-8 shadow transition hover:-translate-y-1"
+              >
+                <ScrollText className="mb-3" />
+                <div className="font-semibold">매출</div>
+              </button>
+              <button
+                onClick={() => setMainTab("purchase")}
+                className="min-w-[180px] rounded-2xl bg-white p-8 shadow transition hover:-translate-y-1"
+              >
+                <FolderKanban className="mb-3" />
+                <div className="font-semibold">매입</div>
+              </button>
+              <button
+                onClick={() => setMainTab("closing")}
+                className="min-w-[180px] rounded-2xl bg-white p-8 shadow transition hover:-translate-y-1"
+              >
+                <FileSpreadsheet className="mb-3" />
+                <div className="font-semibold">마감</div>
+              </button>
+            </div>
+          ) : mainTab === "sales" ? (
+            <>
+              <div className="mb-4 flex items-center justify-between gap-4 rounded-2xl bg-white p-4 shadow-sm">
+                <div className="flex items-center gap-3">
+                  <div className="text-sm font-medium text-[#5f5677]">기본 업체:</div>
+                  <select
+                    value={defaultClient}
+                    onChange={(e) => setDefaultClient(e.target.value)}
+                    className="rounded-xl border border-[#eadff6] px-3 py-2 text-sm outline-none"
+                  >
+                    <option>대영전자</option>
+                    <option>대영VINA</option>
+                    <option>디지티</option>
+                  </select>
+                  <label className="flex items-center gap-2 text-sm text-[#5f5677]">
+                    <input
+                      type="checkbox"
+                      checked={lockClient}
+                      onChange={(e) => setLockClient(e.target.checked)}
+                    />
+                    고정
+                  </label>
+                  <div className="text-xs text-[#8b82a3]">현재 입력 업체: {defaultClient}</div>
+                </div>
+              </div>
+
+              <div className="mb-4 flex flex-wrap gap-2">
+                {salesTabs.map((tab) => {
+                  const Icon = tab.icon;
+                  const active = subTab === tab.key;
+                  return (
+                    <button
+                      key={tab.key}
+                      onClick={() => setSubTab(tab.key)}
+                      className={`${salesSubTab} ${
+                        active ? "bg-purple-300 text-[#4b3f66]" : "bg-white text-[#6a6082]"
+                      }`}
+                    >
+                      <Icon className="mr-1 inline h-4 w-4" />
+                      {tab.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {subTab === "status" ? (
+                <SalesTable />
+              ) : (
+                <EmptyPage label={salesTabs.find((tab) => tab.key === subTab)?.label ?? subTab} />
+              )}
+            </>
+          ) : (
+            <EmptyPage label={mainTab === "purchase" ? "매입" : "마감"} />
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={shellBg}>
+      <div className="flex min-h-screen items-center justify-center text-xl">{role} 화면 준비중</div>
+    </div>
+  );
+}
