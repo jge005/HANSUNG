@@ -3,15 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>관리 프로그램</title>
+    <title>한성기업 관리 프로그램</title>
     
     <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
-    
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    
     <script src="https://cdn.tailwindcss.com"></script>
-    
     <script src="https://unpkg.com/lucide-react@latest/dist/umd/lucide-react.min.js"></script>
 
     <style>
@@ -22,25 +19,16 @@
 <body>
     <div id="root"></div>
 
-    <script type="text/babel" data-presets="typescript,react">
-        // 기존 import문을 대체하여 전역 변수에서 필요한 기능 꺼내오기
+    <script type="text/babel" data-presets="react">
         const { useState, useEffect, useRef } = React;
+        
+        // 아이콘 라이브러리 안전하게 불러오기
+        const icons = window.lucideReact || window.LucideReact;
         const {
-          LockKeyhole,
-          ArrowRight,
-          FileSpreadsheet,
-          Settings2,
-          ScrollText,
-          FolderKanban,
-          ClipboardList,
-          Tags,
-          Building2,
-          ArrowLeft,
-        } = lucideReact;
+          LockKeyhole, ArrowRight, FileSpreadsheet, Settings2, ScrollText, 
+          FolderKanban, ClipboardList, Tags, Building2, ArrowLeft
+        } = icons;
 
-        // ==========================================
-        // 여기서부터 네 원본 코드 시작 (기능/디자인 100% 동일)
-        // ==========================================
         const shellBg = "min-h-screen bg-[linear-gradient(180deg,#fff9ef_0%,#f8f1ff_48%,#eef6ff_100%)] text-[#4e4564]";
         const panel = "rounded-[30px] border border-white/70 bg-white/80 shadow-[0_20px_60px_rgba(131,103,181,0.15)] backdrop-blur";
         const field = "h-11 w-full rounded-2xl border border-[#eadff6] bg-white/92 px-4 text-[13px] outline-none focus:border-[#c3a7ff] focus:ring-2 focus:ring-[#f1e8ff]";
@@ -54,7 +42,7 @@
           { key: "manager", title: "실장", icon: FileSpreadsheet },
           { key: "orders", title: "발주", icon: FolderKanban },
           { key: "work", title: "작업", icon: Settings2 },
-        ] as const;
+        ];
 
         const salesTabs = [
           { key: "manage", label: "매출관리", icon: FileSpreadsheet },
@@ -63,27 +51,9 @@
           { key: "statement", label: "거래명세서", icon: FolderKanban },
           { key: "price", label: "매출단가", icon: Tags },
           { key: "client", label: "업체리스트", icon: Building2 },
-        ] as const;
+        ];
 
-        type RoleKey = (typeof roleCards)[number]["key"];
-        type SalesTabKey = (typeof salesTabs)[number]["key"];
-        type MainTab = "sales" | "purchase" | "closing" | null;
-        type CellKey =
-          | "date"
-          | "client"
-          | "code"
-          | "name"
-          | "qty"
-          | "price"
-          | "amount"
-          | "note1"
-          | "note2";
-
-        type CellPosition = { row: number; col: number };
-        type SalesRow = Record<CellKey, string>;
-        type Rect = { top: number; bottom: number; left: number; right: number };
-
-        const salesColumns: { key: CellKey; label: string; widthClass: string }[] = [
+        const salesColumns = [
           { key: "date", label: "월일", widthClass: "w-[72px]" },
           { key: "client", label: "업체", widthClass: "w-[120px]" },
           { key: "code", label: "코드", widthClass: "w-[90px]" },
@@ -95,21 +65,11 @@
           { key: "note2", label: "비고2", widthClass: "w-[110px]" },
         ];
 
-        function createEmptyRow(): SalesRow {
-          return {
-            date: "",
-            client: "",
-            code: "",
-            name: "",
-            qty: "",
-            price: "",
-            amount: "",
-            note1: "",
-            note2: "",
-          };
+        function createEmptyRow() {
+          return { date: "", client: "", code: "", name: "", qty: "", price: "", amount: "", note1: "", note2: "" };
         }
 
-        function EmptyPage({ label }: { label: string }) {
+        function EmptyPage({ label }) {
           return (
             <div className="flex h-[520px] items-center justify-center rounded-2xl bg-white text-gray-400">
               {label} 페이지 (비워둠)
@@ -117,11 +77,11 @@
           );
         }
 
-        function clamp(value: number, min: number, max: number) {
+        function clamp(value, min, max) {
           return Math.min(Math.max(value, min), max);
         }
 
-        function rectFromPoints(a: CellPosition, b: CellPosition): Rect {
+        function rectFromPoints(a, b) {
           return {
             top: Math.min(a.row, b.row),
             bottom: Math.max(a.row, b.row),
@@ -131,36 +91,30 @@
         }
 
         function SalesTable() {
-          const [rows, setRows] = useState<SalesRow[]>(() =>
-            Array.from({ length: 40 }, () => createEmptyRow())
-          );
-          const [selectedCell, setSelectedCell] = useState<CellPosition>({ row: 0, col: 0 });
-          const [selectedKeys, setSelectedKeys] = useState<string[]>(["0:0"]);
+          const [rows, setRows] = useState(() => Array.from({ length: 40 }, () => createEmptyRow()));
+          const [selectedCell, setSelectedCell] = useState({ row: 0, col: 0 });
+          const [selectedKeys, setSelectedKeys] = useState(["0:0"]);
           const [dragging, setDragging] = useState(false);
           const [isComposing, setIsComposing] = useState(false);
           const [editMode, setEditMode] = useState(false);
 
-          const tableRef = useRef<HTMLDivElement | null>(null);
-          const inputRef = useRef<HTMLInputElement | null>(null);
-          const dragStartRef = useRef<CellPosition | null>(null);
-          const dragModeRef = useRef<"replace" | "add" | "remove">("replace");
-          const dragBaseKeysRef = useRef<string[]>([]);
-          const undoStackRef = useRef<SalesRow[][]>([]);
-          const redoStackRef = useRef<SalesRow[][]>([]);
-          const editOriginRef = useRef<{ row: number; col: number; value: string }>({
-            row: 0,
-            col: 0,
-            value: "",
-          });
+          const tableRef = useRef(null);
+          const inputRef = useRef(null);
+          const dragStartRef = useRef(null);
+          const dragModeRef = useRef("replace");
+          const dragBaseKeysRef = useRef([]);
+          const undoStackRef = useRef([]);
+          const redoStackRef = useRef([]);
+          const editOriginRef = useRef({ row: 0, col: 0, value: "" });
 
           const rowCount = rows.length;
           const colCount = salesColumns.length;
 
-          const cellKey = (row: number, col: number) => `${row}:${col}`;
+          const cellKey = (row, col) => `${row}:${col}`;
 
-          const keysFromPoints = (a: CellPosition, b: CellPosition) => {
+          const keysFromPoints = (a, b) => {
             const rect = rectFromPoints(a, b);
-            const keys: string[] = [];
+            const keys = [];
             for (let r = rect.top; r <= rect.bottom; r += 1) {
               for (let c = rect.left; c <= rect.right; c += 1) {
                 keys.push(cellKey(r, c));
@@ -170,7 +124,7 @@
           };
 
           const selectionBounds = () => {
-            const coords = selectedKeys.map((key) => key.split(":").map(Number) as [number, number]);
+            const coords = selectedKeys.map((key) => key.split(":").map(Number));
             const rowsOnly = coords.map(([r]) => r);
             const colsOnly = coords.map(([, c]) => c);
             return {
@@ -182,16 +136,18 @@
           };
 
           useEffect(() => {
-            inputRef.current?.focus();
-            requestAnimationFrame(() => {
-              if (!inputRef.current) return;
-              const len = inputRef.current.value.length;
-              if (editMode) {
-                inputRef.current.setSelectionRange(len, len);
-              } else {
-                inputRef.current.setSelectionRange(0, len);
-              }
-            });
+            if (inputRef.current) {
+              inputRef.current.focus();
+              requestAnimationFrame(() => {
+                if (!inputRef.current) return;
+                const len = inputRef.current.value.length;
+                if (editMode) {
+                  inputRef.current.setSelectionRange(len, len);
+                } else {
+                  inputRef.current.setSelectionRange(0, len);
+                }
+              });
+            }
           }, [selectedCell, editMode]);
 
           useEffect(() => {
@@ -210,14 +166,11 @@
             }
           }, [selectedCell, rows, editMode]);
 
-          const cloneRows = (source: SalesRow[]) => source.map((row) => ({ ...row }));
+          const cloneRows = (source) => source.map((row) => ({ ...row }));
 
-          const getValue = (row: number, col: number) => rows[row]?.[salesColumns[col].key] ?? "";
+          const getValue = (row, col) => rows[row]?.[salesColumns[col].key] ?? "";
 
-          const applyRowsChange = (
-            producer: (current: SalesRow[]) => SalesRow[],
-            options?: { trackHistory?: boolean }
-          ) => {
+          const applyRowsChange = (producer, options) => {
             const trackHistory = options?.trackHistory ?? true;
             const before = cloneRows(rows);
             const after = producer(cloneRows(rows));
@@ -251,7 +204,7 @@
             setIsComposing(false);
           };
 
-          const setValue = (row: number, col: number, value: string) => {
+          const setValue = (row, col, value) => {
             const key = salesColumns[col].key;
             if (getValue(row, col) === value) return;
             applyRowsChange((current) => {
@@ -260,7 +213,7 @@
             });
           };
 
-          const moveSelection = (row: number, col: number) => {
+          const moveSelection = (row, col) => {
             const nextRow = clamp(row, 0, rowCount - 1);
             const nextCol = clamp(col, 0, colCount - 1);
             setSelectedCell({ row: nextRow, col: nextCol });
@@ -275,9 +228,9 @@
                 const [rText, cText] = key.split(":");
                 const r = Number(rText);
                 const c = Number(cText);
-                const row = { ...current[r] };
-                row[salesColumns[c].key] = "";
-                current[r] = row;
+                const rowObj = { ...current[r] };
+                rowObj[salesColumns[c].key] = "";
+                current[r] = rowObj;
               });
               return current;
             });
@@ -286,10 +239,10 @@
           const copySelection = async () => {
             if (!selectedKeys.length) return;
             const { top, bottom, left, right } = selectionBounds();
-            const lines: string[] = [];
+            const lines = [];
 
             for (let r = top; r <= bottom; r += 1) {
-              const cols: string[] = [];
+              const cols = [];
               for (let c = left; c <= right; c += 1) {
                 cols.push(getValue(r, c));
               }
@@ -299,12 +252,12 @@
             const text = lines.join("\n");
             try {
               await navigator.clipboard.writeText(text);
-            } catch {
-              // ignore clipboard failures in preview
+            } catch (err) {
+              // ignore clipboard failures
             }
           };
 
-          const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
+          const handlePaste = (e) => {
             e.preventDefault();
             const text = e.clipboardData.getData("text/plain") || e.clipboardData.getData("text");
             if (!text) return;
@@ -336,14 +289,14 @@
             setEditMode(false);
           };
 
-          const handleTableKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+          const handleTableKeyDown = (e) => {
             if (editMode) return;
 
             if (e.ctrlKey || e.metaKey) {
               const key = e.key.toLowerCase();
               if (key === "c") {
                 e.preventDefault();
-                void copySelection();
+                copySelection();
                 return;
               }
               if (key === "z") {
@@ -525,7 +478,7 @@
                             >
                               <div className="relative min-h-[24px] px-1 py-0.5 text-[#514867]">
                                 {selected ? (
-                                  <>
+                                  <React.Fragment>
                                     <input
                                       ref={inputRef}
                                       value={value}
@@ -662,7 +615,7 @@
                                     <div className="relative z-[1] h-[24px] whitespace-nowrap leading-[24px] pointer-events-none">
                                       {editMode ? "" : value}
                                     </div>
-                                  </>
+                                  </React.Fragment>
                                 ) : (
                                   <div className="h-[24px] whitespace-nowrap leading-[24px]">{value}</div>
                                 )}
@@ -681,16 +634,18 @@
 
         function App() {
           const [entered, setEntered] = useState(false);
-          const [role, setRole] = useState<RoleKey | null>(null);
-          const [mainTab, setMainTab] = useState<MainTab>(null);
-          const [subTab, setSubTab] = useState<SalesTabKey>("manage");
+          const [role, setRole] = useState(null);
+          const [mainTab, setMainTab] = useState(null);
+          const [subTab, setSubTab] = useState("manage");
           const [defaultClient, setDefaultClient] = useState("대영전자");
           const [lockClient, setLockClient] = useState(true);
 
-          const loginRef = useRef<HTMLDivElement | null>(null);
+          const loginRef = useRef(null);
 
           useEffect(() => {
-            if (!entered) loginRef.current?.focus();
+            if (!entered && loginRef.current) {
+              loginRef.current.focus();
+            }
           }, [entered]);
 
           const handleEnter = () => setEntered(true);
@@ -800,7 +755,7 @@
                       </button>
                     </div>
                   ) : mainTab === "sales" ? (
-                    <>
+                    <React.Fragment>
                       <div className="mb-4 flex items-center justify-between gap-4 rounded-2xl bg-white p-4 shadow-sm">
                         <div className="flex items-center gap-3">
                           <div className="text-sm font-medium text-[#5f5677]">기본 업체:</div>
@@ -849,7 +804,7 @@
                       ) : (
                         <EmptyPage label={salesTabs.find((tab) => tab.key === subTab)?.label ?? subTab} />
                       )}
-                    </>
+                    </React.Fragment>
                   ) : (
                     <EmptyPage label={mainTab === "purchase" ? "매입" : "마감"} />
                   )}
@@ -865,9 +820,6 @@
           );
         }
 
-        // ==========================================
-        // 최종 렌더링
-        // ==========================================
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
     </script>
