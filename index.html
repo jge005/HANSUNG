@@ -452,7 +452,10 @@
   <script type="module">
     // Import the functions you need from the SDKs you need
     import { initializeApp } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-app.js";
-    import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-analytics.js";
+    import {
+      getAnalytics,
+      isSupported as isAnalyticsSupported,
+    } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-analytics.js";
 
     // Your web app's Firebase configuration
     // (API key 등 값은 프론트엔드에 포함돼도 되며, 환경변수로 숨기는 방식은 서버에서 관리하는 게 일반적입니다.)
@@ -468,11 +471,21 @@
 
     // Initialize Firebase
     const fbApp = initializeApp(firebaseConfig);
-    const analytics = getAnalytics(fbApp);
 
-    // 기존 non-module script에서도 접근 가능하도록 전역에 노출
+    // 기존 non-module script에서도 접근 가능하도록 전역에 먼저 노출
     window.firebaseApp = fbApp;
-    window.firebaseAnalytics = analytics;
+    window.firebaseAnalytics = null;
+
+    // 로컬 file:// 실행 등 Analytics가 지원되지 않는 환경에서도 Firestore는 계속 쓰도록 분리
+    isAnalyticsSupported()
+      .then(function (supported) {
+        if (supported) {
+          window.firebaseAnalytics = getAnalytics(fbApp);
+        }
+      })
+      .catch(function (err) {
+        console.warn("Firebase Analytics 초기화 건너뜀:", err);
+      });
   </script>
 
   <script type="module">
@@ -560,9 +573,23 @@
     lockClient: true,
   };
 
+  var DRAFT_ID_KEY = "ledgerDraftId";
+  var LEGACY_DRAFT_ID_KEY = "workDraftId";
+  var LOCAL_BACKUP_KEY = "ledgerDraftBackup";
+
+  var ledgerState = {
+    draftId: null,
+    loadedFromFirebase: false,
+    loadingPromise: null,
+    saveTimer: null,
+    dirty: false,
+    localUpdatedAt: null,
+  };
+
   // 거래작업 탭에 표시할 “복사본” 데이터(매출현황 ST.rows를 절대 수정하지 않음)
   var workState = {
     items: [],
+    info: {},
     draftId: null,
     loadedFromFirebase: false,
     loadingPromise: null,
@@ -600,6 +627,202 @@
 
   var ROW_COUNT = 40;
   var COL_COUNT = salesColumns.length;
+
+  function normalizeSalesRows(rows) {
+    var normalized = Array.isArray(rows) ? rows.slice(0, ROW_COUNT) : [];
+    for (var i = 0; i < ROW_COUNT; i++) {
+      normalized[i] = Object.assign(emptyRow(), normalized[i] || {});
+    }
+    return normalized;
+  }
+
+  function cloneItems(items) {
+    if (!Array.isArray(items)) return [];
+    return items.map(function (item) {
+      return Object.assign({}, item || {});
+    });
+  }
+
+  function cloneWorkInfo(info) {
+    try {
+      return JSON.parse(JSON.stringify(info || {}));
+    } catch (err) {
+      return {};
+    }
+  }
+
+  function ensureDraftId() {
+    if (ledgerState.draftId) return ledgerState.draftId;
+
+    var id = null;
+    try {
+      id =
+        localStorage.getItem(DRAFT_ID_KEY) ||
+        localStorage.getItem(LEGACY_DRAFT_ID_KEY);
+    } catch (err) {}
+
+    if (!id) {
+      id =
+        window.crypto && crypto.randomUUID
+          ? crypto.randomUUID()
+          : String(Date.now());
+    }
+
+    ledgerState.draftId = id;
+    workState.draftId = id;
+
+    try {
+      localStorage.setItem(DRAFT_ID_KEY, id);
+      localStorage.setItem(LEGACY_DRAFT_ID_KEY, id);
+    } catch (err) {}
+
+    return id;
+  }
+
+  function getLedgerPayload() {
+    return {
+      statusRows: normalizeSalesRows(ST.rows),
+      workItems: cloneItems(workState.items),
+      workInfo: cloneWorkInfo(workState.info),
+      items: cloneItems(workState.items),
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  function applyLedgerData(data) {
+    if (!data) return;
+
+    if (Array.isArray(data.statusRows)) {
+      ST.rows = normalizeSalesRows(data.statusRows);
+    }
+
+    if (Array.isArray(data.workItems)) {
+      workState.items = cloneItems(data.workItems);
+    } else if (Array.isArray(data.items)) {
+      workState.items = cloneItems(data.items);
+    }
+
+    if (data.workInfo && typeof data.workInfo === "object") {
+      workState.info = cloneWorkInfo(data.workInfo);
+    }
+
+    if (ST.tableBuilt) {
+      refreshGridValues();
+      updateSelectionUI();
+    }
+  }
+
+  function loadLocalLedgerBackup() {
+    try {
+      var raw = localStorage.getItem(LOCAL_BACKUP_KEY);
+      if (raw) {
+        var data = JSON.parse(raw);
+        ledgerState.localUpdatedAt = data.updatedAt || null;
+        applyLedgerData(data);
+      }
+    } catch (err) {
+      console.warn("로컬 백업 불러오기 실패:", err);
+    }
+  }
+
+  function saveLocalLedgerBackup() {
+    try {
+      var payload = getLedgerPayload();
+      ledgerState.localUpdatedAt = payload.updatedAt;
+      localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(payload));
+    } catch (err) {
+      console.warn("로컬 백업 저장 실패:", err);
+    }
+  }
+
+  function saveLedgerDraftToFirebase(attempts) {
+    attempts = attempts || 0;
+    ensureDraftId();
+    saveLocalLedgerBackup();
+
+    if (!window.firebaseFirestoreApi || !window.firebaseFirestoreApi.saveWorkDraft) {
+      if (attempts < 30) {
+        setTimeout(function () {
+          saveLedgerDraftToFirebase(attempts + 1);
+        }, 100);
+      }
+      return;
+    }
+
+    window.firebaseFirestoreApi
+      .saveWorkDraft(ledgerState.draftId, getLedgerPayload())
+      .then(function () {
+        ledgerState.loadedFromFirebase = true;
+        ledgerState.dirty = false;
+      })
+      .catch(function (err) {
+        console.error("Firestore 저장 실패:", err);
+      });
+  }
+
+  function scheduleLedgerDraftSave() {
+    ledgerState.dirty = true;
+    saveLocalLedgerBackup();
+
+    if (ledgerState.saveTimer) clearTimeout(ledgerState.saveTimer);
+    ledgerState.saveTimer = setTimeout(function () {
+      saveLedgerDraftToFirebase();
+    }, 500);
+  }
+
+  function ensureLedgerLoadedFromFirebase() {
+    if (ledgerState.loadedFromFirebase) return Promise.resolve();
+    if (ledgerState.loadingPromise) return ledgerState.loadingPromise;
+
+    loadLocalLedgerBackup();
+
+    ledgerState.loadingPromise = new Promise(function (resolve) {
+      var id = ensureDraftId();
+      var tries = 0;
+
+      function finish() {
+        ledgerState.loadedFromFirebase = true;
+        resolve();
+      }
+
+      function tryLoad() {
+        tries++;
+        if (window.firebaseFirestoreApi && window.firebaseFirestoreApi.loadWorkDraft) {
+          window.firebaseFirestoreApi
+            .loadWorkDraft(id)
+            .then(function (data) {
+              if (data && !ledgerState.dirty) {
+                var remoteTime = data.updatedAt ? Date.parse(data.updatedAt) : 0;
+                var localTime = ledgerState.localUpdatedAt
+                  ? Date.parse(ledgerState.localUpdatedAt)
+                  : 0;
+                if (!localTime || (remoteTime && remoteTime >= localTime)) {
+                  applyLedgerData(data);
+                  saveLocalLedgerBackup();
+                }
+              }
+              finish();
+            })
+            .catch(function (err) {
+              console.error("Firestore 불러오기 실패:", err);
+              finish();
+            });
+          return;
+        }
+
+        if (tries >= 30) {
+          finish();
+          return;
+        }
+
+        setTimeout(tryLoad, 100);
+      }
+
+      tryLoad();
+    });
+
+    return ledgerState.loadingPromise;
+  }
 
   function cellKey(r, c) {
     return r + ":" + c;
@@ -663,6 +886,7 @@
     }
     ST.rows = after;
     refreshGridValues();
+    scheduleLedgerDraftSave();
   }
 
   function setValue(r, c, value) {
@@ -763,6 +987,7 @@
     ST.editMode = false;
     ST.isComposing = false;
     refreshGridValues();
+    scheduleLedgerDraftSave();
     updateSelectionUI();
     moveInputToCell(ST.selectedCell.row, ST.selectedCell.col);
     syncEditOrigin();
@@ -777,6 +1002,7 @@
     ST.editMode = false;
     ST.isComposing = false;
     refreshGridValues();
+    scheduleLedgerDraftSave();
     updateSelectionUI();
     moveInputToCell(ST.selectedCell.row, ST.selectedCell.col);
     syncEditOrigin();
@@ -876,7 +1102,7 @@
 
   function buildSalesTable(host) {
     ST.host = host;
-    ST.rows = Array.from({ length: ROW_COUNT }, function () { return emptyRow(); });
+    ST.rows = normalizeSalesRows(ST.rows);
     ST.selectedCell = { row: 0, col: 0 };
     ST.selectedKeys = ["0:0"];
     ST.editMode = false;
@@ -1355,6 +1581,27 @@
     }
   }
 
+  function getWorkInfoValue(path) {
+    var cur = workState.info || {};
+    String(path).split(".").forEach(function (part) {
+      cur = cur && cur[part] != null ? cur[part] : "";
+    });
+    return cur == null ? "" : String(cur);
+  }
+
+  function setWorkInfoValue(path, value) {
+    var parts = String(path).split(".");
+    var cur = workState.info || {};
+    workState.info = cur;
+    for (var i = 0; i < parts.length - 1; i++) {
+      if (!cur[parts[i]] || typeof cur[parts[i]] !== "object") {
+        cur[parts[i]] = {};
+      }
+      cur = cur[parts[i]];
+    }
+    cur[parts[parts.length - 1]] = value;
+  }
+
   function renderWorkTab() {
     var items = workState.items || [];
     var totalRows = Math.max(items.length, 12);
@@ -1432,12 +1679,12 @@
               '<div class="sub">필수항목만 먼저 UI 구성</div>' +
             "</div>" +
             '<div class="workdoc-form">' +
-              '<div class="workdoc-label">상호</div><input class="workdoc-input" />' +
-              '<div class="workdoc-label">대표자</div><input class="workdoc-input" />' +
-              '<div class="workdoc-label">사업자등록번호</div><input class="workdoc-input" placeholder="000-00-00000" />' +
-              '<div class="workdoc-label">주소</div><input class="workdoc-input" />' +
-              '<div class="workdoc-label">업태</div><input class="workdoc-input" />' +
-              '<div class="workdoc-label">종목</div><input class="workdoc-input" />' +
+              '<div class="workdoc-label">상호</div><input class="workdoc-input" data-work-info="supplier.company" value="' + escapeAttr(getWorkInfoValue("supplier.company")) + '" />' +
+              '<div class="workdoc-label">대표자</div><input class="workdoc-input" data-work-info="supplier.ceo" value="' + escapeAttr(getWorkInfoValue("supplier.ceo")) + '" />' +
+              '<div class="workdoc-label">사업자등록번호</div><input class="workdoc-input" data-work-info="supplier.businessNo" placeholder="000-00-00000" value="' + escapeAttr(getWorkInfoValue("supplier.businessNo")) + '" />' +
+              '<div class="workdoc-label">주소</div><input class="workdoc-input" data-work-info="supplier.address" value="' + escapeAttr(getWorkInfoValue("supplier.address")) + '" />' +
+              '<div class="workdoc-label">업태</div><input class="workdoc-input" data-work-info="supplier.businessType" value="' + escapeAttr(getWorkInfoValue("supplier.businessType")) + '" />' +
+              '<div class="workdoc-label">종목</div><input class="workdoc-input" data-work-info="supplier.businessItem" value="' + escapeAttr(getWorkInfoValue("supplier.businessItem")) + '" />' +
             "</div>" +
           "</div>" +
           '<div class="workdoc-card">' +
@@ -1446,19 +1693,19 @@
               '<div class="sub">거래처 정보</div>' +
             "</div>" +
             '<div class="workdoc-form">' +
-              '<div class="workdoc-label">상호</div><input class="workdoc-input" />' +
-              '<div class="workdoc-label">대표자</div><input class="workdoc-input" />' +
-              '<div class="workdoc-label">사업자등록번호</div><input class="workdoc-input" placeholder="000-00-00000" />' +
-              '<div class="workdoc-label">주소</div><input class="workdoc-input" />' +
-              '<div class="workdoc-label">업태</div><input class="workdoc-input" />' +
-              '<div class="workdoc-label">종목</div><input class="workdoc-input" />' +
+              '<div class="workdoc-label">상호</div><input class="workdoc-input" data-work-info="receiver.company" value="' + escapeAttr(getWorkInfoValue("receiver.company")) + '" />' +
+              '<div class="workdoc-label">대표자</div><input class="workdoc-input" data-work-info="receiver.ceo" value="' + escapeAttr(getWorkInfoValue("receiver.ceo")) + '" />' +
+              '<div class="workdoc-label">사업자등록번호</div><input class="workdoc-input" data-work-info="receiver.businessNo" placeholder="000-00-00000" value="' + escapeAttr(getWorkInfoValue("receiver.businessNo")) + '" />' +
+              '<div class="workdoc-label">주소</div><input class="workdoc-input" data-work-info="receiver.address" value="' + escapeAttr(getWorkInfoValue("receiver.address")) + '" />' +
+              '<div class="workdoc-label">업태</div><input class="workdoc-input" data-work-info="receiver.businessType" value="' + escapeAttr(getWorkInfoValue("receiver.businessType")) + '" />' +
+              '<div class="workdoc-label">종목</div><input class="workdoc-input" data-work-info="receiver.businessItem" value="' + escapeAttr(getWorkInfoValue("receiver.businessItem")) + '" />' +
             "</div>" +
           "</div>" +
         "</div>" +
         '<div class="workdoc-card">' +
           '<div class="workdoc-date-line">' +
             '<div class="workdoc-title">' + icon("clipboard") + ' 작성일자</div>' +
-            '<input type="date" class="workdoc-input" />' +
+            '<input type="date" class="workdoc-input" data-work-info="date" value="' + escapeAttr(getWorkInfoValue("date")) + '" />' +
             '<div class="sub">한 줄 영역</div>' +
           "</div>" +
         "</div>" +
@@ -1531,118 +1778,24 @@
     workState.items = items;
 
     // 5) 거래작업 탭으로 이동 + 복사본 렌더링
-    //    (동시에 Firestore에도 “복사본” 저장)
+    //    (동시에 로컬 백업/Firebase에도 “복사본” 저장)
     state.subTab = "work";
 
-    // draftId 생성/로드
-    var idKey = "workDraftId";
-    if (!workState.draftId) {
-      var existing = null;
-      try {
-        existing = localStorage.getItem(idKey);
-      } catch (err) {}
-      workState.draftId = existing || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
-      try {
-        localStorage.setItem(idKey, workState.draftId);
-      } catch (err) {}
-    }
+    ensureDraftId();
     workState.loadedFromFirebase = true;
-
-    if (window.firebaseFirestoreApi && window.firebaseFirestoreApi.saveWorkDraft) {
-      window.firebaseFirestoreApi
-        .saveWorkDraft(workState.draftId, {
-          items: workState.items,
-          updatedAt: new Date().toISOString(),
-        })
-        .catch(function (err) {
-          console.error("Firestore 저장 실패:", err);
-        });
-    }
+    scheduleLedgerDraftSave();
 
     render();
   }
 
   function ensureWorkLoadedFromFirebase() {
-    if (workState.loadedFromFirebase) return Promise.resolve();
-    if (workState.loadingPromise) return workState.loadingPromise;
-
-    workState.loadingPromise = new Promise(function (resolve) {
-      var idKey = "workDraftId";
-      var id = null;
-      try {
-        id = localStorage.getItem(idKey);
-      } catch (err) {}
-
-      if (!id) {
-        workState.draftId = null;
-        workState.loadedFromFirebase = true;
-        resolve();
-        return;
-      }
-
-      workState.draftId = id;
-
-      var tries = 0;
-      function tryLoad() {
-        tries++;
-        if (window.firebaseFirestoreApi && window.firebaseFirestoreApi.loadWorkDraft) {
-          window.firebaseFirestoreApi
-            .loadWorkDraft(id)
-            .then(function (data) {
-              if (data && Array.isArray(data.items)) {
-                workState.items = data.items;
-              }
-              workState.loadedFromFirebase = true;
-              resolve();
-            })
-            .catch(function (err) {
-              console.error("Firestore 불러오기 실패:", err);
-              workState.loadedFromFirebase = true;
-              resolve();
-            });
-          return;
-        }
-
-        if (tries >= 30) {
-          // 너무 오래 걸리면 로컬 기본값으로 처리
-          workState.loadedFromFirebase = true;
-          resolve();
-          return;
-        }
-
-        setTimeout(tryLoad, 100);
-      }
-
-      tryLoad();
+    return ensureLedgerLoadedFromFirebase().then(function () {
+      workState.loadedFromFirebase = true;
     });
-
-    return workState.loadingPromise;
   }
 
   function saveWorkDraftToFirebase() {
-    if (!window.firebaseFirestoreApi || !window.firebaseFirestoreApi.saveWorkDraft) return;
-
-    var idKey = "workDraftId";
-    if (!workState.draftId) {
-      var existing = null;
-      try {
-        existing = localStorage.getItem(idKey);
-      } catch (err) {}
-      workState.draftId =
-        existing || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
-      try {
-        localStorage.setItem(idKey, workState.draftId);
-      } catch (err) {}
-    }
-
-    window.firebaseFirestoreApi
-      .saveWorkDraft(workState.draftId, {
-        items: workState.items,
-        updatedAt: new Date().toISOString(),
-      })
-      .catch(function (err) {
-        console.error("Firestore 자동 저장 실패:", err);
-      });
+    saveLedgerDraftToFirebase();
   }
 
   /* ========== App render ========== */
@@ -1817,6 +1970,12 @@
 
       if (state.subTab === "status") {
         attachSalesTableWhenNeeded(document.getElementById("sales-table-host"));
+        ensureLedgerLoadedFromFirebase().then(function () {
+          if (state.subTab === "status") {
+            refreshGridValues();
+            updateSelectionUI();
+          }
+        });
         var sendBtn = document.getElementById("btn-send-to-work");
         if (sendBtn) {
           sendBtn.addEventListener("click", function () {
@@ -1831,11 +1990,19 @@
           if (!wasLoaded) render();
         });
 
-        // 품목 입력 변경 시 복사본(items)만 자동 저장
+        // 거래작업 입력 변경 시 로컬 백업/Firebase 자동 저장
         if (workState.saveTimer) {
           clearTimeout(workState.saveTimer);
           workState.saveTimer = null;
         }
+        app.querySelectorAll('input[data-work-info]').forEach(function (inp) {
+          inp.addEventListener("input", function () {
+            var path = inp.getAttribute("data-work-info");
+            if (!path) return;
+            setWorkInfoValue(path, inp.value);
+            scheduleLedgerDraftSave();
+          });
+        });
         app.querySelectorAll('input[data-work-row]').forEach(function (inp) {
           inp.addEventListener("input", function () {
             var r = Number(inp.getAttribute("data-work-row"));
@@ -1849,10 +2016,7 @@
               workState.items[r][f] = inp.value;
             }
 
-            if (workState.saveTimer) clearTimeout(workState.saveTimer);
-            workState.saveTimer = setTimeout(function () {
-              saveWorkDraftToFirebase();
-            }, 400);
+            scheduleLedgerDraftSave();
           });
         });
       }
@@ -1897,6 +2061,7 @@
     }
   }
 
+  loadLocalLedgerBackup();
   render();
 })();
   </script>
