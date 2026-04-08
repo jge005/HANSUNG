@@ -505,6 +505,11 @@
     lockClient: true,
   };
 
+  // 거래작업 탭에 표시할 “복사본” 데이터(매출현황 ST.rows를 절대 수정하지 않음)
+  var workState = {
+    items: [],
+  };
+
   var app = document.getElementById("app");
 
   function emptyRow() {
@@ -1292,17 +1297,70 @@
   }
 
   function renderWorkTab() {
+    var items = workState.items || [];
+    var totalRows = Math.max(items.length, 12);
     var itemsRows = "";
-    for (var i = 0; i < 12; i++) {
+
+    for (var i = 0; i < totalRows; i++) {
+      var it = items[i] || {};
+      var vDate = it.date != null ? String(it.date) : "";
+      var vCode = it.code != null ? String(it.code) : "";
+      var vName = it.name != null ? String(it.name) : "";
+      var vQty = it.qty != null ? String(it.qty) : "";
+      var vPrice = it.price != null ? String(it.price) : "";
+      var vSupply = it.supply != null ? String(it.supply) : "";
+      var vTax = it.tax != null ? String(it.tax) : "";
+      var vNote = it.note != null ? String(it.note) : "";
+
       itemsRows += "<tr>";
-      itemsRows += '<td><input class="cell-input" placeholder="MM-DD" /></td>';
-      itemsRows += '<td><input class="cell-input" /></td>';
-      itemsRows += '<td><input class="cell-input" /></td>';
-      itemsRows += '<td><input class="cell-input" inputmode="numeric" /></td>';
-      itemsRows += '<td><input class="cell-input" inputmode="numeric" /></td>';
-      itemsRows += '<td><input class="cell-input" inputmode="numeric" /></td>';
-      itemsRows += '<td><input class="cell-input" inputmode="numeric" /></td>';
-      itemsRows += '<td><input class="cell-input" /></td>';
+      itemsRows +=
+        '<td><input class="cell-input" type="text" data-work-row="' +
+        i +
+        '" data-work-field="date" placeholder="일자" value="' +
+        escapeAttr(vDate) +
+        '" /></td>';
+      itemsRows +=
+        '<td><input class="cell-input" type="text" data-work-row="' +
+        i +
+        '" data-work-field="code" placeholder="코드" value="' +
+        escapeAttr(vCode) +
+        '" /></td>';
+      itemsRows +=
+        '<td><input class="cell-input" type="text" data-work-row="' +
+        i +
+        '" data-work-field="name" placeholder="품명" value="' +
+        escapeAttr(vName) +
+        '" /></td>';
+      itemsRows +=
+        '<td><input class="cell-input" type="text" inputmode="numeric" data-work-row="' +
+        i +
+        '" data-work-field="qty" placeholder="수량" value="' +
+        escapeAttr(vQty) +
+        '" /></td>';
+      itemsRows +=
+        '<td><input class="cell-input" type="text" inputmode="numeric" data-work-row="' +
+        i +
+        '" data-work-field="price" placeholder="단가" value="' +
+        escapeAttr(vPrice) +
+        '" /></td>';
+      itemsRows +=
+        '<td><input class="cell-input" type="text" inputmode="numeric" data-work-row="' +
+        i +
+        '" data-work-field="supply" placeholder="공급가액" value="' +
+        escapeAttr(vSupply) +
+        '" /></td>';
+      itemsRows +=
+        '<td><input class="cell-input" type="text" inputmode="numeric" data-work-row="' +
+        i +
+        '" data-work-field="tax" placeholder="세액" value="' +
+        escapeAttr(vTax) +
+        '" /></td>';
+      itemsRows +=
+        '<td><input class="cell-input" type="text" data-work-row="' +
+        i +
+        '" data-work-field="note" placeholder="비고" value="' +
+        escapeAttr(vNote) +
+        '" /></td>';
       itemsRows += "</tr>";
     }
 
@@ -1368,6 +1426,54 @@
         "</div>" +
       "</div>"
     );
+  }
+
+  function sendSelectedStatusRowsToWork() {
+    // 1) 매출현황(ST)에서 선택된 셀들 -> row index 추출
+    var keys = ST.selectedKeys || [];
+    if (!keys.length) return;
+
+    var rowSet = new Set();
+    keys.forEach(function (key) {
+      var p = String(key).split(":");
+      if (p.length >= 2) rowSet.add(Number(p[0]));
+    });
+
+    // 2) 중복 row 제거 -> 정렬
+    var rows = Array.from(rowSet).sort(function (a, b) {
+      return a - b;
+    });
+    if (!rows.length) return;
+
+    // 3) 최대 10줄 제한
+    if (rows.length > 10) {
+      alert("선택 행은 최대 10줄까지만 가능합니다.");
+      return;
+    }
+
+    // 4) 선택 row들의 전체 데이터 복사(원본 ST.rows 수정 X)
+    //    -> 거래작업 품목표 컬럼에 매핑
+    var items = rows.map(function (r) {
+      var row = ST.rows[r] || emptyRow();
+      return {
+        date: row.date,
+        code: row.code,
+        name: row.name,
+        qty: row.qty,
+        price: row.price,
+        supply: row.amount,
+        tax: "", // 매출현황 엔진에는 세액 필드가 없으므로 비움
+        note: [row.note1, row.note2].filter(function (x) {
+          return x != null && String(x).trim() !== "";
+        }).join(" / "),
+      };
+    });
+
+    workState.items = items;
+
+    // 5) 거래작업 탭으로 이동 + 복사본 렌더링
+    state.subTab = "work";
+    render();
   }
 
   /* ========== App render ========== */
@@ -1495,7 +1601,14 @@
 
       var body;
       if (state.subTab === "status") {
-        body = '<div id="sales-table-host"></div>';
+        body =
+          '<div style="display:flex;justify-content:flex-end;gap:12px;margin-bottom:12px;">' +
+          '<button type="button" class="soft-btn" id="btn-send-to-work">' +
+          icon("arrowRight") +
+          "거래작업으로 보내기" +
+          "</button>" +
+          "</div>" +
+          '<div id="sales-table-host"></div>';
       } else if (state.subTab === "work") {
         body = renderWorkTab();
       } else {
@@ -1535,6 +1648,12 @@
 
       if (state.subTab === "status") {
         attachSalesTableWhenNeeded(document.getElementById("sales-table-host"));
+        var sendBtn = document.getElementById("btn-send-to-work");
+        if (sendBtn) {
+          sendBtn.addEventListener("click", function () {
+            sendSelectedStatusRowsToWork();
+          });
+        }
       }
       return;
     }
