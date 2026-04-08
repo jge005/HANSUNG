@@ -328,6 +328,122 @@
     .w-70 { width: 70px; }
     .w-100 { width: 100px; }
     .w-110 { width: 110px; }
+
+    /* 거래작업 */
+    .workdoc {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .workdoc-card {
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.95);
+      box-shadow: 0 1px 6px rgba(0, 0, 0, 0.06);
+      padding: 16px;
+    }
+    .workdoc-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .workdoc-title {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      color: var(--text-dark);
+    }
+    .workdoc-grid2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    @media (max-width: 920px) {
+      .workdoc-grid2 { grid-template-columns: 1fr; }
+    }
+    .workdoc-form {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      gap: 10px 12px;
+      align-items: center;
+    }
+    .workdoc-label {
+      color: var(--muted2);
+      font-weight: 600;
+      font-size: 13px;
+    }
+    .workdoc-input {
+      height: 38px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: #fff;
+      padding: 0 12px;
+      outline: none;
+      font: inherit;
+      font-size: 13px;
+      color: var(--text);
+    }
+    .workdoc-input:focus {
+      border-color: #c3a7ff;
+      box-shadow: 0 0 0 2px #f1e8ff;
+    }
+    .workdoc-date-line {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .workdoc-date-line .workdoc-input {
+      width: 220px;
+      max-width: 100%;
+    }
+    .items-wrap {
+      border-radius: 16px;
+      border: 1px solid #e9def5;
+      overflow: auto;
+      background: #fff;
+    }
+    table.items {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 12px;
+    }
+    table.items thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: linear-gradient(90deg, #fff8ea 0%, #f8f1ff 52%, #eef6ff 100%);
+      border: 1px solid var(--border);
+      padding: 6px 8px;
+      text-align: left;
+      color: #6d6387;
+      font-weight: 700;
+    }
+    table.items tbody td {
+      border: 1px solid #efe5f8;
+      padding: 4px 8px;
+      height: 28px;
+    }
+    .cell-input {
+      width: 100%;
+      height: 26px;
+      border: none;
+      outline: none;
+      background: transparent;
+      font: inherit;
+      font-size: 12px;
+      color: #514867;
+    }
+    .items-col-date { width: 84px; }
+    .items-col-code { width: 88px; }
+    .items-col-name { width: 200px; }
+    .items-col-qty { width: 70px; }
+    .items-col-price { width: 90px; }
+    .items-col-supply { width: 100px; }
+    .items-col-tax { width: 80px; }
+    .items-col-note { width: 160px; }
   </style>
 </head>
 <body class="shell-bg">
@@ -621,7 +737,7 @@
     if (!tbody) return;
     for (var r = 0; r < ROW_COUNT; r++) {
       for (var c = 0; c < COL_COUNT; c++) {
-        var td = tbody.querySelector('.st-table td[data-r="' + r + '"][data-c="' + c + '"]');
+        var td = tbody.querySelector('td[data-r="' + r + '"][data-c="' + c + '"]');
         if (!td) continue;
         var disp = td.querySelector(".st-display");
         var ghost = td.querySelector(".st-ghost");
@@ -739,7 +855,7 @@
     ST.inputEl.type = "text";
     ST.inputEl.setAttribute("spellcheck", "false");
     ST.inputEl.className = "st-input no-edit";
-    var firstInner = tbody.querySelector('.st-table td[data-r="0"][data-c="0"] .st-cell-inner');
+    var firstInner = tbody.querySelector('td[data-r="0"][data-c="0"] .st-cell-inner');
     if (firstInner) firstInner.appendChild(ST.inputEl);
     ST.inputEl.value = getValue(0, 0);
     syncInputOverlay();
@@ -818,7 +934,7 @@
         gh.style.display = "none";
       }
     }
-    var td = tbody.querySelector('.st-table td[data-r="' + r + '"][data-c="' + c + '"]');
+    var td = tbody.querySelector('td[data-r="' + r + '"][data-c="' + c + '"]');
     if (!td) return;
     var inner = td.querySelector(".st-cell-inner");
     var disp = td.querySelector(".st-display");
@@ -1175,6 +1291,85 @@
     }
   }
 
+  function renderWorkTab() {
+    var itemsRows = "";
+    for (var i = 0; i < 12; i++) {
+      itemsRows += "<tr>";
+      itemsRows += '<td><input class="cell-input" placeholder="MM-DD" /></td>';
+      itemsRows += '<td><input class="cell-input" /></td>';
+      itemsRows += '<td><input class="cell-input" /></td>';
+      itemsRows += '<td><input class="cell-input" inputmode="numeric" /></td>';
+      itemsRows += '<td><input class="cell-input" inputmode="numeric" /></td>';
+      itemsRows += '<td><input class="cell-input" inputmode="numeric" /></td>';
+      itemsRows += '<td><input class="cell-input" inputmode="numeric" /></td>';
+      itemsRows += '<td><input class="cell-input" /></td>';
+      itemsRows += "</tr>";
+    }
+
+    return (
+      '<div class="workdoc">' +
+        '<div class="workdoc-grid2">' +
+          '<div class="workdoc-card">' +
+            '<div class="workdoc-head">' +
+              '<div class="workdoc-title">' + icon("building") + ' 공급자</div>' +
+              '<div class="sub">필수항목만 먼저 UI 구성</div>' +
+            "</div>" +
+            '<div class="workdoc-form">' +
+              '<div class="workdoc-label">상호</div><input class="workdoc-input" />' +
+              '<div class="workdoc-label">대표자</div><input class="workdoc-input" />' +
+              '<div class="workdoc-label">사업자등록번호</div><input class="workdoc-input" placeholder="000-00-00000" />' +
+              '<div class="workdoc-label">주소</div><input class="workdoc-input" />' +
+              '<div class="workdoc-label">업태</div><input class="workdoc-input" />' +
+              '<div class="workdoc-label">종목</div><input class="workdoc-input" />' +
+            "</div>" +
+          "</div>" +
+          '<div class="workdoc-card">' +
+            '<div class="workdoc-head">' +
+              '<div class="workdoc-title">' + icon("sheet") + ' 공급받는자</div>' +
+              '<div class="sub">거래처 정보</div>' +
+            "</div>" +
+            '<div class="workdoc-form">' +
+              '<div class="workdoc-label">상호</div><input class="workdoc-input" />' +
+              '<div class="workdoc-label">대표자</div><input class="workdoc-input" />' +
+              '<div class="workdoc-label">사업자등록번호</div><input class="workdoc-input" placeholder="000-00-00000" />' +
+              '<div class="workdoc-label">주소</div><input class="workdoc-input" />' +
+              '<div class="workdoc-label">업태</div><input class="workdoc-input" />' +
+              '<div class="workdoc-label">종목</div><input class="workdoc-input" />' +
+            "</div>" +
+          "</div>" +
+        "</div>" +
+        '<div class="workdoc-card">' +
+          '<div class="workdoc-date-line">' +
+            '<div class="workdoc-title">' + icon("clipboard") + ' 작성일자</div>' +
+            '<input type="date" class="workdoc-input" />' +
+            '<div class="sub">한 줄 영역</div>' +
+          "</div>" +
+        "</div>" +
+        '<div class="workdoc-card">' +
+          '<div class="workdoc-head">' +
+            '<div class="workdoc-title">' + icon("scroll") + ' 품목</div>' +
+            '<div class="sub">표 구조만 먼저 추가 (엔진은 추후)</div>' +
+          "</div>" +
+          '<div class="items-wrap">' +
+            '<table class="items">' +
+              "<thead><tr>" +
+                '<th class="items-col-date">일자</th>' +
+                '<th class="items-col-code">코드</th>' +
+                '<th class="items-col-name">품명</th>' +
+                '<th class="items-col-qty">수량</th>' +
+                '<th class="items-col-price">단가</th>' +
+                '<th class="items-col-supply">공급가액</th>' +
+                '<th class="items-col-tax">세액</th>' +
+                '<th class="items-col-note">비고</th>' +
+              "</tr></thead>" +
+              "<tbody>" + itemsRows + "</tbody>" +
+            "</table>" +
+          "</div>" +
+        "</div>" +
+      "</div>"
+    );
+  }
+
   /* ========== App render ========== */
   function render() {
     if (!state.entered) {
@@ -1301,6 +1496,8 @@
       var body;
       if (state.subTab === "status") {
         body = '<div id="sales-table-host"></div>';
+      } else if (state.subTab === "work") {
+        body = renderWorkTab();
       } else {
         var lab = salesTabs.find(function (x) {
           return x.key === state.subTab;
