@@ -773,10 +773,29 @@
         commitActiveCellValue();
       });
       engine.inputEl.addEventListener("keydown", onInputKeyDown);
+      engine.inputEl.addEventListener("copy", onCopy);
+      engine.inputEl.addEventListener("paste", onPaste);
+      engine.inputEl.addEventListener("cut", function (e) {
+        onCopy(e);
+        clearSelectionCells();
+      });
       engine.inputEl.addEventListener("focus", function (e) {
         var len = e.target.value.length;
         if (engine.editMode) e.target.setSelectionRange(len, len);
         else e.target.setSelectionRange(0, len);
+      });
+      engine.inputEl.addEventListener("mouseup", function (e) {
+        if (!engine.editMode) {
+          e.preventDefault();
+          var len = e.target.value.length;
+          e.target.setSelectionRange(0, len);
+        }
+      });
+      engine.inputEl.addEventListener("select", function (e) {
+        if (!engine.editMode) {
+          var len = e.target.value.length;
+          e.target.setSelectionRange(0, len);
+        }
       });
       updateSelectionUI();
       syncInputOverlay();
@@ -843,6 +862,7 @@
       if (!engine.inputEl) return;
       requestAnimationFrame(function () {
         if (!engine.inputEl) return;
+        if (engine.scrollEl) engine.scrollEl.focus();
         engine.inputEl.focus();
         var len = engine.inputEl.value.length;
         if (engine.editMode) engine.inputEl.setSelectionRange(len, len);
@@ -1007,6 +1027,38 @@
       clearSelectionCells();
     }
 
+    function copySelectionAsync() {
+      var text = getSelectionText();
+      if (!text) return;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).catch(function () {});
+      }
+    }
+
+    function pasteFromClipboardAsync() {
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        navigator.clipboard.readText().then(pasteTextIntoSelection).catch(function () {});
+      }
+    }
+
+    function undoSelection() {
+      var prev = engine.undoStack.pop();
+      if (!prev) return;
+      engine.redoStack.push(cloneRowList(getRows()));
+      options.setRows(options.normalizeRows ? options.normalizeRows(prev) : prev);
+      if (typeof options.onRowsChange === "function") options.onRowsChange(getRows());
+      refreshGridValues();
+    }
+
+    function redoSelection() {
+      var next = engine.redoStack.pop();
+      if (!next) return;
+      engine.undoStack.push(cloneRowList(getRows()));
+      options.setRows(options.normalizeRows ? options.normalizeRows(next) : next);
+      if (typeof options.onRowsChange === "function") options.onRowsChange(getRows());
+      refreshGridValues();
+    }
+
     function updateSelectionUI() {
       if (!engine.host) return;
       var currentSelected = {};
@@ -1090,9 +1142,7 @@
         }
         if (k === "c") {
           e.preventDefault();
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(getSelectionText()).catch(function () {});
-          }
+          copySelectionAsync();
           return;
         }
         if (k === "x") {
@@ -1102,29 +1152,17 @@
         }
         if (k === "v") {
           e.preventDefault();
-          if (navigator.clipboard && navigator.clipboard.readText) {
-            navigator.clipboard.readText().then(pasteTextIntoSelection).catch(function () {});
-          }
+          pasteFromClipboardAsync();
           return;
         }
         if (k === "z") {
           e.preventDefault();
-          var prev = engine.undoStack.pop();
-          if (!prev) return;
-          engine.redoStack.push(cloneRowList(getRows()));
-          options.setRows(options.normalizeRows ? options.normalizeRows(prev) : prev);
-          if (typeof options.onRowsChange === "function") options.onRowsChange(getRows());
-          refreshGridValues();
+          undoSelection();
           return;
         }
         if (k === "y") {
           e.preventDefault();
-          var next = engine.redoStack.pop();
-          if (!next) return;
-          engine.undoStack.push(cloneRowList(getRows()));
-          options.setRows(options.normalizeRows ? options.normalizeRows(next) : next);
-          if (typeof options.onRowsChange === "function") options.onRowsChange(getRows());
-          refreshGridValues();
+          redoSelection();
           return;
         }
         return;
@@ -1188,9 +1226,7 @@
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c" && !engine.editMode) {
         e.preventDefault();
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(getSelectionText()).catch(function () {});
-        }
+        copySelectionAsync();
         return;
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "x" && !engine.editMode) {
@@ -1200,29 +1236,28 @@
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v" && !engine.editMode) {
         e.preventDefault();
-        if (navigator.clipboard && navigator.clipboard.readText) {
-          navigator.clipboard.readText().then(pasteTextIntoSelection).catch(function () {});
-        }
+        pasteFromClipboardAsync();
         return;
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
         e.preventDefault();
-        var prev = engine.undoStack.pop();
-        if (!prev) return;
-        engine.redoStack.push(cloneRowList(getRows()));
-        options.setRows(options.normalizeRows ? options.normalizeRows(prev) : prev);
-        if (typeof options.onRowsChange === "function") options.onRowsChange(getRows());
-        refreshGridValues();
+        undoSelection();
         return;
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
         e.preventDefault();
-        var next = engine.redoStack.pop();
-        if (!next) return;
-        engine.undoStack.push(cloneRowList(getRows()));
-        options.setRows(options.normalizeRows ? options.normalizeRows(next) : next);
-        if (typeof options.onRowsChange === "function") options.onRowsChange(getRows());
-        refreshGridValues();
+        redoSelection();
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        if (engine.editSnapshotRows) {
+          options.setRows(options.normalizeRows ? options.normalizeRows(engine.editSnapshotRows) : engine.editSnapshotRows);
+          if (typeof options.onRowsChange === "function") options.onRowsChange(getRows());
+          engine.editSnapshotRows = null;
+          refreshGridValues();
+        }
+        moveSelection(row, col);
         return;
       }
       if (engine.isComposing || e.isComposing) return;
@@ -4027,77 +4062,12 @@
   function renderWorkTab() {
     ensureWorkInfoShape();
     var items = workState.items || [];
-    var totalRows = Math.max(items.length, 12);
-    var itemsRows = "";
     var totals = getStatementTotals(items.filter(function (item) {
       if (!item) return false;
       return ["date", "code", "name", "qty", "price", "supply", "tax", "note"].some(function (key) {
         return item[key] != null && String(item[key]).trim() !== "";
       });
     }));
-
-    for (var i = 0; i < totalRows; i++) {
-      var it = items[i] || {};
-      var vDate = it.date != null ? String(it.date) : "";
-      var vCode = it.code != null ? String(it.code) : "";
-      var vName = it.name != null ? String(it.name) : "";
-      var vQty = it.qty != null ? String(it.qty) : "";
-      var vPrice = it.price != null ? String(it.price) : "";
-      var vSupply = it.supply != null ? String(it.supply) : "";
-      var vTax = it.tax != null ? String(it.tax) : "";
-      var vNote = it.note != null ? String(it.note) : "";
-
-      itemsRows += "<tr>";
-      itemsRows +=
-        '<td><input class="cell-input" type="text" data-work-row="' +
-        i +
-        '" data-work-field="date" placeholder="일자" value="' +
-        escapeAttr(vDate) +
-        '" /></td>';
-      itemsRows +=
-        '<td><input class="cell-input" type="text" data-work-row="' +
-        i +
-        '" data-work-field="code" placeholder="코드" value="' +
-        escapeAttr(vCode) +
-        '" /></td>';
-      itemsRows +=
-        '<td><input class="cell-input" type="text" data-work-row="' +
-        i +
-        '" data-work-field="name" placeholder="품명" value="' +
-        escapeAttr(vName) +
-        '" /></td>';
-      itemsRows +=
-        '<td><input class="cell-input" type="text" inputmode="numeric" data-work-row="' +
-        i +
-        '" data-work-field="qty" placeholder="수량" value="' +
-        escapeAttr(vQty) +
-        '" /></td>';
-      itemsRows +=
-        '<td><input class="cell-input" type="text" inputmode="numeric" data-work-row="' +
-        i +
-        '" data-work-field="price" placeholder="단가" value="' +
-        escapeAttr(vPrice) +
-        '" /></td>';
-      itemsRows +=
-        '<td><input class="cell-input" type="text" inputmode="numeric" data-work-row="' +
-        i +
-        '" data-work-field="supply" placeholder="공급가액" value="' +
-        escapeAttr(vSupply) +
-        '" /></td>';
-      itemsRows +=
-        '<td><input class="cell-input" type="text" inputmode="numeric" data-work-row="' +
-        i +
-        '" data-work-field="tax" placeholder="세액" value="' +
-        escapeAttr(vTax) +
-        '" /></td>';
-      itemsRows +=
-        '<td><input class="cell-input" type="text" data-work-row="' +
-        i +
-        '" data-work-field="note" placeholder="비고" value="' +
-        escapeAttr(vNote) +
-        '" /></td>';
-      itemsRows += "</tr>";
-    }
 
     return (
       '<div class="workdoc">' +
