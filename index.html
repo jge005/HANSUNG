@@ -358,8 +358,10 @@
     .st-cell-inner {
       position: relative;
       min-height: 24px;
+      height: 100%;
       padding: 2px 4px;
       color: #514867;
+      overflow: hidden;
     }
     .st-input {
       position: absolute;
@@ -373,6 +375,8 @@
       font: inherit;
       font-size: 12px;
       padding: 0 6px;
+      line-height: 24px;
+      box-sizing: border-box;
     }
     .st-input.no-edit {
       color: transparent;
@@ -392,11 +396,10 @@
     }
     .st-display {
       height: 24px;
-      line-height: 20px;
-      white-space: pre-wrap;
+      line-height: 24px;
+      white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      word-break: break-word;
     }
     .st-statusbar {
       display: flex;
@@ -1378,10 +1381,12 @@
       var displays = ST.host.querySelectorAll('td[data-r="' + r + '"] .st-display, td[data-r="' + r + '"] .st-ghost');
       for (var j = 0; j < displays.length; j++) {
         displays[j].style.height = getRowHeight(r) - 4 + "px";
+        displays[j].style.lineHeight = getRowHeight(r) - 4 + "px";
       }
     }
     if (ST.inputEl) {
       ST.inputEl.style.height = getRowHeight(ST.selectedCell.row) - 4 + "px";
+      ST.inputEl.style.lineHeight = getRowHeight(ST.selectedCell.row) - 4 + "px";
     }
   }
 
@@ -2078,10 +2083,11 @@
           '<div class="st-display" style="' +
           (active ? "display:none;" : "") +
           'height:' + (getRowHeight(r) - 4) + 'px;' +
+          'line-height:' + (getRowHeight(r) - 4) + 'px;' +
           '">' +
           escapeHtml(v) +
           "</div>";
-        html += '<div class="st-ghost" style="display:none;height:' + (getRowHeight(r) - 4) + 'px"></div>';
+        html += '<div class="st-ghost" style="display:none;height:' + (getRowHeight(r) - 4) + 'px;line-height:' + (getRowHeight(r) - 4) + 'px"></div>';
         html += "</div></td>";
       }
       html += "</tr>";
@@ -2110,6 +2116,7 @@
     ST.inputEl.setAttribute("spellcheck", "false");
     ST.inputEl.className = "st-input no-edit";
     ST.inputEl.style.height = getRowHeight(0) - 4 + "px";
+    ST.inputEl.style.lineHeight = getRowHeight(0) - 4 + "px";
     var firstInner = tbody.querySelector(
       'td[data-r="' + ST.selectedCell.row + '"][data-c="' + ST.selectedCell.col + '"] .st-cell-inner'
     );
@@ -2163,6 +2170,15 @@
     });
     host.querySelectorAll("[data-col-resizer]").forEach(function (el) {
       el.addEventListener("mousedown", function (e) {
+        if (e.detail >= 2) {
+          e.preventDefault();
+          e.stopPropagation();
+          ST.colWidths[Number(el.getAttribute("data-col-resizer"))] =
+            salesColumns[Number(el.getAttribute("data-col-resizer"))].width || 100;
+          applyGridSizingUI();
+          scheduleLedgerDraftSave();
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         startResize("col", Number(el.getAttribute("data-col-resizer")), e.clientX, e.clientY);
@@ -2178,6 +2194,14 @@
     });
     host.querySelectorAll("[data-row-resizer]").forEach(function (el) {
       el.addEventListener("mousedown", function (e) {
+        if (e.detail >= 2) {
+          e.preventDefault();
+          e.stopPropagation();
+          ST.rowHeights[Number(el.getAttribute("data-row-resizer"))] = DEFAULT_ROW_HEIGHT;
+          applyGridSizingUI();
+          scheduleLedgerDraftSave();
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         startResize("row", Number(el.getAttribute("data-row-resizer")), e.clientX, e.clientY);
