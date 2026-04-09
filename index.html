@@ -609,6 +609,8 @@
       border-bottom-width: 1px;
       padding: 4px 6px;
       min-height: 28px;
+      font-size: 12px;
+      font-weight: 600;
     }
     .statement-copy-title {
       text-align: center;
@@ -674,23 +676,33 @@
       height: 25px;
     }
     .statement-items-table .item-name {
-      font-size: 10.5px;
+      font-size: 11.5px;
       white-space: nowrap;
       overflow: hidden;
-      text-overflow: ellipsis;
+      text-overflow: clip;
+      line-height: 1;
     }
     .statement-items-table .item-name.tight {
-      font-size: 9.5px;
+      font-size: 10.5px;
     }
     .statement-items-table .item-name.tighter {
-      font-size: 8.5px;
+      font-size: 9.5px;
     }
     .statement-items-table .item-code,
     .statement-items-table .item-note {
       font-size: 11px;
       white-space: nowrap;
       overflow: hidden;
-      text-overflow: ellipsis;
+      text-overflow: clip;
+      line-height: 1;
+    }
+    .statement-items-table .item-code.tight,
+    .statement-items-table .item-note.tight {
+      font-size: 10px;
+    }
+    .statement-items-table .item-code.tighter,
+    .statement-items-table .item-note.tighter {
+      font-size: 9px;
     }
     .statement-footer-table {
       margin-top: -1px;
@@ -764,6 +776,7 @@
       .statement-copy-date {
         min-height: 26px;
         padding: 3px 5px;
+        font-size: 11px;
       }
       .statement-copy-title {
         font-size: 23px;
@@ -792,17 +805,31 @@
         height: 15px;
       }
       .statement-items-table .item-name {
-        font-size: 9px;
+        font-size: 10px;
+        white-space: nowrap;
+        text-overflow: clip;
+        line-height: 1;
       }
       .statement-items-table .item-name.tight {
-        font-size: 8px;
+        font-size: 9px;
       }
       .statement-items-table .item-name.tighter {
-        font-size: 7px;
+        font-size: 8px;
       }
       .statement-items-table .item-code,
       .statement-items-table .item-note {
         font-size: 9.5px;
+        white-space: nowrap;
+        text-overflow: clip;
+        line-height: 1;
+      }
+      .statement-items-table .item-code.tight,
+      .statement-items-table .item-note.tight {
+        font-size: 8.7px;
+      }
+      .statement-items-table .item-code.tighter,
+      .statement-items-table .item-note.tighter {
+        font-size: 8px;
       }
       .statement-footer-table td,
       .statement-footer-table th {
