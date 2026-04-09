@@ -700,6 +700,7 @@
 
   function emptyRow() {
     return {
+      __order: null,
       date: "", client: "", code: "", name: "",
       qty: "", price: "", amount: "", note1: "", note2: "",
     };
@@ -730,6 +731,10 @@
     colWidths: [],
     rowHeights: [],
     resizing: null,
+    filter: {
+      colKey: "all",
+      keyword: "",
+    },
   };
 
   var ROW_HEADER_WIDTH = 46;
@@ -743,6 +748,7 @@
     var normalized = Array.isArray(rows) ? rows.slice(0, ROW_COUNT) : [];
     for (var i = 0; i < ROW_COUNT; i++) {
       normalized[i] = Object.assign(emptyRow(), normalized[i] || {});
+      if (normalized[i].__order == null) normalized[i].__order = i;
       recalculateAmountForRow(normalized, i);
     }
     return normalized;
@@ -952,8 +958,10 @@
 
   function setCellValueInRows(rows, r, c, value, normalize) {
     var key = salesColumns[c].key;
-    var nextValue =
-      normalize === false ? value : normalizeCellValue(c, value);
+    var nextValue = normalize === false ? value : normalizeCellValue(c, value);
+    if (normalize !== false) {
+      nextValue = evaluateFormulaValue(nextValue, rows);
+    }
     rows[r] = Object.assign({}, rows[r], (function () {
       var o = {};
       o[key] = nextValue;
@@ -977,6 +985,89 @@
       return String(value);
     }
     return String(Math.round(value * 100) / 100);
+  }
+
+  function formatDisplayNumber(value) {
+    if (value == null || value === "") return "";
+    var num = parseCalcNumber(value);
+    if (num == null) return String(value);
+    var rounded = Math.round(num * 100) / 100;
+    return rounded.toLocaleString("ko-KR");
+  }
+
+  function columnIndexFromLabel(label) {
+    var text = String(label || "").toUpperCase();
+    if (!text) return -1;
+    var value = 0;
+    for (var i = 0; i < text.length; i++) {
+      var code = text.charCodeAt(i);
+      if (code < 65 || code > 90) return -1;
+      value = value * 26 + (code - 64);
+    }
+    return value - 1;
+  }
+
+  function getRawValue(r, c) {
+    var key = salesColumns[c].key;
+    return ST.rows[r] && ST.rows[r][key] != null ? String(ST.rows[r][key]) : "";
+  }
+
+  function getCellNumericForFormula(rowIndex, colIndex, rows) {
+    if (rowIndex < 0 || rowIndex >= ROW_COUNT || colIndex < 0 || colIndex >= COL_COUNT) return 0;
+    var row = rows[rowIndex] || emptyRow();
+    var raw = row[salesColumns[colIndex].key];
+    var num = parseCalcNumber(raw);
+    return num == null ? 0 : num;
+  }
+
+  function evaluateFormulaValue(text, rows) {
+    if (text == null) return "";
+    var expr = String(text).trim();
+    if (!expr || expr.charAt(0) !== "=") return text;
+    expr = expr.slice(1);
+
+    expr = expr.replace(/SUM\(\s*([A-Z]+)(\d+)\s*:\s*([A-Z]+)(\d+)\s*\)/gi, function (_, c1, r1, c2, r2) {
+      var startCol = columnIndexFromLabel(c1);
+      var endCol = columnIndexFromLabel(c2);
+      var startRow = Number(r1) - 1;
+      var endRow = Number(r2) - 1;
+      if (startCol < 0 || endCol < 0) return "0";
+      var top = Math.min(startRow, endRow);
+      var bottom = Math.max(startRow, endRow);
+      var left = Math.min(startCol, endCol);
+      var right = Math.max(startCol, endCol);
+      var sum = 0;
+      for (var rr = top; rr <= bottom; rr++) {
+        for (var cc = left; cc <= right; cc++) {
+          sum += getCellNumericForFormula(rr, cc, rows);
+        }
+      }
+      return String(sum);
+    });
+
+    expr = expr.replace(/\b([A-Z]+)(\d+)\b/g, function (_, col, row) {
+      return String(
+        getCellNumericForFormula(Number(row) - 1, columnIndexFromLabel(col), rows)
+      );
+    });
+
+    if (!/^[0-9+\-*/().,\s]+$/.test(expr)) return text;
+
+    try {
+      var result = Function('"use strict"; return (' + expr + ');')();
+      if (typeof result === "number" && isFinite(result)) {
+        return formatAmountValue(result);
+      }
+      return text;
+    } catch (err) {
+      return text;
+    }
+  }
+
+  function formatCellDisplay(colIndex, value) {
+    var key = salesColumns[colIndex].key;
+    if (key === "amount") return formatDisplayNumber(value);
+    return value == null ? "" : String(value);
   }
 
   function recalculateAmountForRow(rows, rowIndex) {
@@ -1009,11 +1100,12 @@
   }
 
   function commitCellValue(row, col) {
-    var current = getValue(row, col);
+    var current = getRawValue(row, col);
     var normalized = normalizeCellValue(col, current);
-    if (current === normalized) return;
+    var evaluated = evaluateFormulaValue(normalized, ST.rows);
+    if (current === evaluated) return;
     applyRowsChange(function (rows) {
-      return setCellValueInRows(rows, row, col, normalized, false);
+      return setCellValueInRows(rows, row, col, normalized, true);
     });
   }
 
@@ -1318,6 +1410,64 @@
     };
   }
 
+  function rowMatchesFilter(row) {
+    var keyword = (ST.filter.keyword || "").trim().toLowerCase();
+    if (!keyword) return true;
+    var keys =
+      ST.filter.colKey && ST.filter.colKey !== "all"
+        ? [ST.filter.colKey]
+        : salesColumns.map(function (col) { return col.key; });
+    return keys.some(function (key) {
+      var colIndex = salesColumns.findIndex(function (col) { return col.key === key; });
+      var raw = row && row[key] != null ? row[key] : "";
+      return formatCellDisplay(colIndex, raw).toLowerCase().indexOf(keyword) >= 0;
+    });
+  }
+
+  function applyFilterUI() {
+    if (!ST.host) return;
+    for (var r = 0; r < ROW_COUNT; r++) {
+      var tr = ST.host.querySelector('tr[data-row="' + r + '"]');
+      if (tr) tr.style.display = rowMatchesFilter(ST.rows[r]) ? "" : "none";
+    }
+  }
+
+  function sortRowsByColumn(colKey, direction) {
+    var colIndex = salesColumns.findIndex(function (col) { return col.key === colKey; });
+    if (colIndex < 0 || !direction) return;
+    applyRowsChange(function (rows) {
+      rows.sort(function (a, b) {
+        var av = a ? a[colKey] : "";
+        var bv = b ? b[colKey] : "";
+        var an = parseCalcNumber(av);
+        var bn = parseCalcNumber(bv);
+        var result = 0;
+        if (an != null && bn != null) {
+          result = an - bn;
+        } else {
+          result = String(formatCellDisplay(colIndex, av)).localeCompare(
+            String(formatCellDisplay(colIndex, bv)),
+            "ko"
+          );
+        }
+        if (!result) {
+          result = (a && a.__order != null ? a.__order : 0) - (b && b.__order != null ? b.__order : 0);
+        }
+        return direction === "desc" ? -result : result;
+      });
+      return rows;
+    });
+  }
+
+  function resetSortOrder() {
+    applyRowsChange(function (rows) {
+      rows.sort(function (a, b) {
+        return (a && a.__order != null ? a.__order : 0) - (b && b.__order != null ? b.__order : 0);
+      });
+      return rows;
+    });
+  }
+
   function cellKey(r, c) {
     return r + ":" + c;
   }
@@ -1360,8 +1510,7 @@
   }
 
   function getValue(r, c) {
-    var k = salesColumns[c].key;
-    return ST.rows[r] && ST.rows[r][k] != null ? String(ST.rows[r][k]) : "";
+    return formatCellDisplay(c, getRawValue(r, c));
   }
 
   function selectionBounds() {
@@ -1384,7 +1533,7 @@
   }
 
   function setValue(r, c, value) {
-    if (getValue(r, c) === value) return;
+    if (getRawValue(r, c) === value) return;
     applyRowsChange(function (current) {
       return setCellValueInRows(current, r, c, value, false);
     });
@@ -1560,7 +1709,7 @@
     ST.editOrigin = {
       row: ST.selectedCell.row,
       col: ST.selectedCell.col,
-      value: getValue(ST.selectedCell.row, ST.selectedCell.col),
+      value: getRawValue(ST.selectedCell.row, ST.selectedCell.col),
     };
   }
 
@@ -1584,10 +1733,11 @@
       }
     }
     if (ST.inputEl) {
-      ST.inputEl.value = getValue(ST.selectedCell.row, ST.selectedCell.col);
+      ST.inputEl.value = getRawValue(ST.selectedCell.row, ST.selectedCell.col);
     }
     syncInputOverlay();
     applyGridSizingUI();
+    applyFilterUI();
     updateStatusBar();
   }
 
@@ -1911,7 +2061,7 @@
       'td[data-r="' + ST.selectedCell.row + '"][data-c="' + ST.selectedCell.col + '"] .st-cell-inner'
     );
     if (firstInner) firstInner.appendChild(ST.inputEl);
-    ST.inputEl.value = getValue(ST.selectedCell.row, ST.selectedCell.col);
+    ST.inputEl.value = getRawValue(ST.selectedCell.row, ST.selectedCell.col);
     syncInputOverlay();
 
     ST.scrollEl.addEventListener("keydown", onTableKeyDown);
@@ -1956,12 +2106,27 @@
         e.stopPropagation();
         startResize("col", Number(el.getAttribute("data-col-resizer")), e.clientX, e.clientY);
       });
+      el.addEventListener("dblclick", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        ST.colWidths[Number(el.getAttribute("data-col-resizer"))] =
+          salesColumns[Number(el.getAttribute("data-col-resizer"))].width || 100;
+        applyGridSizingUI();
+        scheduleLedgerDraftSave();
+      });
     });
     host.querySelectorAll("[data-row-resizer]").forEach(function (el) {
       el.addEventListener("mousedown", function (e) {
         e.preventDefault();
         e.stopPropagation();
         startResize("row", Number(el.getAttribute("data-row-resizer")), e.clientX, e.clientY);
+      });
+      el.addEventListener("dblclick", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        ST.rowHeights[Number(el.getAttribute("data-row-resizer"))] = DEFAULT_ROW_HEIGHT;
+        applyGridSizingUI();
+        scheduleLedgerDraftSave();
       });
     });
 
@@ -2040,7 +2205,7 @@
     if (disp) disp.style.display = "none";
     if (gh) gh.style.display = "none";
     inner.appendChild(ST.inputEl);
-    ST.inputEl.value = getValue(r, c);
+    ST.inputEl.value = getRawValue(r, c);
     syncInputOverlay();
   }
 
@@ -2829,6 +2994,22 @@
       var body;
       if (state.subTab === "status") {
         body =
+          '<div class="toolbar-card" style="margin-bottom:12px">' +
+          '<label>필터:</label>' +
+          '<select id="status-filter-col"><option value="all">전체</option>' +
+          salesColumns.map(function (col) { return '<option value="' + col.key + '">' + col.label + '</option>'; }).join("") +
+          '</select>' +
+          '<input type="text" class="field" id="status-filter-keyword" style="width:180px;height:36px" placeholder="검색어" />' +
+          '<button type="button" class="soft-btn" id="btn-filter-apply">적용</button>' +
+          '<button type="button" class="soft-btn" id="btn-filter-clear">해제</button>' +
+          '<label style="margin-left:12px">정렬:</label>' +
+          '<select id="status-sort-col">' +
+          salesColumns.map(function (col) { return '<option value="' + col.key + '">' + col.label + '</option>'; }).join("") +
+          '</select>' +
+          '<button type="button" class="soft-btn" id="btn-sort-asc">오름차순</button>' +
+          '<button type="button" class="soft-btn" id="btn-sort-desc">내림차순</button>' +
+          '<button type="button" class="soft-btn" id="btn-sort-reset">입력순</button>' +
+          '</div>' +
           '<div style="display:flex;justify-content:flex-end;gap:12px;margin-bottom:12px;">' +
           '<button type="button" class="soft-btn" id="btn-send-to-work">' +
           icon("arrowRight") +
@@ -2874,13 +3055,68 @@
       });
 
       if (state.subTab === "status") {
+        var filterCol = document.getElementById("status-filter-col");
+        var filterKeyword = document.getElementById("status-filter-keyword");
+        var sortCol = document.getElementById("status-sort-col");
+        if (filterCol) filterCol.value = ST.filter.colKey || "all";
+        if (filterKeyword) filterKeyword.value = ST.filter.keyword || "";
+        if (sortCol) sortCol.value = ST.filter.colKey && ST.filter.colKey !== "all" ? ST.filter.colKey : "date";
         attachSalesTableWhenNeeded(document.getElementById("sales-table-host"));
         ensureLedgerLoadedFromFirebase().then(function () {
           if (state.subTab === "status") {
             refreshGridValues();
             updateSelectionUI();
+            applyFilterUI();
           }
         });
+        var applyBtn = document.getElementById("btn-filter-apply");
+        var clearBtn = document.getElementById("btn-filter-clear");
+        var sortAscBtn = document.getElementById("btn-sort-asc");
+        var sortDescBtn = document.getElementById("btn-sort-desc");
+        var sortResetBtn = document.getElementById("btn-sort-reset");
+        if (applyBtn) {
+          applyBtn.addEventListener("click", function () {
+            ST.filter.colKey = filterCol ? filterCol.value : "all";
+            ST.filter.keyword = filterKeyword ? filterKeyword.value : "";
+            applyFilterUI();
+          });
+        }
+        if (clearBtn) {
+          clearBtn.addEventListener("click", function () {
+            ST.filter.colKey = "all";
+            ST.filter.keyword = "";
+            if (filterCol) filterCol.value = "all";
+            if (filterKeyword) filterKeyword.value = "";
+            applyFilterUI();
+          });
+        }
+        if (sortAscBtn) {
+          sortAscBtn.addEventListener("click", function () {
+            sortRowsByColumn(sortCol ? sortCol.value : "date", "asc");
+            applyFilterUI();
+          });
+        }
+        if (sortDescBtn) {
+          sortDescBtn.addEventListener("click", function () {
+            sortRowsByColumn(sortCol ? sortCol.value : "date", "desc");
+            applyFilterUI();
+          });
+        }
+        if (sortResetBtn) {
+          sortResetBtn.addEventListener("click", function () {
+            resetSortOrder();
+            applyFilterUI();
+          });
+        }
+        if (filterKeyword) {
+          filterKeyword.addEventListener("keydown", function (e) {
+            if (e.key === "Enter") {
+              ST.filter.colKey = filterCol ? filterCol.value : "all";
+              ST.filter.keyword = filterKeyword.value;
+              applyFilterUI();
+            }
+          });
+        }
         var sendBtn = document.getElementById("btn-send-to-work");
         if (sendBtn) {
           sendBtn.addEventListener("click", function () {
