@@ -315,16 +315,16 @@
     }
     .st-resizer-col {
       top: 0;
-      right: -3px;
-      width: 6px;
+      right: -5px;
+      width: 10px;
       height: 100%;
       cursor: col-resize;
     }
     .st-resizer-row {
       left: 0;
-      bottom: -3px;
+      bottom: -5px;
       width: 100%;
-      height: 6px;
+      height: 10px;
       cursor: row-resize;
     }
     .st-table td {
@@ -726,6 +726,12 @@
     host: null,
     scrollEl: null,
     inputEl: null,
+    cellMap: {},
+    rowHeadEls: [],
+    colHeadEls: [],
+    prevSelectedKeys: [],
+    prevFillKeys: [],
+    prevActiveKey: null,
     fillDragging: false,
     fillSourceRect: null,
     fillPreviewKeys: [],
@@ -743,8 +749,8 @@
   var DEFAULT_ROW_HEIGHT = 28;
   var MIN_ROW_HEIGHT = 24;
   var MIN_COL_WIDTH = 56;
-  var MIN_ROW_COUNT = 200;
-  var ROW_GROWTH_CHUNK = 200;
+  var MIN_ROW_COUNT = 80;
+  var ROW_GROWTH_CHUNK = 100;
   var COL_COUNT = salesColumns.length;
 
   function getRowCount() {
@@ -1390,6 +1396,31 @@
     }
   }
 
+  function applyColumnWidthUI(colIndex) {
+    if (!ST.host) return;
+    var colEl = ST.host.querySelector('col[data-col="' + colIndex + '"]');
+    if (colEl) colEl.style.width = getColWidth(colIndex) + "px";
+  }
+
+  function applyRowHeightUI(rowIndex) {
+    if (!ST.host) return;
+    var tr = ST.host.querySelector('tr[data-row="' + rowIndex + '"]');
+    if (tr) tr.style.height = getRowHeight(rowIndex) + "px";
+    var tdCells = ST.host.querySelectorAll('td[data-r="' + rowIndex + '"] .st-cell-inner');
+    for (var i = 0; i < tdCells.length; i++) {
+      tdCells[i].style.minHeight = getRowHeight(rowIndex) - 4 + "px";
+    }
+    var displays = ST.host.querySelectorAll('td[data-r="' + rowIndex + '"] .st-display, td[data-r="' + rowIndex + '"] .st-ghost');
+    for (var j = 0; j < displays.length; j++) {
+      displays[j].style.height = getRowHeight(rowIndex) - 4 + "px";
+      displays[j].style.lineHeight = getRowHeight(rowIndex) - 4 + "px";
+    }
+    if (ST.inputEl && ST.selectedCell.row === rowIndex) {
+      ST.inputEl.style.height = getRowHeight(rowIndex) - 4 + "px";
+      ST.inputEl.style.lineHeight = getRowHeight(rowIndex) - 4 + "px";
+    }
+  }
+
   function selectAllCells() {
     ST.selectedCell = { row: 0, col: 0 };
     ST.selectedKeys = keysFromPoints(
@@ -1800,17 +1831,27 @@
 
   function updateSelectionUI() {
     if (!ST.tableBuilt || !ST.host) return;
-    var cells = ST.host.querySelectorAll(".st-table td[data-r]");
-    for (var i = 0; i < cells.length; i++) {
-      var td = cells[i];
-      var r = Number(td.getAttribute("data-r"));
-      var c = Number(td.getAttribute("data-c"));
-      var key = cellKey(r, c);
-      td.classList.remove("sel-in", "sel-active", "sel-fill");
-      if (ST.selectedKeys.indexOf(key) >= 0) td.classList.add("sel-in");
-      if (ST.fillPreviewKeys.indexOf(key) >= 0) td.classList.add("sel-fill");
-      if (r === ST.selectedCell.row && c === ST.selectedCell.col) td.classList.add("sel-active");
-    }
+    var currentSelected = {};
+    var currentFill = {};
+    ST.selectedKeys.forEach(function (key) { currentSelected[key] = true; });
+    ST.fillPreviewKeys.forEach(function (key) { currentFill[key] = true; });
+    var activeKey = cellKey(ST.selectedCell.row, ST.selectedCell.col);
+    var dirtyKeys = {};
+
+    ST.prevSelectedKeys.forEach(function (key) { dirtyKeys[key] = true; });
+    ST.prevFillKeys.forEach(function (key) { dirtyKeys[key] = true; });
+    ST.selectedKeys.forEach(function (key) { dirtyKeys[key] = true; });
+    ST.fillPreviewKeys.forEach(function (key) { dirtyKeys[key] = true; });
+    if (ST.prevActiveKey) dirtyKeys[ST.prevActiveKey] = true;
+    dirtyKeys[activeKey] = true;
+
+    Object.keys(dirtyKeys).forEach(function (key) {
+      var td = ST.cellMap[key];
+      if (!td) return;
+      td.classList.toggle("sel-in", !!currentSelected[key]);
+      td.classList.toggle("sel-fill", !!currentFill[key]);
+      td.classList.toggle("sel-active", key === activeKey);
+    });
 
     var oldHandle = ST.host.querySelector(".st-fill-handle");
     if (oldHandle) oldHandle.remove();
@@ -1827,7 +1868,8 @@
         handleCell.appendChild(handle);
       }
     }
-    ST.host.querySelectorAll("[data-col-head]").forEach(function (el) {
+
+    ST.colHeadEls.forEach(function (el) {
       el.classList.toggle(
         "st-head-active",
         ST.selectedKeys.some(function (key) {
@@ -1835,7 +1877,7 @@
         })
       );
     });
-    ST.host.querySelectorAll("[data-row-head]").forEach(function (el) {
+    ST.rowHeadEls.forEach(function (el) {
       el.classList.toggle(
         "st-head-active",
         ST.selectedKeys.some(function (key) {
@@ -1843,6 +1885,9 @@
         })
       );
     });
+    ST.prevSelectedKeys = ST.selectedKeys.slice();
+    ST.prevFillKeys = ST.fillPreviewKeys.slice();
+    ST.prevActiveKey = activeKey;
     updateStatusBar();
   }
 
@@ -2109,6 +2154,15 @@
 
     host.innerHTML = html;
     ST.scrollEl = host.querySelector(".st-scroll");
+    ST.cellMap = {};
+    host.querySelectorAll("td[data-r][data-c]").forEach(function (td) {
+      ST.cellMap[cellKey(Number(td.getAttribute("data-r")), Number(td.getAttribute("data-c")))] = td;
+    });
+    ST.colHeadEls = Array.prototype.slice.call(host.querySelectorAll("[data-col-head]"));
+    ST.rowHeadEls = Array.prototype.slice.call(host.querySelectorAll("[data-row-head]"));
+    ST.prevSelectedKeys = [];
+    ST.prevFillKeys = [];
+    ST.prevActiveKey = null;
 
     var tbody = host.querySelector("tbody");
     ST.inputEl = document.createElement("input");
@@ -2143,7 +2197,7 @@
         ensureRowCapacity(getRowCount() + ROW_GROWTH_CHUNK);
       }
     });
-    host.querySelectorAll("[data-col-head]").forEach(function (el) {
+    ST.colHeadEls.forEach(function (el) {
       el.addEventListener("mousedown", function (e) {
         if (e.target.closest("[data-col-resizer]")) return;
         e.preventDefault();
@@ -2160,7 +2214,7 @@
         selectAllCells();
       });
     }
-    host.querySelectorAll("[data-row-head]").forEach(function (el) {
+    ST.rowHeadEls.forEach(function (el) {
       el.addEventListener("mousedown", function (e) {
         if (e.target.closest("[data-row-resizer]")) return;
         e.preventDefault();
@@ -2338,6 +2392,13 @@
       applyFillPreview();
       return;
     }
+    if (ST.dragging) {
+      ST.dragging = false;
+      moveInputToCell(ST.selectedCell.row, ST.selectedCell.col);
+      syncEditOrigin();
+      focusInput();
+      return;
+    }
     ST.dragging = false;
   }
 
@@ -2415,14 +2476,14 @@
           MIN_COL_WIDTH,
           ST.resizing.startSize + (e.clientX - ST.resizing.startX)
         );
+        applyColumnWidthUI(ST.resizing.index);
       } else {
         ST.rowHeights[ST.resizing.index] = Math.max(
           MIN_ROW_HEIGHT,
           ST.resizing.startSize + (e.clientY - ST.resizing.startY)
         );
+        applyRowHeightUI(ST.resizing.index);
       }
-      applyGridSizingUI();
-      updateSelectionUI();
       return;
     }
 
@@ -2454,9 +2515,6 @@
       });
 
     updateSelectionUI();
-    moveInputToCell(rowIndex, colIndex);
-    syncEditOrigin();
-    focusInput();
   }
 
   function onTableKeyDown(e) {
