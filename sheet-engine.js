@@ -281,14 +281,29 @@
         for (var c = 0; c < getColCount(); c++) {
           var active = r === engine.selectedCell.row && c === engine.selectedCell.col;
           var displayHeight = Math.max(24, getRowHeight(r) - 4);
+          var editor = getCellEditor(r, c);
           html += '<td data-r="' + r + '" data-c="' + c + '" class="' + (active ? 'sel-in sel-active' : '') + '">';
           html += '<div class="st-cell-inner" style="min-height:' + displayHeight + 'px">';
-          html +=
-            '<div class="st-display" style="' +
-              (active ? 'display:none;' : '') +
-              'height:' + displayHeight + 'px;line-height:' + displayHeight + 'px;">' +
-              escapeHtml(getDisplayValue(r, c)) +
-            '</div>';
+          if (editor && editor.type === "select" && Array.isArray(editor.options)) {
+            html +=
+              '<select class="st-cell-select" data-inline-select="' + r + ':' + c + '" style="height:' + displayHeight + 'px;line-height:' + displayHeight + 'px;">' +
+              editor.options.map(function (item) {
+                var option = typeof item === "string"
+                  ? { value: item, label: item }
+                  : { value: item.value, label: item.label || item.value };
+                return '<option value="' + escapeAttr(option.value) + '"' +
+                  (String(getRawValue(r, c)) === String(option.value) ? ' selected' : '') +
+                  '>' + escapeHtml(option.label) + '</option>';
+              }).join("") +
+              '</select>';
+          } else {
+            html +=
+              '<div class="st-display" style="' +
+                (active ? 'display:none;' : '') +
+                'height:' + displayHeight + 'px;line-height:' + displayHeight + 'px;">' +
+                escapeHtml(getDisplayValue(r, c)) +
+              '</div>';
+          }
           html += '<div class="st-ghost" style="display:none;height:' + displayHeight + 'px;line-height:' + displayHeight + 'px;"></div>';
           html += '</div></td>';
         }
@@ -345,6 +360,70 @@
       engine.host.querySelector("tbody").addEventListener("dblclick", onCellDblClick);
       engine.host.querySelector("thead").addEventListener("mousedown", onHeadMouseDown);
       engine.host.querySelector("thead").addEventListener("dblclick", onHeadDoubleClick);
+      engine.host.querySelectorAll("[data-inline-select]").forEach(function (selectEl) {
+        selectEl.addEventListener("mousedown", function (e) {
+          e.stopPropagation();
+        });
+        selectEl.addEventListener("focus", function () {
+          var parts = String(selectEl.getAttribute("data-inline-select")).split(":");
+          var row = Number(parts[0]);
+          var col = Number(parts[1]);
+          engine.selectedCell = { row: row, col: col };
+          engine.selectedKeys = [cellKey(row, col)];
+          engine.editMode = false;
+          updateSelectionUI();
+        });
+        selectEl.addEventListener("keydown", function (e) {
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
+            e.preventDefault();
+            copySelectionAsync();
+            return;
+          }
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "x") {
+            e.preventDefault();
+            cutSelectionAsync();
+            return;
+          }
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
+            e.preventDefault();
+            pasteFromClipboardAsync();
+            return;
+          }
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+            e.preventDefault();
+            undoSelection();
+            return;
+          }
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
+            e.preventDefault();
+            redoSelection();
+            return;
+          }
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+            e.preventDefault();
+            selectAll();
+            return;
+          }
+          if (e.key === "Delete" && engine.selectedKeys.length > 1) {
+            e.preventDefault();
+            clearSelectionCells();
+            return;
+          }
+        });
+        selectEl.addEventListener("change", function () {
+          var parts = String(selectEl.getAttribute("data-inline-select")).split(":");
+          var row = Number(parts[0]);
+          var col = Number(parts[1]);
+          var beforeRows = cloneRowList(getRows());
+          var nextRows = cloneRowList(getRows());
+          setRawValue(nextRows, row, col, selectEl.value);
+          setRows(nextRows, false, beforeRows);
+          engine.selectedCell = { row: row, col: col };
+          engine.selectedKeys = [cellKey(row, col)];
+          engine.editMode = false;
+          updateSelectionUI();
+        });
+      });
 
       engine.inputEl.addEventListener("compositionstart", function () {
         engine.isComposing = true;
@@ -443,6 +522,11 @@
       var inner = td.querySelector(".st-cell-inner");
       var disp = td.querySelector(".st-display");
       if (disp) disp.style.display = "none";
+      if (isSelectEditor(r, c)) {
+        if (engine.inputEl.parentNode === inner) inner.removeChild(engine.inputEl);
+        syncInputOverlay();
+        return;
+      }
       inner.appendChild(engine.inputEl);
       if (engine.selectEl && engine.selectEl.parentNode === inner) {
         inner.removeChild(engine.selectEl);
@@ -473,7 +557,15 @@
       var inner = td.querySelector(".st-cell-inner");
       var ghost = inner.querySelector(".st-ghost");
       var raw = getRawValue(r, c);
+      var inlineSelect = td.querySelector("[data-inline-select]");
       var useSelect = engine.editMode && isSelectEditor(r, c);
+      if (inlineSelect) inlineSelect.value = raw;
+      if (isSelectEditor(r, c)) {
+        engine.selectEl.style.display = "none";
+        engine.inputEl.style.display = "none";
+        if (ghost) ghost.style.display = "none";
+        return;
+      }
       if (useSelect && engine.selectEl.parentNode !== inner) {
         inner.appendChild(engine.selectEl);
       } else if (!useSelect && engine.inputEl.parentNode !== inner) {
@@ -513,6 +605,16 @@
       requestAnimationFrame(function () {
         if (!engine.inputEl) return;
         if (engine.scrollEl) engine.scrollEl.focus();
+        if (isSelectEditor(engine.selectedCell.row, engine.selectedCell.col)) {
+          var td = engine.host && engine.host.querySelector(
+            'td[data-r="' + engine.selectedCell.row + '"][data-c="' + engine.selectedCell.col + '"]'
+          );
+          var inlineSelect = td ? td.querySelector("[data-inline-select]") : null;
+          if (inlineSelect) {
+            inlineSelect.focus();
+            return;
+          }
+        }
         if (engine.editMode && isSelectEditor(engine.selectedCell.row, engine.selectedCell.col)) {
           populateSelectOptions(engine.selectedCell.row, engine.selectedCell.col);
           engine.selectEl.focus();
@@ -1008,6 +1110,7 @@
     function onCellMouseDown(e) {
       var td = e.target.closest("td[data-r]");
       if (!td || e.button !== 0) return;
+      if (e.target.closest("[data-inline-select]")) return;
       e.preventDefault();
       commitActiveCellValue();
       var row = Number(td.getAttribute("data-r"));

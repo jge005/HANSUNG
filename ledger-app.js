@@ -4131,7 +4131,6 @@
           '<div class="workdoc-card">' +
             '<div class="workdoc-head">' +
               '<div class="workdoc-title">' + icon("sheet") + ' 공급받는자</div>' +
-              '<div class="sub">거래처 정보</div>' +
             "</div>" +
             '<div class="workdoc-form">' +
               '<div class="workdoc-label">상호</div><input class="workdoc-input" data-work-info="receiver.company" value="' + escapeAttr(getWorkInfoValue("receiver.company")) + '" />' +
@@ -4145,7 +4144,6 @@
           '<div class="workdoc-card">' +
             '<div class="workdoc-head">' +
               '<div class="workdoc-title">' + icon("clipboard") + ' 작업요약</div>' +
-              '<div class="sub">첫 화면 요약</div>' +
             "</div>" +
             '<div class="workdoc-meta">' +
               '<div class="workdoc-meta-row">' +
@@ -4178,10 +4176,6 @@
           "</div>" +
         "</div>" +
         '<div class="workdoc-card">' +
-          '<div class="workdoc-head">' +
-            '<div class="workdoc-title">' + icon("scroll") + ' 품목</div>' +
-            '<div class="sub">매출현황과 같은 셀 단위 입력</div>' +
-          "</div>" +
           '<div id="work-grid-host"></div>' +
         "</div>" +
       "</div>"
