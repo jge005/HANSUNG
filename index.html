@@ -266,18 +266,32 @@
       color: #6d6387;
     }
     .st-table td {
+      position: relative;
       border: 1px solid #efe5f8;
       padding: 2px 4px;
       vertical-align: middle;
       transition: background 0.1s;
     }
     .st-table td.sel-in { background: #eef4ff; }
+    .st-table td.sel-fill { background: #e7f0ff; }
     .st-table td.sel-active {
       position: relative;
       z-index: 5;
       background: #f7fbff;
       outline: 2px solid #60a5fa;
       outline-offset: -2px;
+    }
+    .st-fill-handle {
+      position: absolute;
+      right: -1px;
+      bottom: -1px;
+      width: 8px;
+      height: 8px;
+      border: 1px solid #fff;
+      border-radius: 2px;
+      background: #60a5fa;
+      cursor: crosshair;
+      z-index: 7;
     }
     .st-cell-inner {
       position: relative;
@@ -503,7 +517,6 @@
       if (!db) throw new Error("Firestore 초기화 실패: window.firebaseApp 없음");
       await setDoc(doc(db, "workDrafts", draftId), payload, { merge: true });
     }
-
     async function loadWorkDraft(draftId) {
       if (!db) throw new Error("Firestore 초기화 실패: window.firebaseApp 없음");
       const snap = await getDoc(doc(db, "workDrafts", draftId));
@@ -623,6 +636,10 @@
     host: null,
     scrollEl: null,
     inputEl: null,
+    fillDragging: false,
+    fillSourceRect: null,
+    fillPreviewKeys: [],
+    fillDirection: null,
   };
 
   var ROW_COUNT = 40;
@@ -824,6 +841,162 @@
     return ledgerState.loadingPromise;
   }
 
+  function setCellValueInRows(rows, r, c, value, normalize) {
+    var key = salesColumns[c].key;
+    var nextValue =
+      normalize === false ? value : normalizeCellValue(c, value);
+    rows[r] = Object.assign({}, rows[r], (function () {
+      var o = {};
+      o[key] = nextValue;
+      return o;
+    })());
+    return rows;
+  }
+
+  function normalizeCellValue(colIndex, value) {
+    var text = value == null ? "" : String(value);
+    if (salesColumns[colIndex].key !== "date") return text;
+
+    var slash = text.match(/^\s*(\d{1,2})\s*\/\s*(\d{1,2})\s*$/);
+    if (slash) {
+      return Number(slash[1]) + "월 " + Number(slash[2]) + "일";
+    }
+
+    var korean = text.match(/^\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일\s*$/);
+    if (korean) {
+      return Number(korean[1]) + "월 " + Number(korean[2]) + "일";
+    }
+
+    return text;
+  }
+
+  function commitCellValue(row, col) {
+    var current = getValue(row, col);
+    var normalized = normalizeCellValue(col, current);
+    if (current === normalized) return;
+    applyRowsChange(function (rows) {
+      return setCellValueInRows(rows, row, col, normalized, false);
+    });
+  }
+
+  function commitActiveCellValue() {
+    commitCellValue(ST.selectedCell.row, ST.selectedCell.col);
+  }
+
+  function parseMonthDay(value) {
+    var text = value == null ? "" : String(value).trim();
+    var match =
+      text.match(/^(\d{1,2})\s*\/\s*(\d{1,2})$/) ||
+      text.match(/^(\d{1,2})\s*월\s*(\d{1,2})\s*일$/);
+    if (!match) return null;
+
+    var month = Number(match[1]);
+    var day = Number(match[2]);
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+
+    return new Date(2026, month - 1, day);
+  }
+
+  function formatMonthDay(date) {
+    return date.getMonth() + 1 + "월 " + date.getDate() + "일";
+  }
+
+  function parseWeekday(value) {
+    var text = value == null ? "" : String(value).trim();
+    var shortDays = ["월", "화", "수", "목", "금", "토", "일"];
+    var longDays = ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"];
+    var shortIndex = shortDays.indexOf(text);
+    if (shortIndex >= 0) return { index: shortIndex, style: "short" };
+    var longIndex = longDays.indexOf(text);
+    if (longIndex >= 0) return { index: longIndex, style: "long" };
+    return null;
+  }
+
+  function formatWeekday(index, style) {
+    var shortDays = ["월", "화", "수", "목", "금", "토", "일"];
+    var longDays = ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"];
+    var normalized = ((index % 7) + 7) % 7;
+    return style === "long" ? longDays[normalized] : shortDays[normalized];
+  }
+
+  function buildFillSeries(sourceValues, count, direction) {
+    var values = sourceValues.map(function (value) {
+      return value == null ? "" : String(value);
+    });
+    if (!count) return [];
+
+    var parsedDates = values.map(parseMonthDay);
+    if (parsedDates.every(function (item) { return !!item; })) {
+      var dateBase;
+      var dateStep;
+      if (direction === "up" || direction === "left") {
+        dateBase = parsedDates[0];
+        dateStep =
+          parsedDates.length > 1
+            ? Math.round((parsedDates[0] - parsedDates[1]) / 86400000)
+            : -1;
+      } else {
+        dateBase = parsedDates[parsedDates.length - 1];
+        dateStep =
+          parsedDates.length > 1
+            ? Math.round(
+                (parsedDates[parsedDates.length - 1] -
+                  parsedDates[parsedDates.length - 2]) /
+                  86400000
+              )
+            : 1;
+      }
+      if (!dateStep) dateStep = direction === "up" || direction === "left" ? -1 : 1;
+      return Array.from({ length: count }, function (_, index) {
+        var next = new Date(dateBase);
+        next.setDate(dateBase.getDate() + dateStep * (index + 1));
+        return formatMonthDay(next);
+      });
+    }
+
+    var parsedWeekdays = values.map(parseWeekday);
+    if (parsedWeekdays.every(function (item) { return !!item; })) {
+      var weekdayBase;
+      var weekdayStep;
+      var weekdayStyle =
+        parsedWeekdays[0].style === "long" ||
+        parsedWeekdays[parsedWeekdays.length - 1].style === "long"
+          ? "long"
+          : "short";
+      if (direction === "up" || direction === "left") {
+        weekdayBase = parsedWeekdays[0].index;
+        weekdayStep =
+          parsedWeekdays.length > 1
+            ? parsedWeekdays[0].index - parsedWeekdays[1].index
+            : -1;
+      } else {
+        weekdayBase = parsedWeekdays[parsedWeekdays.length - 1].index;
+        weekdayStep =
+          parsedWeekdays.length > 1
+            ? parsedWeekdays[parsedWeekdays.length - 1].index -
+              parsedWeekdays[parsedWeekdays.length - 2].index
+            : 1;
+      }
+      if (!weekdayStep) weekdayStep = direction === "up" || direction === "left" ? -1 : 1;
+      return Array.from({ length: count }, function (_, index) {
+        return formatWeekday(weekdayBase + weekdayStep * (index + 1), weekdayStyle);
+      });
+    }
+
+    if (direction === "up" || direction === "left") {
+      return Array.from({ length: count }, function (_, index) {
+        var sourceIndex =
+          (values.length - 1 - (index % values.length) + values.length) %
+          values.length;
+        return values[sourceIndex];
+      });
+    }
+
+    return Array.from({ length: count }, function (_, index) {
+      return values[index % values.length];
+    });
+  }
+
   function cellKey(r, c) {
     return r + ":" + c;
   }
@@ -864,7 +1037,6 @@
       return o;
     });
   }
-
   function getValue(r, c) {
     var k = salesColumns[c].key;
     return ST.rows[r] && ST.rows[r][k] != null ? String(ST.rows[r][k]) : "";
@@ -890,21 +1062,23 @@
   }
 
   function setValue(r, c, value) {
-    var key = salesColumns[c].key;
     if (getValue(r, c) === value) return;
     applyRowsChange(function (current) {
-      current[r] = Object.assign({}, current[r], (function () { var o = {}; o[key] = value; return o; })());
-      return current;
+      return setCellValueInRows(current, r, c, value, false);
     });
   }
 
   function moveSelection(row, col) {
+    commitActiveCellValue();
     var nr = Math.max(0, Math.min(ROW_COUNT - 1, row));
     var nc = Math.max(0, Math.min(COL_COUNT - 1, col));
     ST.selectedCell = { row: nr, col: nc };
     ST.selectedKeys = [cellKey(nr, nc)];
     ST.editMode = false;
     ST.isComposing = false;
+    ST.fillPreviewKeys = [];
+    ST.fillSourceRect = null;
+    ST.fillDirection = null;
     updateSelectionUI();
     moveInputToCell(nr, nc);
     syncEditOrigin();
@@ -945,33 +1119,84 @@
     var startRow = ST.selectedCell.row;
     var startCol = ST.selectedCell.col;
     var lines = text.replace(/\r/g, "").split("\n");
+    if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+    var grid = lines.map(function (line) {
+      return line.split("\t");
+    });
+    var sourceRows = Math.max(grid.length, 1);
+    var sourceCols = Math.max.apply(
+      null,
+      grid.map(function (line) {
+        return line.length;
+      })
+    );
+    var selectionRect = selectionBounds();
+    var selectionIsRect =
+      ST.selectedKeys.length ===
+      (selectionRect.bottom - selectionRect.top + 1) *
+        (selectionRect.right - selectionRect.left + 1);
 
     applyRowsChange(function (current) {
-      lines.forEach(function (line, rowOffset) {
-        var parts = line.split("\t");
+      if (ST.selectedKeys.length > 1 && sourceRows === 1 && sourceCols === 1) {
+        ST.selectedKeys.forEach(function (key) {
+          var pos = key.split(":");
+          setCellValueInRows(
+            current,
+            Number(pos[0]),
+            Number(pos[1]),
+            grid[0][0],
+            true
+          );
+        });
+        return current;
+      }
+
+      if (ST.selectedKeys.length > 1 && selectionIsRect) {
+        for (var r = selectionRect.top; r <= selectionRect.bottom; r++) {
+          for (var c = selectionRect.left; c <= selectionRect.right; c++) {
+            var rowOffset = r - selectionRect.top;
+            var colOffset = c - selectionRect.left;
+            var rowValues = grid[rowOffset % sourceRows] || [""];
+            var nextValue = rowValues[colOffset % rowValues.length] || "";
+            setCellValueInRows(current, r, c, nextValue, true);
+          }
+        }
+        return current;
+      }
+
+      grid.forEach(function (parts, rowOffset) {
         parts.forEach(function (value, colOffset) {
           var row = startRow + rowOffset;
           var col = startCol + colOffset;
           if (row < current.length && col < salesColumns.length) {
-            var k = salesColumns[col].key;
-            current[row] = Object.assign({}, current[row], (function () { var o = {}; o[k] = value; return o; })());
+            setCellValueInRows(current, row, col, value, true);
           }
         });
       });
       return current;
     });
 
-    var pastedRows = Math.max(lines.length, 1);
-    var pastedCols = Math.max.apply(null, lines.map(function (line) {
-      return line.split("\t").length;
-    }));
-    var endRow = Math.max(0, Math.min(ROW_COUNT - 1, startRow + pastedRows - 1));
-    var endCol = Math.max(0, Math.min(COL_COUNT - 1, startCol + pastedCols - 1));
+    var endRow;
+    var endCol;
+    if (ST.selectedKeys.length > 1 && selectionIsRect) {
+      endRow = selectionRect.bottom;
+      endCol = selectionRect.right;
+      ST.selectedKeys = keysFromPoints(
+        { row: selectionRect.top, col: selectionRect.left },
+        { row: endRow, col: endCol }
+      );
+    } else {
+      var pastedRows = Math.max(grid.length, 1);
+      var pastedCols = sourceCols;
+      endRow = Math.max(0, Math.min(ROW_COUNT - 1, startRow + pastedRows - 1));
+      endCol = Math.max(0, Math.min(COL_COUNT - 1, startCol + pastedCols - 1));
+      ST.selectedKeys = keysFromPoints(
+        { row: startRow, col: startCol },
+        { row: endRow, col: endCol }
+      );
+    }
+
     ST.selectedCell = { row: endRow, col: endCol };
-    ST.selectedKeys = keysFromPoints(
-      { row: startRow, col: startCol },
-      { row: endRow, col: endCol }
-    );
     ST.editMode = false;
     updateSelectionUI();
     moveInputToCell(ST.selectedCell.row, ST.selectedCell.col);
@@ -1050,10 +1275,164 @@
       var r = Number(td.getAttribute("data-r"));
       var c = Number(td.getAttribute("data-c"));
       var key = cellKey(r, c);
-      td.classList.remove("sel-in", "sel-active");
+      td.classList.remove("sel-in", "sel-active", "sel-fill");
       if (ST.selectedKeys.indexOf(key) >= 0) td.classList.add("sel-in");
+      if (ST.fillPreviewKeys.indexOf(key) >= 0) td.classList.add("sel-fill");
       if (r === ST.selectedCell.row && c === ST.selectedCell.col) td.classList.add("sel-active");
     }
+
+    var oldHandle = ST.host.querySelector(".st-fill-handle");
+    if (oldHandle) oldHandle.remove();
+
+    if (!ST.fillDragging && ST.selectedKeys.length) {
+      var bounds = selectionBounds();
+      var handleCell = ST.host.querySelector(
+        '.st-table td[data-r="' + bounds.bottom + '"][data-c="' + bounds.right + '"]'
+      );
+      if (handleCell) {
+        var handle = document.createElement("div");
+        handle.className = "st-fill-handle";
+        handle.title = "자동 채우기";
+        handleCell.appendChild(handle);
+      }
+    }
+  }
+
+  function updateFillPreview(row, col) {
+    if (!ST.fillSourceRect) return;
+    var source = ST.fillSourceRect;
+    var down = row - source.bottom;
+    var up = source.top - row;
+    var right = col - source.right;
+    var left = source.left - col;
+    var verticalDistance = Math.max(down, up, 0);
+    var horizontalDistance = Math.max(right, left, 0);
+
+    ST.fillPreviewKeys = [];
+    ST.fillDirection = null;
+
+    if (!verticalDistance && !horizontalDistance) {
+      updateSelectionUI();
+      return;
+    }
+
+    if (verticalDistance >= horizontalDistance) {
+      if (down > 0) {
+        ST.fillDirection = "down";
+        for (var r = source.bottom + 1; r <= row; r++) {
+          for (var c = source.left; c <= source.right; c++) {
+            ST.fillPreviewKeys.push(cellKey(r, c));
+          }
+        }
+      } else if (up > 0) {
+        ST.fillDirection = "up";
+        for (var r2 = row; r2 < source.top; r2++) {
+          for (var c2 = source.left; c2 <= source.right; c2++) {
+            ST.fillPreviewKeys.push(cellKey(r2, c2));
+          }
+        }
+      }
+    } else {
+      if (right > 0) {
+        ST.fillDirection = "right";
+        for (var c3 = source.right + 1; c3 <= col; c3++) {
+          for (var r3 = source.top; r3 <= source.bottom; r3++) {
+            ST.fillPreviewKeys.push(cellKey(r3, c3));
+          }
+        }
+      } else if (left > 0) {
+        ST.fillDirection = "left";
+        for (var c4 = col; c4 < source.left; c4++) {
+          for (var r4 = source.top; r4 <= source.bottom; r4++) {
+            ST.fillPreviewKeys.push(cellKey(r4, c4));
+          }
+        }
+      }
+    }
+
+    updateSelectionUI();
+  }
+
+  function applyFillPreview() {
+    if (!ST.fillSourceRect || !ST.fillPreviewKeys.length || !ST.fillDirection) return;
+
+    var source = ST.fillSourceRect;
+    var direction = ST.fillDirection;
+    var bounds = rectFromKeys(ST.fillPreviewKeys);
+
+    applyRowsChange(function (rows) {
+      if (direction === "down" || direction === "up") {
+        var count = Math.abs(bounds.bottom - bounds.top) + 1;
+        var targetRows =
+          direction === "down"
+            ? Array.from({ length: count }, function (_, index) {
+                return source.bottom + index + 1;
+              })
+            : Array.from({ length: count }, function (_, index) {
+                return source.top - index - 1;
+              });
+
+        for (var c = source.left; c <= source.right; c++) {
+          var sourceValues = [];
+          for (var r = source.top; r <= source.bottom; r++) {
+            sourceValues.push(getValue(r, c));
+          }
+          var filled = buildFillSeries(sourceValues, count, direction);
+          targetRows.forEach(function (targetRow, index) {
+            setCellValueInRows(rows, targetRow, c, filled[index], true);
+          });
+        }
+      } else {
+        var count2 = Math.abs(bounds.right - bounds.left) + 1;
+        var targetCols =
+          direction === "right"
+            ? Array.from({ length: count2 }, function (_, index) {
+                return source.right + index + 1;
+              })
+            : Array.from({ length: count2 }, function (_, index) {
+                return source.left - index - 1;
+              });
+
+        for (var r2 = source.top; r2 <= source.bottom; r2++) {
+          var sourceValues2 = [];
+          for (var c5 = source.left; c5 <= source.right; c5++) {
+            sourceValues2.push(getValue(r2, c5));
+          }
+          var filled2 = buildFillSeries(sourceValues2, count2, direction);
+          targetCols.forEach(function (targetCol, index2) {
+            setCellValueInRows(rows, r2, targetCol, filled2[index2], true);
+          });
+        }
+      }
+      return rows;
+    });
+
+    var start;
+    var end;
+    if (direction === "down") {
+      start = { row: source.top, col: source.left };
+      end = { row: bounds.bottom, col: source.right };
+    } else if (direction === "up") {
+      start = { row: bounds.top, col: source.left };
+      end = { row: source.bottom, col: source.right };
+    } else if (direction === "right") {
+      start = { row: source.top, col: source.left };
+      end = { row: source.bottom, col: bounds.right };
+    } else {
+      start = { row: source.top, col: bounds.left };
+      end = { row: source.bottom, col: source.right };
+    }
+
+    ST.selectedKeys = keysFromPoints(start, end);
+    ST.selectedCell = { row: end.row, col: end.col };
+    ST.fillPreviewKeys = [];
+    ST.fillSourceRect = null;
+    ST.fillDirection = null;
+    ST.editMode = false;
+    updateSelectionUI();
+    moveInputToCell(ST.selectedCell.row, ST.selectedCell.col);
+    syncEditOrigin();
+    focusInput();
   }
 
   function syncInputOverlay() {
@@ -1188,6 +1567,9 @@
       if (ST.editMode) e.target.setSelectionRange(len, len);
       else e.target.setSelectionRange(0, len);
     });
+    ST.inputEl.addEventListener("blur", function () {
+      commitActiveCellValue();
+    });
     ST.inputEl.addEventListener("mouseup", function (e) {
       if (!ST.editMode) {
         e.preventDefault();
@@ -1239,12 +1621,16 @@
   function onCellDblClick(e) {
     var td = e.target.closest("td[data-r]");
     if (!td || !ST.host || !ST.host.contains(td)) return;
+    commitActiveCellValue();
     var rowIndex = Number(td.getAttribute("data-r"));
     var colIndex = Number(td.getAttribute("data-c"));
     ST.selectedCell = { row: rowIndex, col: colIndex };
     ST.selectedKeys = [cellKey(rowIndex, colIndex)];
     snapshotEditOrigin();
     ST.editMode = true;
+    ST.fillPreviewKeys = [];
+    ST.fillSourceRect = null;
+    ST.fillDirection = null;
     updateSelectionUI();
     moveInputToCell(rowIndex, colIndex);
     requestAnimationFrame(function () {
@@ -1266,6 +1652,11 @@
   }
 
   function onWindowMouseUp() {
+    if (ST.fillDragging) {
+      ST.fillDragging = false;
+      applyFillPreview();
+      return;
+    }
     ST.dragging = false;
   }
 
@@ -1273,6 +1664,19 @@
     var td = e.target.closest("td[data-r]");
     if (!td || !td.getAttribute("data-r")) return;
     if (e.button !== 0) return;
+    if (e.target.closest(".st-fill-handle")) {
+      e.preventDefault();
+      e.stopPropagation();
+      ST.fillDragging = true;
+      ST.dragging = false;
+      ST.fillSourceRect = selectionBounds();
+      ST.fillPreviewKeys = [];
+      ST.fillDirection = null;
+      updateSelectionUI();
+      return;
+    }
+
+    commitActiveCellValue();
     e.preventDefault();
     var rowIndex = Number(td.getAttribute("data-r"));
     var colIndex = Number(td.getAttribute("data-c"));
@@ -1282,6 +1686,9 @@
     ST.dragStart = pos;
     ST.selectedCell = pos;
     ST.editMode = false;
+    ST.fillPreviewKeys = [];
+    ST.fillSourceRect = null;
+    ST.fillDirection = null;
 
     var key = cellKey(rowIndex, colIndex);
     var already = ST.selectedKeys.indexOf(key) >= 0;
@@ -1321,6 +1728,16 @@
   }
 
   function onDocMouseMove(e) {
+    if (ST.fillDragging) {
+      var fillTd = getTdFromPoint(e.clientX, e.clientY);
+      if (!fillTd) return;
+      updateFillPreview(
+        Number(fillTd.getAttribute("data-r")),
+        Number(fillTd.getAttribute("data-c"))
+      );
+      return;
+    }
+
     if (!ST.dragging || !ST.dragStart) return;
     var td = getTdFromPoint(e.clientX, e.clientY);
     if (!td) return;
@@ -1507,6 +1924,11 @@
     var len = input.value.length;
 
     if (!ST.editMode) {
+      if (e.key === "Delete") {
+        e.preventDefault();
+        clearSelectionCells();
+        return;
+      }
       if (e.key === "Enter") {
         e.preventDefault();
         moveSelection(e.shiftKey ? rowIndex - 1 : rowIndex + 1, colIndex);
