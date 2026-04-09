@@ -435,26 +435,26 @@
     .workdoc {
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 10px;
     }
     .workdoc-top {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 280px;
-      gap: 12px;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 240px;
+      gap: 10px;
       align-items: start;
     }
     .workdoc-card {
       border-radius: 12px;
       background: rgba(255, 255, 255, 0.95);
       box-shadow: 0 1px 6px rgba(0, 0, 0, 0.06);
-      padding: 12px;
+      padding: 10px;
     }
     .workdoc-head {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 8px;
+      gap: 10px;
+      margin-bottom: 6px;
     }
     .workdoc-head-actions {
       display: inline-flex;
@@ -473,24 +473,24 @@
     }
     .workdoc-form {
       display: grid;
-      grid-template-columns: 72px 1fr;
-      gap: 8px 10px;
+      grid-template-columns: 60px 1fr;
+      gap: 6px 8px;
       align-items: center;
     }
     .workdoc-label {
       color: var(--muted2);
       font-weight: 600;
-      font-size: 12px;
+      font-size: 11px;
     }
     .workdoc-input {
-      height: 32px;
-      border-radius: 10px;
+      height: 28px;
+      border-radius: 8px;
       border: 1px solid var(--border);
       background: #fff;
-      padding: 0 10px;
+      padding: 0 8px;
       outline: none;
       font: inherit;
-      font-size: 12px;
+      font-size: 11px;
       color: var(--text);
     }
     .workdoc-input:focus {
@@ -498,17 +498,17 @@
       box-shadow: 0 0 0 2px #f1e8ff;
     }
     .workdoc-select {
-      min-width: 92px;
+      min-width: 82px;
       cursor: pointer;
     }
     .workdoc-meta {
       display: grid;
-      gap: 10px;
+      gap: 8px;
     }
     .workdoc-meta-row {
       display: grid;
-      grid-template-columns: 76px 1fr;
-      gap: 8px;
+      grid-template-columns: 64px 1fr;
+      gap: 6px;
       align-items: center;
     }
     .workdoc-meta-row .workdoc-input {
@@ -517,24 +517,32 @@
     .workdoc-summary {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 8px;
-      margin-top: 4px;
+      gap: 6px;
+      margin-top: 2px;
     }
     .workdoc-summary-item {
       border: 1px solid #eadff6;
-      border-radius: 10px;
-      padding: 8px 10px;
+      border-radius: 8px;
+      padding: 6px 8px;
       background: #fcfaff;
     }
     .workdoc-summary-label {
-      font-size: 11px;
+      font-size: 10px;
       color: var(--muted);
-      margin-bottom: 4px;
+      margin-bottom: 2px;
     }
     .workdoc-summary-value {
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 700;
       color: var(--text-dark);
+    }
+    .st-select {
+      appearance: none;
+      -webkit-appearance: none;
+      background: #fff;
+      color: var(--text);
+      cursor: pointer;
+      padding-right: 24px;
     }
     .items-wrap {
       border-radius: 12px;

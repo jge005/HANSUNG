@@ -451,6 +451,19 @@
       syncInputOverlay();
     }
 
+    function activateEditorForCell(r, c) {
+      engine.selectedCell = { row: r, col: c };
+      engine.selectedKeys = [cellKey(r, c)];
+      if (!engine.editMode) {
+        engine.editSnapshotRows = cloneRowList(getRows());
+      }
+      engine.editMode = true;
+      updateSelectionUI();
+      moveInputToCell(r, c);
+      syncEditOrigin();
+      focusInput();
+    }
+
     function syncInputOverlay() {
       if (!engine.inputEl || !engine.host) return;
       var r = engine.selectedCell.row;
@@ -999,6 +1012,10 @@
       commitActiveCellValue();
       var row = Number(td.getAttribute("data-r"));
       var col = Number(td.getAttribute("data-c"));
+      if (isSelectEditor(row, col)) {
+        activateEditorForCell(row, col);
+        return;
+      }
       engine.dragging = true;
       engine.dragStart = { row: row, col: col };
       engine.selectedCell = { row: row, col: col };
@@ -1027,13 +1044,7 @@
       var td = e.target.closest("td[data-r]");
       if (!td) return;
       commitActiveCellValue();
-      engine.selectedCell = { row: Number(td.getAttribute("data-r")), col: Number(td.getAttribute("data-c")) };
-      engine.selectedKeys = [cellKey(engine.selectedCell.row, engine.selectedCell.col)];
-      engine.editSnapshotRows = cloneRowList(getRows());
-      engine.editMode = true;
-      updateSelectionUI();
-      moveInputToCell(engine.selectedCell.row, engine.selectedCell.col);
-      focusInput();
+      activateEditorForCell(Number(td.getAttribute("data-r")), Number(td.getAttribute("data-c")));
     }
 
     function onHeadMouseDown(e) {
