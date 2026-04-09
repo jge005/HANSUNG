@@ -2481,62 +2481,142 @@
     return text;
   }
 
-  function renderStatementAbsText(text, left, top, width, align, className) {
-    if (text == null) text = "";
-    return (
-      '<div class="statement-abs' +
-      (align ? " " + align : "") +
-      (className ? " " + className : "") +
-      '" style="left:' + left + 'px;top:' + top + 'px;width:' + width + 'px;">' +
-      escapeHtml(String(text)) +
-      "</div>"
-    );
+  function statementCell(text, className) {
+    return '<td' + (className ? ' class="' + className + '"' : "") + '>' + escapeHtml(text == null ? "" : String(text)) + "</td>";
   }
 
-  function renderStatementOverlayCopy(offsetY, items, totals) {
+  function statementHead(text, className, attrs) {
+    return '<th' + (className ? ' class="' + className + '"' : "") + (attrs ? " " + attrs : "") + ">" + escapeHtml(text == null ? "" : String(text)) + "</th>";
+  }
+
+  function renderStatementItemsRows(items, totalRows) {
+    var rows = "";
+    for (var i = 0; i < totalRows; i++) {
+      var item = items[i] || {};
+      rows += "<tr>";
+      rows += statementCell(formatStatementItemDate(item.date || ""), "center");
+      rows += statementCell(item.name || "", "item-name");
+      rows += statementCell(item.code || "", "item-code");
+      rows += statementCell(item.note || "", "item-note");
+      rows += statementCell(formatDisplayNumber(item.qty), "right");
+      rows += statementCell(formatDisplayNumber(item.price), "right");
+      rows += statementCell(formatDisplayNumber(item.supply), "right");
+      rows += statementCell(formatDisplayNumber(item.tax), "right");
+      rows += "</tr>";
+    }
+    return rows;
+  }
+
+  function renderStatementCopy(copyClass, tagLabel, items, totals) {
     var supplier = workState.info && workState.info.supplier ? workState.info.supplier : {};
     var receiver = workState.info && workState.info.receiver ? workState.info.receiver : {};
     var docDate = formatDateLabel(getWorkInfoValue("date")) || "";
-    var html = "";
     var totalRows = 14;
-    var rowStartY = offsetY + 252;
-    var rowHeight = 23;
 
-    html += renderStatementAbsText(docDate, 100, offsetY + 53, 158, "center");
-    html += renderStatementAbsText(formatBusinessNo(supplier.businessNo || ""), 100, offsetY + 96, 254, "center");
-    html += renderStatementAbsText(supplier.company || "", 72, offsetY + 133, 182, "", "small");
-    html += renderStatementAbsText(supplier.ceo || "", 292, offsetY + 133, 58, "center");
-    html += renderStatementAbsText(supplier.address || "", 73, offsetY + 174, 280, "center", "small");
-    html += renderStatementAbsText(supplier.businessType || "", 77, offsetY + 214, 54, "center");
-    html += renderStatementAbsText(supplier.businessItem || "", 174, offsetY + 214, 172, "center");
-
-    html += renderStatementAbsText(formatBusinessNo(receiver.businessNo || ""), 482, offsetY + 96, 248, "center");
-    html += renderStatementAbsText(receiver.company || "", 469, offsetY + 133, 177, "", "small");
-    html += renderStatementAbsText(receiver.ceo || "", 691, offsetY + 133, 60, "center");
-    html += renderStatementAbsText(receiver.address || "", 470, offsetY + 174, 276, "center", "small");
-    html += renderStatementAbsText(receiver.businessType || "", 474, offsetY + 214, 52, "center");
-    html += renderStatementAbsText(receiver.businessItem || "", 596, offsetY + 214, 145, "center");
-
-    for (var i = 0; i < totalRows; i++) {
-      var item = items[i] || {};
-      var top = rowStartY + i * rowHeight;
-      html += renderStatementAbsText(formatStatementItemDate(item.date || ""), 31, top, 63, "center");
-      html += renderStatementAbsText(item.name || "", 105, top + 1, 178, "", "tiny");
-      html += renderStatementAbsText(item.code || "", 291, top + 1, 61, "", "small");
-      html += renderStatementAbsText(item.note || "", 360, top + 1, 66, "", "small");
-      html += renderStatementAbsText(formatDisplayNumber(item.qty), 433, top, 49, "right");
-      html += renderStatementAbsText(formatDisplayNumber(item.price), 503, top, 58, "right");
-      html += renderStatementAbsText(formatDisplayNumber(item.supply), 579, top, 81, "right");
-      html += renderStatementAbsText(formatDisplayNumber(item.tax), 682, top, 69, "right");
-    }
-
-    html += renderStatementAbsText(formatDisplayNumber(totals.supply), 116, offsetY + 543, 118, "right");
-    html += renderStatementAbsText(formatDisplayNumber(totals.tax), 274, offsetY + 543, 56, "right");
-    html += renderStatementAbsText(formatDisplayNumber(totals.grand), 420, offsetY + 543, 86, "right");
-    html += renderStatementAbsText(formatDisplayNumber(Math.max(0, totals.grand)), 514, offsetY + 543, 52, "right");
-    html += renderStatementAbsText("", 675, offsetY + 543, 75, "center");
-
-    return html;
+    return (
+      '<section class="statement-copy ' + copyClass + '">' +
+        '<div class="statement-copy-titlebar">' +
+          '<div class="statement-copy-date">' + escapeHtml(docDate) + '</div>' +
+          '<div class="statement-copy-title">거 래 명 세 표</div>' +
+          '<div class="statement-copy-tag">(' + escapeHtml(tagLabel) + ')</div>' +
+        '</div>' +
+        '<table class="statement-table statement-header-table">' +
+          '<colgroup>' +
+            '<col style="width:4.5%" />' +
+            '<col style="width:7%" />' +
+            '<col style="width:22%" />' +
+            '<col style="width:6%" />' +
+            '<col style="width:10.5%" />' +
+            '<col style="width:4.5%" />' +
+            '<col style="width:7%" />' +
+            '<col style="width:22%" />' +
+            '<col style="width:6%" />' +
+            '<col style="width:10.5%" />' +
+          '</colgroup>' +
+          '<tbody>' +
+            '<tr>' +
+              statementHead("등록번호", "center", 'colspan="2"') +
+              '<td colspan="3" class="center">' + escapeHtml(formatBusinessNo(supplier.businessNo || "")) + '</td>' +
+              statementHead("등록번호", "center", 'colspan="2"') +
+              '<td colspan="3" class="center">' + escapeHtml(formatBusinessNo(receiver.businessNo || "")) + '</td>' +
+            '</tr>' +
+            '<tr>' +
+              statementHead("공급자", "vhead", 'rowspan="3"') +
+              statementHead("상호", "center") +
+              statementCell(supplier.company || "") +
+              statementHead("성명", "center") +
+              statementCell(supplier.ceo || "", "center") +
+              statementHead("공급받는자", "vhead", 'rowspan="3"') +
+              statementHead("상호", "center") +
+              statementCell(receiver.company || "", "") +
+              statementHead("성명", "center") +
+              statementCell(receiver.ceo || "", "center") +
+            '</tr>' +
+            '<tr>' +
+              statementHead("주소", "center") +
+              '<td colspan="3" class="center">' + escapeHtml(supplier.address || "") + '</td>' +
+              statementHead("주소", "center") +
+              '<td colspan="3" class="center">' + escapeHtml(receiver.address || "") + '</td>' +
+            '</tr>' +
+            '<tr>' +
+              statementHead("업태", "center") +
+              statementCell(supplier.businessType || "", "center") +
+              statementHead("종목", "center") +
+              statementCell(supplier.businessItem || "", "center") +
+              statementHead("업태", "center") +
+              statementCell(receiver.businessType || "", "center") +
+              statementHead("종목", "center") +
+              statementCell(receiver.businessItem || "", "center") +
+            '</tr>' +
+          '</tbody>' +
+        '</table>' +
+        '<table class="statement-table statement-items-table">' +
+          '<colgroup>' +
+            '<col style="width:10%" />' +
+            '<col style="width:31%" />' +
+            '<col style="width:10%" />' +
+            '<col style="width:10%" />' +
+            '<col style="width:8%" />' +
+            '<col style="width:10%" />' +
+            '<col style="width:13%" />' +
+            '<col style="width:8%" />' +
+          '</colgroup>' +
+          '<thead><tr>' +
+            statementHead("일자", "center") +
+            statementHead("품명", "center") +
+            statementHead("CODE", "center") +
+            statementHead("비고", "center") +
+            statementHead("수량", "center") +
+            statementHead("단가", "center") +
+            statementHead("금액", "center") +
+            statementHead("세액", "center") +
+          '</tr></thead>' +
+          '<tbody>' + renderStatementItemsRows(items, totalRows) + '</tbody>' +
+        '</table>' +
+        '<table class="statement-table statement-footer-table">' +
+          '<colgroup>' +
+            '<col style="width:12%" />' +
+            '<col style="width:23%" />' +
+            '<col style="width:8%" />' +
+            '<col style="width:12%" />' +
+            '<col style="width:8%" />' +
+            '<col style="width:14%" />' +
+            '<col style="width:10%" />' +
+            '<col style="width:13%" />' +
+          '</colgroup>' +
+          '<tbody><tr>' +
+            statementHead("공급가액", "center") +
+            statementCell(formatDisplayNumber(totals.supply), "right") +
+            statementHead("세액", "center") +
+            statementCell(formatDisplayNumber(totals.tax), "right") +
+            statementHead("합계", "center") +
+            statementCell(formatDisplayNumber(totals.grand), "right") +
+            statementHead("인수자", "center") +
+            statementCell("", "center") +
+          '</tr></tbody>' +
+        '</table>' +
+      '</section>'
+    );
   }
 
   function renderStatementTab() {
@@ -2554,11 +2634,9 @@
           '<button type="button" class="soft-btn" id="btn-print-statement">' + icon("sheet") + '인쇄하기</button>' +
         '</div>' +
         '<div class="statement-page">' +
-          '<div class="statement-template-page">' +
-            '<div class="statement-layer">' +
-              renderStatementOverlayCopy(0, items, totals) +
-              renderStatementOverlayCopy(563, items, totals) +
-            '</div>' +
+          '<div class="statement-stack">' +
+            renderStatementCopy("blue", "공급받는자 보관용", items, totals) +
+            renderStatementCopy("red", "공급자 보관용", items, totals) +
           '</div>' +
         '</div>' +
       '</div>'
