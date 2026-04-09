@@ -79,9 +79,13 @@
   var clientState = {
     rows: [],
   };
+  var priceState = {
+    rows: [],
+  };
   var workGridFields = ["date", "code", "name", "qty", "price", "supply", "tax", "note"];
   var clientGridFields = ["supplierMode", "company", "businessNo", "ceoName", "address", "businessType", "businessItem"];
   var clientDataFields = ["supplierMode", "company", "businessNo", "ceoName", "address", "businessType", "businessItem"];
+  var priceGridFields = ["client", "code", "price", "name"];
   var workSheetColumns = [
     { key: "date", label: "일자", width: 88 },
     { key: "code", label: "코드", width: 104 },
@@ -101,8 +105,15 @@
     { key: "businessType", label: "업태", width: 110 },
     { key: "businessItem", label: "종목", width: 180 },
   ];
+  var priceSheetColumns = [
+    { key: "client", label: "업체", width: 180 },
+    { key: "code", label: "코드", width: 130 },
+    { key: "price", label: "단가", width: 100 },
+    { key: "name", label: "품목명", width: 360 },
+  ];
   var workSheetEngine = null;
   var clientSheetEngine = null;
+  var priceSheetEngine = null;
 
   var app = document.getElementById("app");
 
@@ -134,6 +145,7 @@
     host: null,
     scrollEl: null,
     inputEl: null,
+    autocompleteEl: null,
     cellMap: {},
     rowHeadEls: [],
     colHeadEls: [],
@@ -235,6 +247,15 @@
     } catch (err) {
       return {};
     }
+  }
+
+  function emptyPriceRow() {
+    return {
+      client: "",
+      code: "",
+      price: "",
+      name: "",
+    };
   }
 
   function emptySupplierInfo() {
@@ -482,6 +503,18 @@
         : "";
       return row;
     });
+  }
+
+  function normalizePriceGridRows(rows, minCount) {
+    var normalized = trimTrailingRows(rows, priceGridFields, minCount || 30, emptyPriceRow);
+    var target = Math.max(minCount || 30, normalized.length);
+    for (var i = 0; i < target; i++) {
+      normalized[i] = Object.assign(emptyPriceRow(), normalized[i] || {});
+    }
+    while (normalized.length < target || rowHasAnyValue(normalized[normalized.length - 1], priceGridFields)) {
+      normalized.push(emptyPriceRow());
+    }
+    return normalized;
   }
 
   function refreshWorkSummaryUi() {
@@ -1599,6 +1632,37 @@
     getClientSheetEngine().attach(container);
   }
 
+  function getPriceSheetEngine() {
+    if (priceSheetEngine) return priceSheetEngine;
+    var createSheetEngine = window.createSheetEngine || createMiniSheetEngine;
+    priceSheetEngine = createSheetEngine({
+      idPrefix: "price-grid",
+      title: "매출단가 시트",
+      subtitle: "업체 / 코드 / 단가 / 품목명 입력 후 엑셀처럼 복사·붙여넣기",
+      maxHeight: 560,
+      minRows: 30,
+      columns: priceSheetColumns,
+      emptyRow: function () { return emptyPriceRow(); },
+      getRows: function () { return normalizePriceGridRows(priceState.rows, 30); },
+      setRows: function (rows) { priceState.rows = normalizePriceGridRows(rows, 30); },
+      normalizeRows: function (rows, minCount) { return normalizePriceGridRows(rows, minCount || 30); },
+      formatValue: function (rowIndex, colIndex, raw) {
+        var key = priceSheetColumns[colIndex].key;
+        if (key === "price") return formatDisplayNumber(raw);
+        return raw;
+      },
+      onRowsChange: function () {
+        scheduleLedgerDraftSave();
+      },
+    });
+    return priceSheetEngine;
+  }
+
+  function attachPriceGridWhenNeeded(container) {
+    if (!container) return;
+    getPriceSheetEngine().attach(container);
+  }
+
   function ensureDraftId() {
     if (ledgerState.draftId) return ledgerState.draftId;
 
@@ -1631,11 +1695,13 @@
     var storedRowCount = getStoredRowCount();
     var trimmedWorkItems = trimTrailingRows(workState.items, workGridFields, 12, function () { return {}; });
     var trimmedClientRows = normalizeClientGridRows(clientState.rows, 20);
+    var trimmedPriceRows = normalizePriceGridRows(priceState.rows, 30);
     return {
       statusRows: normalizeSalesRows(ST.rows, storedRowCount).slice(0, storedRowCount),
       workItems: cloneItems(trimmedWorkItems),
       workInfo: cloneWorkInfo(workState.info),
       clientRows: cloneClientRows(trimmedClientRows),
+      priceRows: trimmedPriceRows.map(function (row) { return Object.assign({}, row); }),
       sheetLayout: {
         colWidths: ST.colWidths.slice(),
         rowHeights: ST.rowHeights.slice(0, storedRowCount),
@@ -1665,6 +1731,10 @@
 
     if (Array.isArray(data.clientRows)) {
       clientState.rows = normalizeClientGridRows(data.clientRows, 20);
+    }
+
+    if (Array.isArray(data.priceRows)) {
+      priceState.rows = normalizePriceGridRows(data.priceRows, 30);
     }
 
     if (data.sheetLayout && typeof data.sheetLayout === "object") {
@@ -2021,6 +2091,9 @@
     var nextRows = ST.rows.slice();
     nextRows[row] = Object.assign({}, nextRows[row] || emptyRow());
     setCellValueInRows(nextRows, row, col, normalized, true);
+    if (salesColumns[col].key === "client" || salesColumns[col].key === "code") {
+      applyPriceLookupForSalesRow(nextRows, row);
+    }
     commitRowsMutation(nextRows, [row], true, beforeRows);
     ST.editSnapshotRows = null;
   }
@@ -2698,6 +2771,12 @@
       });
       return current;
     });
+    ST.editMode = false;
+    ST.isComposing = false;
+    updateSelectionUI();
+    moveInputToCell(ST.selectedCell.row, ST.selectedCell.col);
+    syncEditOrigin();
+    focusInput();
   }
 
   function getSelectionText() {
@@ -2744,13 +2823,12 @@
       if (ST.selectedKeys.length > 1 && sourceRows === 1 && sourceCols === 1) {
         ST.selectedKeys.forEach(function (key) {
           var pos = key.split(":");
-          setCellValueInRows(
-            current,
-            Number(pos[0]),
-            Number(pos[1]),
-            grid[0][0],
-            true
-          );
+          var rowIndex = Number(pos[0]);
+          var colIndex = Number(pos[1]);
+          setCellValueInRows(current, rowIndex, colIndex, grid[0][0], true);
+          if (salesColumns[colIndex].key === "client" || salesColumns[colIndex].key === "code") {
+            applyPriceLookupForSalesRow(current, rowIndex);
+          }
         });
         return current;
       }
@@ -2763,6 +2841,9 @@
             var rowValues = grid[rowOffset % sourceRows] || [""];
             var nextValue = rowValues[colOffset % rowValues.length] || "";
             setCellValueInRows(current, r, c, nextValue, true);
+            if (salesColumns[c].key === "client" || salesColumns[c].key === "code") {
+              applyPriceLookupForSalesRow(current, r);
+            }
           }
         }
         return current;
@@ -2774,6 +2855,9 @@
           var col = startCol + colOffset;
           if (row < current.length && col < salesColumns.length) {
             setCellValueInRows(current, row, col, value, true);
+            if (salesColumns[col].key === "client" || salesColumns[col].key === "code") {
+              applyPriceLookupForSalesRow(current, row);
+            }
           }
         });
       });
@@ -3090,6 +3174,7 @@
       }
     }
     var len = ST.inputEl.value.length;
+    updateSalesAutocomplete();
     requestAnimationFrame(function () {
       if (!ST.inputEl) return;
       if (ST.editMode) ST.inputEl.setSelectionRange(len, len);
@@ -3160,6 +3245,7 @@
       '<span class="st-status-pill">평균 <strong data-st-status="avg">-</strong></span>' +
       '</div>' +
       '</div>' +
+      '<datalist id="sales-grid-datalist"></datalist>' +
       '</div>';
 
     host.innerHTML = html;
@@ -3176,6 +3262,7 @@
     ST.inputEl = document.createElement("input");
     ST.inputEl.type = "text";
     ST.inputEl.setAttribute("spellcheck", "false");
+    ST.inputEl.setAttribute("autocomplete", "off");
     ST.inputEl.className = "st-input no-edit";
     ST.inputEl.style.height = getRowHeight(0) - 4 + "px";
     ST.inputEl.style.lineHeight = getRowHeight(0) - 4 + "px";
@@ -3184,6 +3271,7 @@
     );
     if (firstInner) firstInner.appendChild(ST.inputEl);
     ST.inputEl.value = getRawValue(ST.selectedCell.row, ST.selectedCell.col);
+    ST.autocompleteEl = host.querySelector("#sales-grid-datalist");
     syncInputOverlay();
 
     ST.scrollEl.addEventListener("keydown", onTableKeyDown);
@@ -3259,7 +3347,9 @@
     ST.inputEl.addEventListener("compositionend", function (e) {
       ST.isComposing = false;
       setValue(ST.selectedCell.row, ST.selectedCell.col, e.target.value);
+      applyPriceLookupForActiveSalesCell();
       syncInputOverlay();
+      updateSalesAutocomplete();
     });
     ST.inputEl.addEventListener("input", function (e) {
       if (!ST.editMode) {
@@ -3267,7 +3357,9 @@
         ST.editMode = true;
       }
       setValue(ST.selectedCell.row, ST.selectedCell.col, e.target.value);
+      applyPriceLookupForActiveSalesCell();
       syncInputOverlay();
+      updateSalesAutocomplete();
     });
     ST.inputEl.addEventListener("focus", function (e) {
       var len = e.target.value.length;
@@ -3295,6 +3387,7 @@
     syncEditOrigin();
     applyGridSizingUI();
     updateStatusBar();
+    updateSalesAutocomplete();
     focusInput();
   }
 
@@ -3881,6 +3974,132 @@
     workState.info.supplierMode = normalizeSupplierMode(clientRow.supplierMode);
   }
 
+  function normalizeLookupText(value) {
+    return String(value || "")
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, "")
+      .replace(/[-_/]/g, "");
+  }
+
+  function getPriceRowsWithValues() {
+    return normalizePriceGridRows(priceState.rows, 30).filter(function (row) {
+      return rowHasAnyValue(row, priceGridFields);
+    });
+  }
+
+  function getDistinctPriceClients() {
+    var seen = {};
+    var items = [];
+    getPriceRowsWithValues().forEach(function (row) {
+      var company = String(row.client || "").trim();
+      if (!company || seen[company]) return;
+      seen[company] = true;
+      items.push(company);
+    });
+    return items.sort();
+  }
+
+  function findPriceMatches(clientInput, codeInput) {
+    var clientToken = normalizeLookupText(clientInput);
+    var codeToken = normalizeLookupText(codeInput);
+    return getPriceRowsWithValues().filter(function (row) {
+      var rowClient = normalizeLookupText(row.client);
+      var rowCode = normalizeLookupText(row.code);
+      var clientMatched = !clientToken || rowClient === clientToken || rowClient.indexOf(clientToken) >= 0;
+      var codeMatched = !codeToken || rowCode === codeToken || rowCode.indexOf(codeToken) >= 0;
+      return clientMatched && codeMatched;
+    });
+  }
+
+  function findResolvedPriceRow(clientInput, codeInput) {
+    var matches = findPriceMatches(clientInput, codeInput);
+    if (!matches.length) return null;
+    var clientToken = normalizeLookupText(clientInput);
+    var codeToken = normalizeLookupText(codeInput);
+    var exact = matches.filter(function (row) {
+      var rowClient = normalizeLookupText(row.client);
+      var rowCode = normalizeLookupText(row.code);
+      var clientExact = !clientToken || rowClient === clientToken;
+      var codeExact = !codeToken || rowCode === codeToken;
+      return clientExact && codeExact;
+    });
+    if (exact.length === 1) return exact[0];
+    if (matches.length === 1) return matches[0];
+    return null;
+  }
+
+  function applyPriceLookupForSalesRow(rows, rowIndex) {
+    var row = rows[rowIndex] || emptyRow();
+    var client = row.client || "";
+    var code = row.code || "";
+    if (!code) return;
+    var matched = findResolvedPriceRow(client, code);
+    if (!matched) return;
+    rows[rowIndex] = Object.assign({}, row, {
+      client: matched.client || row.client || "",
+      code: matched.code || row.code || "",
+      name: matched.name || row.name || "",
+      price: matched.price || row.price || "",
+    });
+    recalculateAmountForRow(rows, rowIndex);
+  }
+
+  function applyPriceLookupForActiveSalesCell() {
+    var activeColumn = salesColumns[ST.selectedCell.col];
+    var activeKey = activeColumn ? activeColumn.key : "";
+    if (activeKey !== "client" && activeKey !== "code") return;
+    applyRowsChange(function (current) {
+      applyPriceLookupForSalesRow(current, ST.selectedCell.row);
+      return current;
+    }, false);
+  }
+
+  function updateSalesAutocomplete() {
+    if (!ST.inputEl || !ST.autocompleteEl) return;
+    var row = ST.rows[ST.selectedCell.row] || emptyRow();
+    var key = salesColumns[ST.selectedCell.col].key;
+    var raw = ST.inputEl.value || "";
+    var suggestions = [];
+    if (key === "client") {
+      suggestions = getClientSuggestionOptions(raw);
+    } else if (key === "code") {
+      suggestions = getCodeSuggestionOptions(row.client, raw);
+    }
+    if (!suggestions.length) {
+      ST.autocompleteEl.innerHTML = "";
+      ST.inputEl.removeAttribute("list");
+      return;
+    }
+    ST.autocompleteEl.innerHTML = suggestions.map(function (item) {
+      var labelAttr = item.label && item.label !== item.value ? ' label="' + escapeAttr(item.label) + '"' : "";
+      return '<option value="' + escapeAttr(item.value) + '"' + labelAttr + '></option>';
+    }).join("");
+    ST.inputEl.setAttribute("list", "sales-grid-datalist");
+  }
+
+  function getClientSuggestionOptions(keyword) {
+    var token = normalizeLookupText(keyword);
+    return getDistinctPriceClients()
+      .filter(function (company) {
+        return !token || normalizeLookupText(company).indexOf(token) >= 0;
+      })
+      .slice(0, 30)
+      .map(function (company) {
+        return { value: company, label: company };
+      });
+  }
+
+  function getCodeSuggestionOptions(clientInput, codeInput) {
+    var rows = findPriceMatches(clientInput, codeInput).slice(0, 40);
+    return rows.map(function (row) {
+      return {
+        value: row.code || "",
+        label: [row.name || "", row.price ? formatDisplayNumber(row.price) : ""].filter(Boolean).join(" / "),
+      };
+    });
+  }
+
   function formatBusinessNo(value) {
     var digits = String(value || "").replace(/\D/g, "");
     if (digits.length !== 10) return value == null ? "" : String(value);
@@ -4200,6 +4419,21 @@
     );
   }
 
+  function renderPriceTab() {
+    priceState.rows = normalizePriceGridRows(priceState.rows, 30);
+    return (
+      '<div class="clientdoc">' +
+        '<div class="clientdoc-card">' +
+          '<div class="clientdoc-head">' +
+            '<div class="clientdoc-title">' + icon("tags") + ' 매출단가 리스트</div>' +
+            '<div class="sub">업체 / 코드 / 단가 / 품목명 순서로 엑셀 복사·붙여넣기</div>' +
+          '</div>' +
+          '<div id="price-grid-host"></div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
   function sendSelectedStatusRowsToWork() {
     // 1) 매출현황(ST)에서 선택된 셀들 -> row index 추출
     var keys = ST.selectedKeys || [];
@@ -4427,6 +4661,8 @@
         body = renderWorkTab();
       } else if (state.subTab === "statement") {
         body = renderStatementTab();
+      } else if (state.subTab === "price") {
+        body = renderPriceTab();
       } else if (state.subTab === "client") {
         body = renderClientTab();
       } else {
@@ -4570,6 +4806,12 @@
             window.print();
           });
         }
+      } else if (state.subTab === "price") {
+        var wasPriceLoaded = ledgerState.loadedFromFirebase;
+        ensureLedgerLoadedFromFirebase().then(function () {
+          if (!wasPriceLoaded && state.subTab === "price") render();
+        });
+        attachPriceGridWhenNeeded(document.getElementById("price-grid-host"));
       } else if (state.subTab === "client") {
         var wasClientLoaded = ledgerState.loadedFromFirebase;
         ensureLedgerLoadedFromFirebase().then(function () {

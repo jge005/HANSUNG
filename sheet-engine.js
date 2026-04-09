@@ -77,6 +77,8 @@
       prevSelectedKeys: [],
       prevActiveKey: null,
       dragging: false,
+      dragMoved: false,
+      suppressNextClick: false,
       dragStart: null,
       dragMode: "replace",
       dragBaseKeys: [],
@@ -1125,6 +1127,7 @@
         return;
       }
       engine.dragging = true;
+      engine.dragMoved = false;
       engine.dragStart = { row: row, col: col };
       engine.selectedCell = { row: row, col: col };
       engine.editMode = false;
@@ -1152,6 +1155,10 @@
       var td = e.target.closest("td[data-r]");
       if (!td) return;
       if (e.target.closest("[data-inline-select]")) return;
+      if (engine.suppressNextClick) {
+        engine.suppressNextClick = false;
+        return;
+      }
       var row = Number(td.getAttribute("data-r"));
       var col = Number(td.getAttribute("data-c"));
       var key = cellKey(row, col);
@@ -1235,6 +1242,7 @@
         if (!td || !engine.host.contains(td)) return;
         var current = { row: Number(td.getAttribute("data-r")), col: Number(td.getAttribute("data-c")) };
         engine.selectedCell = current;
+        engine.dragMoved = true;
         var rectKeys = keysFromPoints(engine.dragStart, current);
         if (engine.dragMode === "replace") engine.selectedKeys = rectKeys;
         else if (engine.dragMode === "add") engine.selectedKeys = Array.from(new Set(engine.dragBaseKeys.concat(rectKeys)));
@@ -1244,9 +1252,14 @@
       });
       window.addEventListener("mouseup", function () {
         var hadDrag = engine.dragging;
+        var hadDragMoved = engine.dragMoved;
         var hadResize = !!engine.resizing;
         engine.dragging = false;
+        engine.dragMoved = false;
         engine.resizing = null;
+        if (hadDragMoved) {
+          engine.suppressNextClick = true;
+        }
         if (hadDrag || hadResize) {
           focusInput();
         }
