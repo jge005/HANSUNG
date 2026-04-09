@@ -2481,110 +2481,62 @@
     return text;
   }
 
-  function renderStatementCopy(copyClass, tagLabel, items, totals) {
+  function renderStatementAbsText(text, left, top, width, align, className) {
+    if (text == null) text = "";
+    return (
+      '<div class="statement-abs' +
+      (align ? " " + align : "") +
+      (className ? " " + className : "") +
+      '" style="left:' + left + 'px;top:' + top + 'px;width:' + width + 'px;">' +
+      escapeHtml(String(text)) +
+      "</div>"
+    );
+  }
+
+  function renderStatementOverlayCopy(offsetY, items, totals) {
     var supplier = workState.info && workState.info.supplier ? workState.info.supplier : {};
     var receiver = workState.info && workState.info.receiver ? workState.info.receiver : {};
-    var docDate = formatDateLabel(getWorkInfoValue("date"));
-    var rows = "";
-    var totalRows = Math.max(items.length, 10);
+    var docDate = formatDateLabel(getWorkInfoValue("date")) || "";
+    var html = "";
+    var totalRows = 14;
+    var rowStartY = offsetY + 252;
+    var rowHeight = 23;
+
+    html += renderStatementAbsText(docDate, 100, offsetY + 53, 158, "center");
+    html += renderStatementAbsText(formatBusinessNo(supplier.businessNo || ""), 100, offsetY + 96, 254, "center");
+    html += renderStatementAbsText(supplier.company || "", 72, offsetY + 133, 182, "", "small");
+    html += renderStatementAbsText(supplier.ceo || "", 292, offsetY + 133, 58, "center");
+    html += renderStatementAbsText(supplier.address || "", 73, offsetY + 174, 280, "center", "small");
+    html += renderStatementAbsText(supplier.businessType || "", 77, offsetY + 214, 54, "center");
+    html += renderStatementAbsText(supplier.businessItem || "", 174, offsetY + 214, 172, "center");
+
+    html += renderStatementAbsText(formatBusinessNo(receiver.businessNo || ""), 482, offsetY + 96, 248, "center");
+    html += renderStatementAbsText(receiver.company || "", 469, offsetY + 133, 177, "", "small");
+    html += renderStatementAbsText(receiver.ceo || "", 691, offsetY + 133, 60, "center");
+    html += renderStatementAbsText(receiver.address || "", 470, offsetY + 174, 276, "center", "small");
+    html += renderStatementAbsText(receiver.businessType || "", 474, offsetY + 214, 52, "center");
+    html += renderStatementAbsText(receiver.businessItem || "", 596, offsetY + 214, 145, "center");
 
     for (var i = 0; i < totalRows; i++) {
       var item = items[i] || {};
-      rows += "<tr>";
-      rows += '<td class="center">' + escapeHtml(formatStatementItemDate(item.date != null ? item.date : "")) + "</td>";
-      rows += '<td>' + escapeHtml(item.name != null ? item.name : "") + "</td>";
-      rows += '<td>' + escapeHtml(item.code != null ? item.code : "") + "</td>";
-      rows += '<td>' + escapeHtml(item.note != null ? item.note : "") + "</td>";
-      rows += '<td class="num">' + escapeHtml(formatDisplayNumber(item.qty)) + "</td>";
-      rows += '<td class="num">' + escapeHtml(formatDisplayNumber(item.price)) + "</td>";
-      rows += '<td class="num">' + escapeHtml(formatDisplayNumber(item.supply)) + "</td>";
-      rows += '<td class="num">' + escapeHtml(formatDisplayNumber(item.tax)) + "</td>";
-      rows += "</tr>";
+      var top = rowStartY + i * rowHeight;
+      html += renderStatementAbsText(formatStatementItemDate(item.date || ""), 31, top, 63, "center");
+      html += renderStatementAbsText(item.name || "", 105, top + 1, 178, "", "tiny");
+      html += renderStatementAbsText(item.code || "", 291, top + 1, 61, "", "small");
+      html += renderStatementAbsText(item.note || "", 360, top + 1, 66, "", "small");
+      html += renderStatementAbsText(formatDisplayNumber(item.qty), 433, top, 49, "right");
+      html += renderStatementAbsText(formatDisplayNumber(item.price), 503, top, 58, "right");
+      html += renderStatementAbsText(formatDisplayNumber(item.supply), 579, top, 81, "right");
+      html += renderStatementAbsText(formatDisplayNumber(item.tax), 682, top, 69, "right");
     }
 
-    return (
-      '<section class="statement-copy ' + copyClass + '">' +
-        '<div class="statement-head">' +
-          '<div class="statement-copy-tag">' + tagLabel + "</div>" +
-          '<div class="statement-title">거래명세표</div>' +
-          '<div class="statement-meta">' + escapeHtml(docDate || "-") + "</div>" +
-        "</div>" +
-        '<div class="statement-form-wrap">' +
-          '<table class="statement-form-table">' +
-            '<colgroup>' +
-              '<col style="width:24px" />' +
-              '<col style="width:40px" />' +
-              '<col style="width:146px" />' +
-              '<col style="width:40px" />' +
-              '<col style="width:92px" />' +
-              '<col style="width:24px" />' +
-              '<col style="width:40px" />' +
-              '<col style="width:146px" />' +
-              '<col style="width:40px" />' +
-              '<col style="width:92px" />' +
-            '</colgroup>' +
-            '<tbody>' +
-              '<tr>' +
-                '<th>일자</th><td colspan="4" class="center">' + escapeHtml(docDate || "") + '</td>' +
-                '<th>등록번호</th><td colspan="4" class="center">' + escapeHtml(formatBusinessNo(receiver.businessNo || "")) + '</td>' +
-              '</tr>' +
-              '<tr>' +
-                '<th rowspan="4" class="statement-vlabel">공급자</th>' +
-                '<th>상호</th><td>' + escapeHtml(supplier.company || "") + '</td>' +
-                '<th>성명</th><td class="center">' + escapeHtml(supplier.ceo || "") + '</td>' +
-                '<th rowspan="4" class="statement-vlabel">공급받는자</th>' +
-                '<th>상호</th><td>' + escapeHtml(receiver.company || "") + '</td>' +
-                '<th>성명</th><td class="center">' + escapeHtml(receiver.ceo || "") + '</td>' +
-              '</tr>' +
-              '<tr>' +
-                '<th>번호</th><td colspan="3">' + escapeHtml(formatBusinessNo(supplier.businessNo || "")) + '</td>' +
-                '<th>번호</th><td colspan="3">' + escapeHtml(formatBusinessNo(receiver.businessNo || "")) + '</td>' +
-              '</tr>' +
-              '<tr>' +
-                '<th>주소</th><td colspan="3">' + escapeHtml(supplier.address || "") + '</td>' +
-                '<th>주소</th><td colspan="3">' + escapeHtml(receiver.address || "") + '</td>' +
-              '</tr>' +
-              '<tr>' +
-                '<th>업태</th><td>' + escapeHtml(supplier.businessType || "") + '</td>' +
-                '<th>종목</th><td>' + escapeHtml(supplier.businessItem || "") + '</td>' +
-                '<th>업태</th><td>' + escapeHtml(receiver.businessType || "") + '</td>' +
-                '<th>종목</th><td>' + escapeHtml(receiver.businessItem || "") + '</td>' +
-              '</tr>' +
-            '</tbody>' +
-          '</table>' +
-        '</div>' +
-        '<div class="statement-items">' +
-          '<table class="statement-items-table">' +
-            '<thead><tr>' +
-              '<th style="width:72px">일자</th>' +
-              '<th>품명</th>' +
-              '<th style="width:74px">CODE</th>' +
-              '<th style="width:82px">비고</th>' +
-              '<th style="width:62px">수량</th>' +
-              '<th style="width:70px">단가</th>' +
-              '<th style="width:88px">금액</th>' +
-              '<th style="width:76px">세액</th>' +
-            '</tr></thead>' +
-            '<tbody>' + rows + '</tbody>' +
-          '</table>' +
-        '</div>' +
-        '<div class="statement-footer">' +
-          '<table class="statement-footer-table">' +
-            '<tbody><tr>' +
-              '<th style="width:78px">공급가액</th>' +
-              '<td class="num" style="width:120px">' + escapeHtml(formatDisplayNumber(totals.supply)) + '</td>' +
-              '<th style="width:54px">세액</th>' +
-              '<td class="num" style="width:90px">' + escapeHtml(formatDisplayNumber(totals.tax)) + '</td>' +
-              '<th style="width:54px">합계</th>' +
-              '<td class="num" style="width:110px">' + escapeHtml(formatDisplayNumber(totals.grand)) + '</td>' +
-              '<th style="width:58px">인수자</th>' +
-              '<td></td>' +
-            '</tr></tbody>' +
-          '</table>' +
-        '</div>' +
-        '<div class="statement-note">품목수 ' + escapeHtml(String(items.length)) + " / 수량합계 " + escapeHtml(formatDisplayNumber(totals.qty)) + '</div>' +
-      '</section>'
-    );
+    html += renderStatementAbsText(formatDisplayNumber(totals.supply), 116, offsetY + 543, 118, "right");
+    html += renderStatementAbsText(formatDisplayNumber(totals.tax), 274, offsetY + 543, 56, "right");
+    html += renderStatementAbsText(formatDisplayNumber(totals.grand), 420, offsetY + 543, 86, "right");
+    html += renderStatementAbsText(formatDisplayNumber(Math.max(0, totals.grand)), 514, offsetY + 543, 52, "right");
+    html += renderStatementAbsText("", 675, offsetY + 543, 75, "center");
+
+    return html;
   }
 
   function renderStatementTab() {
@@ -2602,9 +2554,11 @@
           '<button type="button" class="soft-btn" id="btn-print-statement">' + icon("sheet") + '인쇄하기</button>' +
         '</div>' +
         '<div class="statement-page">' +
-          '<div class="statement-stack">' +
-            renderStatementCopy("blue", "공급받는자 보관용", items, totals) +
-            renderStatementCopy("red", "공급자 보관용", items, totals) +
+          '<div class="statement-template-page">' +
+            '<div class="statement-layer">' +
+              renderStatementOverlayCopy(0, items, totals) +
+              renderStatementOverlayCopy(563, items, totals) +
+            '</div>' +
           '</div>' +
         '</div>' +
       '</div>'
