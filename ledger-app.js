@@ -4403,45 +4403,43 @@
       var body;
       if (state.subTab === "status") {
         body =
-          '<div class="page-pane">' +
-            '<div class="toolbar-card">' +
-            '<label>필터:</label>' +
-            '<select id="status-filter-col"><option value="all">전체</option>' +
-            salesColumns.map(function (col) { return '<option value="' + col.key + '">' + col.label + '</option>'; }).join("") +
-            '</select>' +
-            '<input type="text" class="field" id="status-filter-keyword" style="width:180px;height:36px" placeholder="검색어" />' +
-            '<button type="button" class="soft-btn" id="btn-filter-apply">적용</button>' +
-            '<button type="button" class="soft-btn" id="btn-filter-clear">해제</button>' +
-            '<label style="margin-left:12px">정렬:</label>' +
-            '<select id="status-sort-col">' +
-            salesColumns.map(function (col) { return '<option value="' + col.key + '">' + col.label + '</option>'; }).join("") +
-            '</select>' +
-            '<button type="button" class="soft-btn" id="btn-sort-asc">오름차순</button>' +
-            '<button type="button" class="soft-btn" id="btn-sort-desc">내림차순</button>' +
-            '<button type="button" class="soft-btn" id="btn-sort-reset">입력순</button>' +
-            '</div>' +
-            '<div class="pane-actions">' +
-            '<button type="button" class="soft-btn" id="btn-send-to-work">' +
-            icon("arrowRight") +
-            "거래작업으로 보내기" +
-            "</button>" +
-            "</div>" +
-            '<div id="sales-table-host"></div>' +
-          '</div>';
+          '<div class="toolbar-card" style="margin-bottom:12px">' +
+          '<label>필터:</label>' +
+          '<select id="status-filter-col"><option value="all">전체</option>' +
+          salesColumns.map(function (col) { return '<option value="' + col.key + '">' + col.label + '</option>'; }).join("") +
+          '</select>' +
+          '<input type="text" class="field" id="status-filter-keyword" style="width:180px;height:36px" placeholder="검색어" />' +
+          '<button type="button" class="soft-btn" id="btn-filter-apply">적용</button>' +
+          '<button type="button" class="soft-btn" id="btn-filter-clear">해제</button>' +
+          '<label style="margin-left:12px">정렬:</label>' +
+          '<select id="status-sort-col">' +
+          salesColumns.map(function (col) { return '<option value="' + col.key + '">' + col.label + '</option>'; }).join("") +
+          '</select>' +
+          '<button type="button" class="soft-btn" id="btn-sort-asc">오름차순</button>' +
+          '<button type="button" class="soft-btn" id="btn-sort-desc">내림차순</button>' +
+          '<button type="button" class="soft-btn" id="btn-sort-reset">입력순</button>' +
+          '</div>' +
+          '<div style="display:flex;justify-content:flex-end;gap:12px;margin-bottom:12px;">' +
+          '<button type="button" class="soft-btn" id="btn-send-to-work">' +
+          icon("arrowRight") +
+          "거래작업으로 보내기" +
+          "</button>" +
+          "</div>" +
+          '<div id="sales-table-host"></div>';
       } else if (state.subTab === "work") {
-        body = '<div class="page-pane">' + renderWorkTab() + '</div>';
+        body = renderWorkTab();
       } else if (state.subTab === "statement") {
-        body = '<div class="page-pane">' + renderStatementTab() + '</div>';
+        body = renderStatementTab();
       } else if (state.subTab === "client") {
-        body = '<div class="page-pane">' + renderClientTab() + '</div>';
+        body = renderClientTab();
       } else {
         var lab = salesTabs.find(function (x) {
           return x.key === state.subTab;
         });
         body =
-          '<div class="page-pane"><div class="empty-page">' +
+          '<div class="empty-page">' +
           (lab ? lab.label : state.subTab) +
-          " 페이지 (비워둠)</div></div>";
+          " 페이지 (비워둠)</div>";
       }
 
       app.innerHTML = top + '<div class="content">' + tabs + body + "</div>";
