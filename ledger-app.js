@@ -2493,9 +2493,13 @@
     var rows = "";
     for (var i = 0; i < totalRows; i++) {
       var item = items[i] || {};
+      var nameText = item.name || "";
+      var nameClass = "item-name";
+      if (String(nameText).length > 38) nameClass += " tighter";
+      else if (String(nameText).length > 24) nameClass += " tight";
       rows += "<tr>";
       rows += statementCell(formatStatementItemDate(item.date || ""), "center");
-      rows += statementCell(item.name || "", "item-name");
+      rows += statementCell(nameText, nameClass);
       rows += statementCell(item.code || "", "item-code");
       rows += statementCell(item.note || "", "item-note");
       rows += statementCell(formatDisplayNumber(item.qty), "right");
