@@ -457,6 +457,11 @@
       gap: 12px;
       margin-bottom: 8px;
     }
+    .workdoc-head-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
     .workdoc-title {
       display: inline-flex;
       align-items: center;
@@ -492,6 +497,10 @@
     .workdoc-input:focus {
       border-color: #c3a7ff;
       box-shadow: 0 0 0 2px #f1e8ff;
+    }
+    .workdoc-select {
+      min-width: 92px;
+      cursor: pointer;
     }
     .workdoc-meta {
       display: grid;
@@ -575,6 +584,78 @@
     .items-col-supply { width: 100px; }
     .items-col-tax { width: 80px; }
     .items-col-note { width: 160px; }
+
+    /* 업체리스트 */
+    .clientdoc {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .clientdoc-card {
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: 0 1px 6px rgba(0, 0, 0, 0.06);
+      padding: 12px;
+    }
+    .clientdoc-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .clientdoc-title {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      color: var(--text-dark);
+    }
+    .clientdoc-wrap {
+      border-radius: 12px;
+      border: 1px solid #e9def5;
+      overflow: auto;
+      background: #fff;
+      max-height: calc(100vh - 230px);
+    }
+    table.clientlist {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 12px;
+    }
+    table.clientlist thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: linear-gradient(90deg, #fff8ea 0%, #f8f1ff 52%, #eef6ff 100%);
+      border: 1px solid var(--border);
+      padding: 6px 8px;
+      text-align: left;
+      color: #6d6387;
+      font-weight: 700;
+    }
+    table.clientlist tbody td {
+      border: 1px solid #efe5f8;
+      padding: 2px 6px;
+      height: 28px;
+    }
+    .client-input {
+      width: 100%;
+      height: 24px;
+      border: none;
+      outline: none;
+      background: transparent;
+      font: inherit;
+      font-size: 12px;
+      color: #514867;
+    }
+    .client-col-name { width: 180px; }
+    .client-col-biz { width: 150px; }
+    .client-col-ceo { width: 110px; }
+    .client-col-address { width: 360px; }
+    .client-col-type { width: 120px; }
+    .client-col-item { width: 140px; }
 
     /* 거래명세서 */
     .statement-toolbar {

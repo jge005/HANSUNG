@@ -76,6 +76,9 @@
     loadingPromise: null,
     saveTimer: null,
   };
+  var clientState = {
+    rows: [],
+  };
 
   var app = document.getElementById("app");
 
@@ -210,6 +213,92 @@
     }
   }
 
+  function emptySupplierInfo() {
+    return {
+      company: "",
+      ceo: "",
+      businessNo: "",
+      address: "",
+      businessType: "",
+      businessItem: "",
+    };
+  }
+
+  function ensureWorkInfoShape() {
+    if (!workState.info || typeof workState.info !== "object") {
+      workState.info = {};
+    }
+
+    var info = workState.info;
+    if (!info.supplierProfiles || typeof info.supplierProfiles !== "object") {
+      info.supplierProfiles = {
+        corporate: emptySupplierInfo(),
+        personal: emptySupplierInfo(),
+      };
+    }
+
+    info.supplierProfiles.corporate = Object.assign(
+      emptySupplierInfo(),
+      info.supplierProfiles.corporate || {}
+    );
+    info.supplierProfiles.personal = Object.assign(
+      emptySupplierInfo(),
+      info.supplierProfiles.personal || {}
+    );
+
+    if (info.supplier && typeof info.supplier === "object") {
+      var hasCorporateData = Object.keys(info.supplierProfiles.corporate).some(function (key) {
+        return info.supplierProfiles.corporate[key] != null &&
+          String(info.supplierProfiles.corporate[key]).trim() !== "";
+      });
+      if (!hasCorporateData) {
+        info.supplierProfiles.corporate = Object.assign(emptySupplierInfo(), info.supplier);
+      }
+    }
+
+    if (info.supplierMode !== "personal" && info.supplierMode !== "corporate") {
+      info.supplierMode = "corporate";
+    }
+
+    return info;
+  }
+
+  function getCurrentSupplierMode() {
+    return ensureWorkInfoShape().supplierMode;
+  }
+
+  function getCurrentSupplierInfo() {
+    var info = ensureWorkInfoShape();
+    return info.supplierProfiles[getCurrentSupplierMode()];
+  }
+
+  function emptyClientRow() {
+    return {
+      company: "",
+      businessNo: "",
+      ceoName: "",
+      address: "",
+      businessType: "",
+      businessItem: "",
+    };
+  }
+
+  function cloneClientRows(rows) {
+    if (!Array.isArray(rows)) return [];
+    return rows.map(function (row) {
+      return Object.assign(emptyClientRow(), row || {});
+    });
+  }
+
+  function ensureClientRows(rows, minCount) {
+    var normalized = cloneClientRows(rows);
+    var count = Math.max(minCount || 20, normalized.length);
+    for (var i = 0; i < count; i++) {
+      normalized[i] = Object.assign(emptyClientRow(), normalized[i] || {});
+    }
+    return normalized;
+  }
+
   function ensureDraftId() {
     if (ledgerState.draftId) return ledgerState.draftId;
 
@@ -244,6 +333,7 @@
       statusRows: normalizeSalesRows(ST.rows, storedRowCount).slice(0, storedRowCount),
       workItems: cloneItems(workState.items),
       workInfo: cloneWorkInfo(workState.info),
+      clientRows: cloneClientRows(clientState.rows),
       sheetLayout: {
         colWidths: ST.colWidths.slice(),
         rowHeights: ST.rowHeights.slice(0, storedRowCount),
@@ -269,6 +359,10 @@
 
     if (data.workInfo && typeof data.workInfo === "object") {
       workState.info = cloneWorkInfo(data.workInfo);
+    }
+
+    if (Array.isArray(data.clientRows)) {
+      clientState.rows = ensureClientRows(data.clientRows, 20);
     }
 
     if (data.sheetLayout && typeof data.sheetLayout === "object") {
@@ -2419,8 +2513,17 @@
   }
 
   function getWorkInfoValue(path) {
-    var cur = workState.info || {};
-    String(path).split(".").forEach(function (part) {
+    var parts = String(path).split(".");
+    if (parts[0] === "supplier") {
+      var supplierCur = getCurrentSupplierInfo();
+      parts.slice(1).forEach(function (part) {
+        supplierCur = supplierCur && supplierCur[part] != null ? supplierCur[part] : "";
+      });
+      return supplierCur == null ? "" : String(supplierCur);
+    }
+
+    var cur = ensureWorkInfoShape();
+    parts.forEach(function (part) {
       cur = cur && cur[part] != null ? cur[part] : "";
     });
     return cur == null ? "" : String(cur);
@@ -2428,8 +2531,19 @@
 
   function setWorkInfoValue(path, value) {
     var parts = String(path).split(".");
-    var cur = workState.info || {};
-    workState.info = cur;
+    if (parts[0] === "supplier") {
+      var supplier = getCurrentSupplierInfo();
+      for (var s = 1; s < parts.length - 1; s++) {
+        if (!supplier[parts[s]] || typeof supplier[parts[s]] !== "object") {
+          supplier[parts[s]] = {};
+        }
+        supplier = supplier[parts[s]];
+      }
+      supplier[parts[parts.length - 1]] = value;
+      return;
+    }
+
+    var cur = ensureWorkInfoShape();
     for (var i = 0; i < parts.length - 1; i++) {
       if (!cur[parts[i]] || typeof cur[parts[i]] !== "object") {
         cur[parts[i]] = {};
@@ -2521,7 +2635,7 @@
   }
 
   function renderStatementCopy(copyClass, tagLabel, items, totals) {
-    var supplier = workState.info && workState.info.supplier ? workState.info.supplier : {};
+    var supplier = getCurrentSupplierInfo();
     var receiver = workState.info && workState.info.receiver ? workState.info.receiver : {};
     var docDate = formatDateLabel(getWorkInfoValue("date")) || "";
     var totalRows = 14;
@@ -2657,6 +2771,7 @@
   }
 
   function renderWorkTab() {
+    ensureWorkInfoShape();
     var items = workState.items || [];
     var totalRows = Math.max(items.length, 12);
     var itemsRows = "";
@@ -2736,7 +2851,13 @@
           '<div class="workdoc-card">' +
             '<div class="workdoc-head">' +
               '<div class="workdoc-title">' + icon("building") + ' 공급자</div>' +
-              '<div class="sub">기본 정보</div>' +
+              '<div class="workdoc-head-actions">' +
+                '<div class="sub">구분</div>' +
+                '<select class="workdoc-input workdoc-select" id="supplier-mode">' +
+                  '<option value="corporate"' + (getCurrentSupplierMode() === "corporate" ? " selected" : "") + '>법인</option>' +
+                  '<option value="personal"' + (getCurrentSupplierMode() === "personal" ? " selected" : "") + '>개인</option>' +
+                '</select>' +
+              '</div>' +
             "</div>" +
             '<div class="workdoc-form">' +
               '<div class="workdoc-label">상호</div><input class="workdoc-input" data-work-info="supplier.company" value="' + escapeAttr(getWorkInfoValue("supplier.company")) + '" />' +
@@ -2818,6 +2939,48 @@
           "</div>" +
         "</div>" +
       "</div>"
+    );
+  }
+
+  function renderClientTab() {
+    var rows = ensureClientRows(clientState.rows, 20);
+    clientState.rows = rows;
+    var bodyRows = "";
+
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i] || emptyClientRow();
+      bodyRows += "<tr>";
+      bodyRows += '<td><input class="client-input" type="text" data-client-row="' + i + '" data-client-field="company" value="' + escapeAttr(row.company) + '" /></td>';
+      bodyRows += '<td><input class="client-input" type="text" data-client-row="' + i + '" data-client-field="businessNo" value="' + escapeAttr(row.businessNo) + '" /></td>';
+      bodyRows += '<td><input class="client-input" type="text" data-client-row="' + i + '" data-client-field="ceoName" value="' + escapeAttr(row.ceoName) + '" /></td>';
+      bodyRows += '<td><input class="client-input" type="text" data-client-row="' + i + '" data-client-field="address" value="' + escapeAttr(row.address) + '" /></td>';
+      bodyRows += '<td><input class="client-input" type="text" data-client-row="' + i + '" data-client-field="businessType" value="' + escapeAttr(row.businessType) + '" /></td>';
+      bodyRows += '<td><input class="client-input" type="text" data-client-row="' + i + '" data-client-field="businessItem" value="' + escapeAttr(row.businessItem) + '" /></td>';
+      bodyRows += "</tr>";
+    }
+
+    return (
+      '<div class="clientdoc">' +
+        '<div class="clientdoc-card">' +
+          '<div class="clientdoc-head">' +
+            '<div class="clientdoc-title">' + icon("building") + ' 업체 리스트</div>' +
+            '<div class="sub">상호 / 사업자등록번호 / 대표자명 / 주소 / 업태 / 종목</div>' +
+          '</div>' +
+          '<div class="clientdoc-wrap">' +
+            '<table class="clientlist">' +
+              '<thead><tr>' +
+                '<th class="client-col-name">상호</th>' +
+                '<th class="client-col-biz">사업자등록번호</th>' +
+                '<th class="client-col-ceo">대표자명</th>' +
+                '<th class="client-col-address">주소</th>' +
+                '<th class="client-col-type">업태</th>' +
+                '<th class="client-col-item">종목</th>' +
+              '</tr></thead>' +
+              '<tbody>' + bodyRows + '</tbody>' +
+            '</table>' +
+          '</div>' +
+        '</div>' +
+      '</div>'
     );
   }
 
@@ -3029,6 +3192,8 @@
         body = renderWorkTab();
       } else if (state.subTab === "statement") {
         body = renderStatementTab();
+      } else if (state.subTab === "client") {
+        body = renderClientTab();
       } else {
         var lab = salesTabs.find(function (x) {
           return x.key === state.subTab;
@@ -3132,6 +3297,14 @@
           clearTimeout(workState.saveTimer);
           workState.saveTimer = null;
         }
+        var supplierModeSelect = document.getElementById("supplier-mode");
+        if (supplierModeSelect) {
+          supplierModeSelect.addEventListener("change", function () {
+            ensureWorkInfoShape().supplierMode = supplierModeSelect.value === "personal" ? "personal" : "corporate";
+            scheduleLedgerDraftSave();
+            render();
+          });
+        }
         app.querySelectorAll('input[data-work-info]').forEach(function (inp) {
           inp.addEventListener("input", function () {
             var path = inp.getAttribute("data-work-info");
@@ -3167,6 +3340,33 @@
             window.print();
           });
         }
+      } else if (state.subTab === "client") {
+        var wasClientLoaded = ledgerState.loadedFromFirebase;
+        ensureLedgerLoadedFromFirebase().then(function () {
+          if (!wasClientLoaded && state.subTab === "client") render();
+        });
+        app.querySelectorAll('input[data-client-row]').forEach(function (inp) {
+          inp.addEventListener("input", function () {
+            var r = Number(inp.getAttribute("data-client-row"));
+            var f = inp.getAttribute("data-client-field");
+            if (isNaN(r) || !f) return;
+            if (!clientState.rows[r]) clientState.rows[r] = emptyClientRow();
+            clientState.rows[r][f] = inp.value;
+
+            var hasAnyValue = Object.keys(clientState.rows[clientState.rows.length - 1] || {}).some(function (key) {
+              return clientState.rows[clientState.rows.length - 1][key] != null &&
+                String(clientState.rows[clientState.rows.length - 1][key]).trim() !== "";
+            });
+            if (hasAnyValue) {
+              clientState.rows.push(emptyClientRow());
+              scheduleLedgerDraftSave();
+              render();
+              return;
+            }
+
+            scheduleLedgerDraftSave();
+          });
+        });
       }
       return;
     }
