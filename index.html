@@ -547,6 +547,183 @@
     .items-col-supply { width: 100px; }
     .items-col-tax { width: 80px; }
     .items-col-note { width: 160px; }
+
+    /* 거래명세서 */
+    .statement-toolbar {
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .statement-page {
+      width: 210mm;
+      min-height: 297mm;
+      margin: 0 auto;
+      padding: 8mm;
+      background: #fff;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.08);
+    }
+    .statement-stack {
+      display: grid;
+      grid-template-rows: 1fr 1fr;
+      gap: 8mm;
+      min-height: calc(297mm - 16mm);
+    }
+    .statement-copy {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      border: 1px solid var(--statement-accent);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #fff;
+    }
+    .statement-copy.blue {
+      --statement-accent: #2f6fed;
+      --statement-soft: #edf4ff;
+      --statement-line: #cfe0ff;
+    }
+    .statement-copy.red {
+      --statement-accent: #e14b4b;
+      --statement-soft: #fff0f0;
+      --statement-line: #f6cccc;
+    }
+    .statement-head {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 12px 6px;
+    }
+    .statement-title {
+      flex: 1;
+      text-align: center;
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: 6px;
+      color: var(--statement-accent);
+    }
+    .statement-copy-tag {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--statement-accent);
+    }
+    .statement-meta {
+      width: 86px;
+      text-align: right;
+      font-size: 11px;
+      color: var(--statement-accent);
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .statement-form-table,
+    .statement-items-table,
+    .statement-footer-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    .statement-form-wrap,
+    .statement-items,
+    .statement-footer {
+      padding: 0 12px;
+    }
+    .statement-form-table {
+      font-size: 12px;
+    }
+    .statement-form-table td,
+    .statement-form-table th,
+    .statement-items-table td,
+    .statement-items-table th,
+    .statement-footer-table td,
+    .statement-footer-table th {
+      border: 1px solid var(--statement-accent);
+      padding: 4px 6px;
+      color: #2c3450;
+    }
+    .statement-form-table th,
+    .statement-items-table th,
+    .statement-footer-table th {
+      font-weight: 700;
+      color: var(--statement-accent);
+      background: #fff;
+    }
+    .statement-vlabel {
+      width: 24px;
+      text-align: center;
+      writing-mode: vertical-rl;
+      text-orientation: upright;
+      letter-spacing: 1px;
+      font-size: 11px;
+    }
+    .statement-form-table .center,
+    .statement-items-table .center,
+    .statement-footer-table .center {
+      text-align: center;
+    }
+    .statement-items {
+      flex: 1;
+      padding-top: 0;
+    }
+    .statement-items-table {
+      font-size: 11px;
+    }
+    .statement-items-table td {
+      height: 22px;
+      word-break: break-word;
+    }
+    .statement-items-table .num,
+    .statement-footer-table .num {
+      text-align: right;
+    }
+    .statement-note {
+      padding: 4px 12px 10px;
+      font-size: 11px;
+      color: #68738f;
+      text-align: right;
+    }
+
+    @media print {
+      @page {
+        size: A4 portrait;
+        margin: 8mm;
+      }
+      body {
+        background: #fff;
+      }
+      body * {
+        visibility: hidden;
+      }
+      .statement-print-root,
+      .statement-print-root * {
+        visibility: visible;
+      }
+      .statement-print-root {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+      }
+      .statement-toolbar,
+      .top-bar,
+      .tabs {
+        display: none !important;
+      }
+      .statement-page {
+        width: 100%;
+        min-height: auto;
+        margin: 0;
+        padding: 0;
+        box-shadow: none;
+      }
+      .statement-stack {
+        min-height: auto;
+        gap: 6mm;
+      }
+      .statement-copy {
+        break-inside: avoid;
+      }
+    }
   </style>
 </head>
 <body class="shell-bg">

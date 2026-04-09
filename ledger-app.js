@@ -2439,6 +2439,178 @@
     cur[parts[parts.length - 1]] = value;
   }
 
+  function formatBusinessNo(value) {
+    var digits = String(value || "").replace(/\D/g, "");
+    if (digits.length !== 10) return value == null ? "" : String(value);
+    return digits.slice(0, 3) + "-" + digits.slice(3, 5) + "-" + digits.slice(5);
+  }
+
+  function formatDateLabel(value) {
+    if (!value) return "";
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(value))) {
+      var parts = String(value).split("-");
+      return Number(parts[0]) + "년 " + Number(parts[1]) + "월 " + Number(parts[2]) + "일";
+    }
+    return String(value);
+  }
+
+  function getStatementTotals(items) {
+    var totals = {
+      qty: 0,
+      supply: 0,
+      tax: 0,
+      grand: 0,
+    };
+
+    items.forEach(function (item) {
+      totals.qty += parseCalcNumber(item.qty) || 0;
+      totals.supply += parseCalcNumber(item.supply) || 0;
+      totals.tax += parseCalcNumber(item.tax) || 0;
+    });
+
+    totals.grand = totals.supply + totals.tax;
+    return totals;
+  }
+
+  function formatStatementItemDate(value) {
+    var text = String(value || "").trim();
+    var monthDay = text.match(/^(\d{1,2})월\s*(\d{1,2})일$/);
+    if (monthDay) {
+      return String(monthDay[1]).padStart(2, "0") + "월 " + String(monthDay[2]).padStart(2, "0") + "일";
+    }
+    return text;
+  }
+
+  function renderStatementCopy(copyClass, tagLabel, items, totals) {
+    var supplier = workState.info && workState.info.supplier ? workState.info.supplier : {};
+    var receiver = workState.info && workState.info.receiver ? workState.info.receiver : {};
+    var docDate = formatDateLabel(getWorkInfoValue("date"));
+    var rows = "";
+    var totalRows = Math.max(items.length, 10);
+
+    for (var i = 0; i < totalRows; i++) {
+      var item = items[i] || {};
+      rows += "<tr>";
+      rows += '<td class="center">' + escapeHtml(formatStatementItemDate(item.date != null ? item.date : "")) + "</td>";
+      rows += '<td>' + escapeHtml(item.name != null ? item.name : "") + "</td>";
+      rows += '<td>' + escapeHtml(item.code != null ? item.code : "") + "</td>";
+      rows += '<td>' + escapeHtml(item.note != null ? item.note : "") + "</td>";
+      rows += '<td class="num">' + escapeHtml(formatDisplayNumber(item.qty)) + "</td>";
+      rows += '<td class="num">' + escapeHtml(formatDisplayNumber(item.price)) + "</td>";
+      rows += '<td class="num">' + escapeHtml(formatDisplayNumber(item.supply)) + "</td>";
+      rows += '<td class="num">' + escapeHtml(formatDisplayNumber(item.tax)) + "</td>";
+      rows += "</tr>";
+    }
+
+    return (
+      '<section class="statement-copy ' + copyClass + '">' +
+        '<div class="statement-head">' +
+          '<div class="statement-copy-tag">' + tagLabel + "</div>" +
+          '<div class="statement-title">거래명세표</div>' +
+          '<div class="statement-meta">' + escapeHtml(docDate || "-") + "</div>" +
+        "</div>" +
+        '<div class="statement-form-wrap">' +
+          '<table class="statement-form-table">' +
+            '<colgroup>' +
+              '<col style="width:24px" />' +
+              '<col style="width:40px" />' +
+              '<col style="width:146px" />' +
+              '<col style="width:40px" />' +
+              '<col style="width:92px" />' +
+              '<col style="width:24px" />' +
+              '<col style="width:40px" />' +
+              '<col style="width:146px" />' +
+              '<col style="width:40px" />' +
+              '<col style="width:92px" />' +
+            '</colgroup>' +
+            '<tbody>' +
+              '<tr>' +
+                '<th>일자</th><td colspan="4" class="center">' + escapeHtml(docDate || "") + '</td>' +
+                '<th>등록번호</th><td colspan="4" class="center">' + escapeHtml(formatBusinessNo(receiver.businessNo || "")) + '</td>' +
+              '</tr>' +
+              '<tr>' +
+                '<th rowspan="4" class="statement-vlabel">공급자</th>' +
+                '<th>상호</th><td>' + escapeHtml(supplier.company || "") + '</td>' +
+                '<th>성명</th><td class="center">' + escapeHtml(supplier.ceo || "") + '</td>' +
+                '<th rowspan="4" class="statement-vlabel">공급받는자</th>' +
+                '<th>상호</th><td>' + escapeHtml(receiver.company || "") + '</td>' +
+                '<th>성명</th><td class="center">' + escapeHtml(receiver.ceo || "") + '</td>' +
+              '</tr>' +
+              '<tr>' +
+                '<th>번호</th><td colspan="3">' + escapeHtml(formatBusinessNo(supplier.businessNo || "")) + '</td>' +
+                '<th>번호</th><td colspan="3">' + escapeHtml(formatBusinessNo(receiver.businessNo || "")) + '</td>' +
+              '</tr>' +
+              '<tr>' +
+                '<th>주소</th><td colspan="3">' + escapeHtml(supplier.address || "") + '</td>' +
+                '<th>주소</th><td colspan="3">' + escapeHtml(receiver.address || "") + '</td>' +
+              '</tr>' +
+              '<tr>' +
+                '<th>업태</th><td>' + escapeHtml(supplier.businessType || "") + '</td>' +
+                '<th>종목</th><td>' + escapeHtml(supplier.businessItem || "") + '</td>' +
+                '<th>업태</th><td>' + escapeHtml(receiver.businessType || "") + '</td>' +
+                '<th>종목</th><td>' + escapeHtml(receiver.businessItem || "") + '</td>' +
+              '</tr>' +
+            '</tbody>' +
+          '</table>' +
+        '</div>' +
+        '<div class="statement-items">' +
+          '<table class="statement-items-table">' +
+            '<thead><tr>' +
+              '<th style="width:72px">일자</th>' +
+              '<th>품명</th>' +
+              '<th style="width:74px">CODE</th>' +
+              '<th style="width:82px">비고</th>' +
+              '<th style="width:62px">수량</th>' +
+              '<th style="width:70px">단가</th>' +
+              '<th style="width:88px">금액</th>' +
+              '<th style="width:76px">세액</th>' +
+            '</tr></thead>' +
+            '<tbody>' + rows + '</tbody>' +
+          '</table>' +
+        '</div>' +
+        '<div class="statement-footer">' +
+          '<table class="statement-footer-table">' +
+            '<tbody><tr>' +
+              '<th style="width:78px">공급가액</th>' +
+              '<td class="num" style="width:120px">' + escapeHtml(formatDisplayNumber(totals.supply)) + '</td>' +
+              '<th style="width:54px">세액</th>' +
+              '<td class="num" style="width:90px">' + escapeHtml(formatDisplayNumber(totals.tax)) + '</td>' +
+              '<th style="width:54px">합계</th>' +
+              '<td class="num" style="width:110px">' + escapeHtml(formatDisplayNumber(totals.grand)) + '</td>' +
+              '<th style="width:58px">인수자</th>' +
+              '<td></td>' +
+            '</tr></tbody>' +
+          '</table>' +
+        '</div>' +
+        '<div class="statement-note">품목수 ' + escapeHtml(String(items.length)) + " / 수량합계 " + escapeHtml(formatDisplayNumber(totals.qty)) + '</div>' +
+      '</section>'
+    );
+  }
+
+  function renderStatementTab() {
+    var items = (workState.items || []).filter(function (item) {
+      if (!item) return false;
+      return ["date", "code", "name", "qty", "price", "supply", "tax", "note"].some(function (key) {
+        return item[key] != null && String(item[key]).trim() !== "";
+      });
+    });
+    var totals = getStatementTotals(items);
+
+    return (
+      '<div class="statement-print-root">' +
+        '<div class="statement-toolbar">' +
+          '<button type="button" class="soft-btn" id="btn-print-statement">' + icon("sheet") + '인쇄하기</button>' +
+        '</div>' +
+        '<div class="statement-page">' +
+          '<div class="statement-stack">' +
+            renderStatementCopy("blue", "공급받는자 보관용", items, totals) +
+            renderStatementCopy("red", "공급자 보관용", items, totals) +
+          '</div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
   function renderWorkTab() {
     var items = workState.items || [];
     var totalRows = Math.max(items.length, 12);
@@ -2777,6 +2949,8 @@
           '<div id="sales-table-host"></div>';
       } else if (state.subTab === "work") {
         body = renderWorkTab();
+      } else if (state.subTab === "statement") {
+        body = renderStatementTab();
       } else {
         var lab = salesTabs.find(function (x) {
           return x.key === state.subTab;
@@ -2904,6 +3078,17 @@
             scheduleLedgerDraftSave();
           });
         });
+      } else if (state.subTab === "statement") {
+        var wasStatementLoaded = workState.loadedFromFirebase;
+        ensureWorkLoadedFromFirebase().then(function () {
+          if (!wasStatementLoaded && state.subTab === "statement") render();
+        });
+        var printBtn = document.getElementById("btn-print-statement");
+        if (printBtn) {
+          printBtn.addEventListener("click", function () {
+            window.print();
+          });
+        }
       }
       return;
     }
