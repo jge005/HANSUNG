@@ -81,6 +81,27 @@
   };
   var workGridFields = ["date", "code", "name", "qty", "price", "supply", "tax", "note"];
   var clientGridFields = ["supplierMode", "company", "businessNo", "ceoName", "address", "businessType", "businessItem"];
+  var workSheetColumns = [
+    { key: "date", label: "일자", width: 88 },
+    { key: "code", label: "코드", width: 104 },
+    { key: "name", label: "품명", width: 240 },
+    { key: "qty", label: "수량", width: 76 },
+    { key: "price", label: "단가", width: 92 },
+    { key: "supply", label: "공급가액", width: 108 },
+    { key: "tax", label: "세액", width: 88 },
+    { key: "note", label: "비고", width: 180 },
+  ];
+  var clientSheetColumns = [
+    { key: "supplierMode", label: "구분", width: 84 },
+    { key: "company", label: "상호", width: 180 },
+    { key: "businessNo", label: "사업자등록번호", width: 148 },
+    { key: "ceoName", label: "대표자명", width: 116 },
+    { key: "address", label: "주소", width: 280 },
+    { key: "businessType", label: "업태", width: 110 },
+    { key: "businessItem", label: "종목", width: 180 },
+  ];
+  var workSheetEngine = null;
+  var clientSheetEngine = null;
 
   var app = document.getElementById("app");
 
@@ -400,6 +421,1032 @@
     scheduleLedgerDraftSave();
     render();
     return true;
+  }
+
+  function rowHasAnyValue(row, keys) {
+    if (!row) return false;
+    return (keys || Object.keys(row)).some(function (key) {
+      return row[key] != null && String(row[key]).trim() !== "";
+    });
+  }
+
+  function normalizeWorkItemsRows(rows, minCount) {
+    var normalized = Array.isArray(rows)
+      ? rows.map(function (row) { return Object.assign({}, row || {}); })
+      : [];
+    var targetCount = Math.max(minCount || 12, normalized.length);
+    for (var i = 0; i < targetCount; i++) {
+      normalized[i] = Object.assign({}, normalized[i] || {});
+    }
+    while (
+      normalized.length < targetCount ||
+      rowHasAnyValue(normalized[normalized.length - 1], workGridFields)
+    ) {
+      normalized.push({});
+    }
+    return normalized;
+  }
+
+  function normalizeClientGridRows(rows, minCount) {
+    var normalized = ensureClientRows(rows, minCount || 20);
+    while (
+      normalized.length < (minCount || 20) ||
+      rowHasAnyValue(normalized[normalized.length - 1], clientGridFields)
+    ) {
+      normalized.push(emptyClientRow());
+    }
+    return normalized.map(function (row) {
+      row.supplierMode = normalizeSupplierMode(row.supplierMode);
+      return row;
+    });
+  }
+
+  function refreshWorkSummaryUi() {
+    var items = (workState.items || []).filter(function (item) {
+      return rowHasAnyValue(item, workGridFields);
+    });
+    var totals = getStatementTotals(items);
+    var countEl = document.getElementById("work-summary-count");
+    var supplyEl = document.getElementById("work-summary-supply");
+    var taxEl = document.getElementById("work-summary-tax");
+    var grandEl = document.getElementById("work-summary-grand");
+    var qtyEl = document.getElementById("work-summary-qty");
+    if (countEl) countEl.value = String(items.length);
+    if (supplyEl) supplyEl.textContent = formatDisplayNumber(totals.supply);
+    if (taxEl) taxEl.textContent = formatDisplayNumber(totals.tax);
+    if (grandEl) grandEl.textContent = formatDisplayNumber(totals.grand);
+    if (qtyEl) qtyEl.textContent = formatDisplayNumber(totals.qty);
+  }
+
+  function createMiniSheetEngine(options) {
+    var engine = {
+      host: null,
+      scrollEl: null,
+      inputEl: null,
+      selectedCell: { row: 0, col: 0 },
+      selectedKeys: ["0:0"],
+      prevSelectedKeys: [],
+      prevActiveKey: null,
+      dragging: false,
+      dragStart: null,
+      dragMode: "replace",
+      dragBaseKeys: [],
+      editMode: false,
+      isComposing: false,
+      editOrigin: { row: 0, col: 0, value: "" },
+      editSnapshotRows: null,
+      undoStack: [],
+      redoStack: [],
+      colWidths: [],
+      rowHeights: [],
+      resizing: null,
+      globalListenersBound: false,
+      cellMap: {},
+      rowHeadEls: [],
+      colHeadEls: [],
+    };
+
+    function getColumns() {
+      return options.columns;
+    }
+
+    function getRows() {
+      return options.getRows();
+    }
+
+    function cloneRowList(rows) {
+      return (rows || []).map(function (row) {
+        return Object.assign({}, row || {});
+      });
+    }
+
+    function getRowCount() {
+      return getRows().length;
+    }
+
+    function getColCount() {
+      return getColumns().length;
+    }
+
+    function getColWidth(index) {
+      return engine.colWidths[index] || getColumns()[index].width || 100;
+    }
+
+    function getRowHeight(index) {
+      return engine.rowHeights[index] || 28;
+    }
+
+    function ensureRowCount(minCount) {
+      var current = getRows();
+      var normalized = options.normalizeRows
+        ? options.normalizeRows(cloneRowList(current), minCount)
+        : cloneRowList(current);
+      if (normalized.length !== current.length) {
+        options.setRows(normalized);
+        if (typeof options.onRowsChange === "function") options.onRowsChange(normalized);
+      }
+    }
+
+    function getRawValue(r, c) {
+      var rows = getRows();
+      var key = getColumns()[c].key;
+      return rows[r] && rows[r][key] != null ? String(rows[r][key]) : "";
+    }
+
+    function getDisplayValue(r, c) {
+      var raw = getRawValue(r, c);
+      if (typeof options.formatValue === "function") {
+        return options.formatValue(r, c, raw, getRows());
+      }
+      return raw;
+    }
+
+    function setRawValue(rows, r, c, value) {
+      var key = getColumns()[c].key;
+      var nextValue = value == null ? "" : String(value);
+      if (typeof options.normalizeValue === "function") {
+        nextValue = options.normalizeValue(r, c, nextValue, rows);
+      }
+      rows[r] = Object.assign({}, rows[r] || {}, (function () {
+        var o = {};
+        o[key] = nextValue;
+        return o;
+      })());
+      if (typeof options.afterCellChange === "function") {
+        options.afterCellChange(rows, r, c);
+      }
+    }
+
+    function setRows(nextRows, skipHistory, beforeRows) {
+      var normalized = options.normalizeRows
+        ? options.normalizeRows(cloneRowList(nextRows))
+        : cloneRowList(nextRows);
+      if (!skipHistory) {
+        engine.undoStack.push(beforeRows || cloneRowList(getRows()));
+        if (engine.undoStack.length > 200) engine.undoStack.shift();
+        engine.redoStack = [];
+      }
+      options.setRows(normalized);
+      if (typeof options.onRowsChange === "function") {
+        options.onRowsChange(normalized);
+      }
+      refreshGridValues();
+    }
+
+    function snapshotEditOrigin() {
+      engine.editOrigin = {
+        row: engine.selectedCell.row,
+        col: engine.selectedCell.col,
+        value: getRawValue(engine.selectedCell.row, engine.selectedCell.col),
+      };
+    }
+
+    function syncEditOrigin() {
+      if (!engine.editMode) snapshotEditOrigin();
+    }
+
+    function selectionBounds() {
+      return rectFromKeys(engine.selectedKeys);
+    }
+
+    function updateStatusBar() {
+      if (!engine.host) return;
+      var addr = document.getElementById(options.idPrefix + "-status-cell");
+      var range = document.getElementById(options.idPrefix + "-status-range");
+      var count = document.getElementById(options.idPrefix + "-status-count");
+      var sum = document.getElementById(options.idPrefix + "-status-sum");
+      var avg = document.getElementById(options.idPrefix + "-status-avg");
+      if (addr) {
+        addr.textContent = String.fromCharCode(65 + engine.selectedCell.col) + (engine.selectedCell.row + 1);
+      }
+      if (range) {
+        var bounds = selectionBounds();
+        range.textContent =
+          String.fromCharCode(65 + bounds.left) + (bounds.top + 1) +
+          ":" +
+          String.fromCharCode(65 + bounds.right) + (bounds.bottom + 1);
+      }
+      if (count) count.textContent = String(engine.selectedKeys.length);
+      if (sum || avg) {
+        var values = engine.selectedKeys
+          .map(function (key) {
+            var parts = key.split(":");
+            return parseCalcNumber(getRawValue(Number(parts[0]), Number(parts[1])));
+          })
+          .filter(function (value) { return value != null; });
+        var total = values.reduce(function (acc, value) { return acc + value; }, 0);
+        if (sum) sum.textContent = values.length ? formatDisplayNumber(total) : "-";
+        if (avg) avg.textContent = values.length ? formatDisplayNumber(total / values.length) : "-";
+      }
+    }
+
+    function buildTableHtml() {
+      var rows = getRows();
+      var html =
+        '<div class="st-wrap">' +
+          '<div class="st-toolbar"><strong>' + escapeHtml(options.title || "") + '</strong><span>' + escapeHtml(options.subtitle || "") + '</span></div>' +
+          '<div class="st-scroll" tabindex="0" style="max-height:' + (options.maxHeight || 420) + 'px">' +
+            '<table class="st-table"><thead><tr>' +
+              '<th class="st-corner" data-corner="1"></th>';
+      getColumns().forEach(function (col, index) {
+        html +=
+          '<th class="st-col-head" data-col-head="' + index + '" style="width:' + getColWidth(index) + 'px;min-width:' + getColWidth(index) + 'px">' +
+            escapeHtml(col.label) +
+            '<div class="st-resizer-col" data-mini-col-resizer="' + index + '"></div>' +
+          '</th>';
+      });
+      html += '</tr></thead><tbody>';
+      for (var r = 0; r < rows.length; r++) {
+        html += '<tr data-row="' + r + '" style="height:' + getRowHeight(r) + 'px">';
+        html +=
+          '<th class="st-row-head" data-row-head="' + r + '">' +
+            (r + 1) +
+            '<div class="st-resizer-row" data-mini-row-resizer="' + r + '"></div>' +
+          '</th>';
+        for (var c = 0; c < getColCount(); c++) {
+          var active = r === engine.selectedCell.row && c === engine.selectedCell.col;
+          var displayHeight = Math.max(24, getRowHeight(r) - 4);
+          html += '<td data-r="' + r + '" data-c="' + c + '" class="' + (active ? 'sel-in sel-active' : '') + '">';
+          html += '<div class="st-cell-inner" style="min-height:' + displayHeight + 'px">';
+          html +=
+            '<div class="st-display" style="' +
+              (active ? 'display:none;' : '') +
+              'height:' + displayHeight + 'px;line-height:' + displayHeight + 'px;">' +
+              escapeHtml(getDisplayValue(r, c)) +
+            '</div>';
+          html += '<div class="st-ghost" style="display:none;height:' + displayHeight + 'px;line-height:' + displayHeight + 'px;"></div>';
+          html += '</div></td>';
+        }
+        html += '</tr>';
+      }
+      html +=
+            '</tbody></table>' +
+          '</div>' +
+          '<div class="st-statusbar">' +
+            '<div class="st-status-main">' +
+              '<span class="st-status-pill">현재셀 <strong id="' + options.idPrefix + '-status-cell">A1</strong></span>' +
+              '<span class="st-status-pill">범위 <strong id="' + options.idPrefix + '-status-range">A1:A1</strong></span>' +
+              '<span class="st-status-pill">개수 <strong id="' + options.idPrefix + '-status-count">1</strong></span>' +
+            '</div>' +
+            '<div class="st-status-metrics">' +
+              '<span class="st-status-pill">합계 <strong id="' + options.idPrefix + '-status-sum">-</strong></span>' +
+              '<span class="st-status-pill">평균 <strong id="' + options.idPrefix + '-status-avg">-</strong></span>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      return html;
+    }
+
+    function rebuildCellMap() {
+      if (!engine.host) return;
+      engine.cellMap = {};
+      engine.host.querySelectorAll("td[data-r][data-c]").forEach(function (td) {
+        engine.cellMap[cellKey(Number(td.getAttribute("data-r")), Number(td.getAttribute("data-c")))] = td;
+      });
+      engine.rowHeadEls = Array.prototype.slice.call(engine.host.querySelectorAll("[data-row-head]"));
+      engine.colHeadEls = Array.prototype.slice.call(engine.host.querySelectorAll("[data-col-head]"));
+    }
+
+    function refreshGridValues() {
+      if (!engine.host) return;
+      engine.host.innerHTML = buildTableHtml();
+      engine.scrollEl = engine.host.querySelector(".st-scroll");
+      rebuildCellMap();
+
+      engine.inputEl = document.createElement("input");
+      engine.inputEl.type = "text";
+      engine.inputEl.setAttribute("spellcheck", "false");
+      engine.inputEl.className = "st-input no-edit";
+      moveInputToCell(engine.selectedCell.row, engine.selectedCell.col);
+
+      engine.scrollEl.addEventListener("keydown", onTableKeyDown);
+      engine.scrollEl.addEventListener("copy", onCopy);
+      engine.scrollEl.addEventListener("paste", onPaste);
+
+      engine.host.querySelector("tbody").addEventListener("mousedown", onCellMouseDown);
+      engine.host.querySelector("tbody").addEventListener("dblclick", onCellDblClick);
+      engine.host.querySelector("thead").addEventListener("mousedown", onHeadMouseDown);
+      engine.host.querySelector("thead").addEventListener("dblclick", onHeadDoubleClick);
+
+      engine.inputEl.addEventListener("compositionstart", function () {
+        engine.isComposing = true;
+        if (!engine.editMode) {
+          engine.editSnapshotRows = cloneRowList(getRows());
+          engine.editMode = true;
+          syncInputOverlay();
+        }
+      });
+      engine.inputEl.addEventListener("compositionend", function (e) {
+        engine.isComposing = false;
+        setValue(engine.selectedCell.row, engine.selectedCell.col, e.target.value);
+        syncInputOverlay();
+      });
+      engine.inputEl.addEventListener("input", function (e) {
+        if (!engine.editMode) {
+          engine.editSnapshotRows = cloneRowList(getRows());
+          engine.editMode = true;
+        }
+        setValue(engine.selectedCell.row, engine.selectedCell.col, e.target.value);
+        syncInputOverlay();
+      });
+      engine.inputEl.addEventListener("blur", function () {
+        commitActiveCellValue();
+      });
+      engine.inputEl.addEventListener("keydown", onInputKeyDown);
+      engine.inputEl.addEventListener("focus", function (e) {
+        var len = e.target.value.length;
+        if (engine.editMode) e.target.setSelectionRange(len, len);
+        else e.target.setSelectionRange(0, len);
+      });
+      updateSelectionUI();
+      syncInputOverlay();
+      focusInput();
+    }
+
+    function moveInputToCell(r, c) {
+      if (!engine.host || !engine.inputEl) return;
+      var prevTd = engine.inputEl.closest("td");
+      if (prevTd) {
+        var prevDisp = prevTd.querySelector(".st-display");
+        var prevGhost = prevTd.querySelector(".st-ghost");
+        if (prevDisp) {
+          prevDisp.style.display = "";
+          prevDisp.textContent = getDisplayValue(
+            Number(prevTd.getAttribute("data-r")),
+            Number(prevTd.getAttribute("data-c"))
+          );
+        }
+        if (prevGhost) {
+          prevGhost.textContent = "";
+          prevGhost.style.display = "none";
+        }
+      }
+      var td = engine.host.querySelector('td[data-r="' + r + '"][data-c="' + c + '"]');
+      if (!td) return;
+      var inner = td.querySelector(".st-cell-inner");
+      var disp = td.querySelector(".st-display");
+      if (disp) disp.style.display = "none";
+      inner.appendChild(engine.inputEl);
+      engine.inputEl.value = getRawValue(r, c);
+      syncInputOverlay();
+    }
+
+    function syncInputOverlay() {
+      if (!engine.inputEl || !engine.host) return;
+      var r = engine.selectedCell.row;
+      var c = engine.selectedCell.col;
+      var td = engine.host.querySelector('td[data-r="' + r + '"][data-c="' + c + '"]');
+      if (!td) return;
+      var inner = td.querySelector(".st-cell-inner");
+      var ghost = inner.querySelector(".st-ghost");
+      var raw = getRawValue(r, c);
+      engine.inputEl.value = raw;
+      if (engine.editMode) {
+        engine.inputEl.classList.remove("no-edit");
+        if (ghost) {
+          ghost.textContent = "";
+          ghost.style.display = "none";
+        }
+      } else {
+        engine.inputEl.classList.add("no-edit");
+        if (ghost) {
+          ghost.textContent = getDisplayValue(r, c);
+          ghost.style.display = "block";
+        }
+      }
+      var displayHeight = Math.max(24, getRowHeight(r) - 4);
+      engine.inputEl.style.height = displayHeight + "px";
+      engine.inputEl.style.lineHeight = displayHeight + "px";
+    }
+
+    function focusInput() {
+      if (!engine.inputEl) return;
+      requestAnimationFrame(function () {
+        if (!engine.inputEl) return;
+        engine.inputEl.focus();
+        var len = engine.inputEl.value.length;
+        if (engine.editMode) engine.inputEl.setSelectionRange(len, len);
+        else engine.inputEl.setSelectionRange(0, len);
+      });
+    }
+
+    function commitActiveCellValue() {
+      var row = engine.selectedCell.row;
+      var col = engine.selectedCell.col;
+      var current = getRawValue(row, col);
+      var normalized = current;
+      if (typeof options.normalizeValue === "function") {
+        normalized = options.normalizeValue(row, col, current, getRows());
+      }
+      if (normalized === current) {
+        engine.editSnapshotRows = null;
+        return;
+      }
+      var nextRows = cloneRowList(getRows());
+      setRawValue(nextRows, row, col, normalized);
+      setRows(nextRows, false, engine.editSnapshotRows || cloneRowList(getRows()));
+      engine.editSnapshotRows = null;
+    }
+
+    function setValue(r, c, value) {
+      if (getRawValue(r, c) === value) return;
+      var nextRows = cloneRowList(getRows());
+      setRawValue(nextRows, r, c, value);
+      setRows(nextRows, true);
+    }
+
+    function clearSelectionCells() {
+      var nextRows = cloneRowList(getRows());
+      engine.selectedKeys.forEach(function (key) {
+        var parts = key.split(":");
+        setRawValue(nextRows, Number(parts[0]), Number(parts[1]), "");
+      });
+      setRows(nextRows, false);
+      engine.editMode = false;
+      updateSelectionUI();
+      moveInputToCell(engine.selectedCell.row, engine.selectedCell.col);
+    }
+
+    function getSelectionText() {
+      if (!engine.selectedKeys.length) return "";
+      var bounds = selectionBounds();
+      var lines = [];
+      for (var r = bounds.top; r <= bounds.bottom; r++) {
+        var cols = [];
+        for (var c = bounds.left; c <= bounds.right; c++) {
+          cols.push(getDisplayValue(r, c));
+        }
+        lines.push(cols.join("\t"));
+      }
+      return lines.join("\n");
+    }
+
+    function pasteTextIntoSelection(text) {
+      if (!text) return;
+      var grid = parseClipboardGrid(text);
+      if (!grid.length) return;
+      var startRow = engine.selectedCell.row;
+      var startCol = engine.selectedCell.col;
+      var selectionRect = selectionBounds();
+      var selectionIsRect = engine.selectedKeys.length ===
+        (selectionRect.bottom - selectionRect.top + 1) * (selectionRect.right - selectionRect.left + 1);
+      var sourceRows = Math.max(grid.length, 1);
+      var sourceCols = Math.max.apply(null, grid.map(function (line) { return line.length; }));
+      ensureRowCount(Math.max(getRowCount(), startRow + sourceRows + 1, selectionRect.bottom + 2));
+      var nextRows = cloneRowList(getRows());
+
+      if (engine.selectedKeys.length > 1 && sourceRows === 1 && sourceCols === 1) {
+        engine.selectedKeys.forEach(function (key) {
+          var parts = key.split(":");
+          setRawValue(nextRows, Number(parts[0]), Number(parts[1]), grid[0][0]);
+        });
+      } else if (engine.selectedKeys.length > 1 && selectionIsRect) {
+        for (var r = selectionRect.top; r <= selectionRect.bottom; r++) {
+          for (var c = selectionRect.left; c <= selectionRect.right; c++) {
+            var rowOffset = r - selectionRect.top;
+            var colOffset = c - selectionRect.left;
+            var rowValues = grid[rowOffset % sourceRows] || [""];
+            setRawValue(nextRows, r, c, rowValues[colOffset % rowValues.length] || "");
+          }
+        }
+      } else {
+        grid.forEach(function (line, rowOffset) {
+          line.forEach(function (value, colOffset) {
+            var rowIndex = startRow + rowOffset;
+            var colIndex = startCol + colOffset;
+            if (colIndex < getColCount()) {
+              if (rowIndex >= nextRows.length) nextRows.push(options.emptyRow());
+              setRawValue(nextRows, rowIndex, colIndex, value);
+            }
+          });
+        });
+      }
+
+      setRows(nextRows, false);
+      var endRow = selectionIsRect && engine.selectedKeys.length > 1
+        ? selectionRect.bottom
+        : Math.min(getRowCount() - 1, startRow + sourceRows - 1);
+      var endCol = selectionIsRect && engine.selectedKeys.length > 1
+        ? selectionRect.right
+        : Math.min(getColCount() - 1, startCol + sourceCols - 1);
+      engine.selectedCell = { row: endRow, col: endCol };
+      engine.selectedKeys = keysFromPoints(
+        selectionIsRect && engine.selectedKeys.length > 1
+          ? { row: selectionRect.top, col: selectionRect.left }
+          : { row: startRow, col: startCol },
+        { row: endRow, col: endCol }
+      );
+      engine.editMode = false;
+      updateSelectionUI();
+      moveInputToCell(endRow, endCol);
+      focusInput();
+    }
+
+    function moveSelection(row, col) {
+      commitActiveCellValue();
+      ensureRowCount(Math.max(getRowCount(), row + 2));
+      var nr = Math.max(0, Math.min(getRowCount() - 1, row));
+      var nc = Math.max(0, Math.min(getColCount() - 1, col));
+      engine.selectedCell = { row: nr, col: nc };
+      engine.selectedKeys = [cellKey(nr, nc)];
+      engine.editMode = false;
+      engine.isComposing = false;
+      updateSelectionUI();
+      moveInputToCell(nr, nc);
+      syncEditOrigin();
+      focusInput();
+    }
+
+    function moveByTab(backward) {
+      var row = engine.selectedCell.row;
+      var col = engine.selectedCell.col + (backward ? -1 : 1);
+      if (col < 0) {
+        col = getColCount() - 1;
+        row = Math.max(0, row - 1);
+      } else if (col >= getColCount()) {
+        col = 0;
+        row = row + 1;
+      }
+      moveSelection(row, col);
+    }
+
+    function cutSelectionAsync() {
+      var text = getSelectionText();
+      if (!text) return;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).catch(function () {});
+      }
+      clearSelectionCells();
+    }
+
+    function updateSelectionUI() {
+      if (!engine.host) return;
+      var currentSelected = {};
+      engine.selectedKeys.forEach(function (key) { currentSelected[key] = true; });
+      var activeKey = cellKey(engine.selectedCell.row, engine.selectedCell.col);
+      var dirtyKeys = {};
+      engine.prevSelectedKeys.forEach(function (key) { dirtyKeys[key] = true; });
+      engine.selectedKeys.forEach(function (key) { dirtyKeys[key] = true; });
+      if (engine.prevActiveKey) dirtyKeys[engine.prevActiveKey] = true;
+      dirtyKeys[activeKey] = true;
+      Object.keys(dirtyKeys).forEach(function (key) {
+        var td = engine.cellMap[key];
+        if (!td) return;
+        td.classList.toggle("sel-in", !!currentSelected[key]);
+        td.classList.toggle("sel-active", key === activeKey);
+      });
+      engine.colHeadEls.forEach(function (el) {
+        el.classList.toggle("st-head-active", engine.selectedKeys.some(function (key) {
+          return Number(key.split(":")[1]) === Number(el.getAttribute("data-col-head"));
+        }));
+      });
+      engine.rowHeadEls.forEach(function (el) {
+        el.classList.toggle("st-head-active", engine.selectedKeys.some(function (key) {
+          return Number(key.split(":")[0]) === Number(el.getAttribute("data-row-head"));
+        }));
+      });
+      engine.prevSelectedKeys = engine.selectedKeys.slice();
+      engine.prevActiveKey = activeKey;
+      updateStatusBar();
+    }
+
+    function selectRow(rowIndex) {
+      engine.selectedCell = { row: rowIndex, col: 0 };
+      engine.selectedKeys = keysFromPoints({ row: rowIndex, col: 0 }, { row: rowIndex, col: getColCount() - 1 });
+      engine.editMode = false;
+      updateSelectionUI();
+      moveInputToCell(rowIndex, 0);
+      focusInput();
+    }
+
+    function selectColumn(colIndex) {
+      engine.selectedCell = { row: 0, col: colIndex };
+      engine.selectedKeys = keysFromPoints({ row: 0, col: colIndex }, { row: getRowCount() - 1, col: colIndex });
+      engine.editMode = false;
+      updateSelectionUI();
+      moveInputToCell(0, colIndex);
+      focusInput();
+    }
+
+    function selectAll() {
+      engine.selectedCell = { row: 0, col: 0 };
+      engine.selectedKeys = keysFromPoints({ row: 0, col: 0 }, { row: getRowCount() - 1, col: getColCount() - 1 });
+      engine.editMode = false;
+      updateSelectionUI();
+      moveInputToCell(0, 0);
+      focusInput();
+    }
+
+    function onCopy(e) {
+      var text = getSelectionText();
+      if (!text) return;
+      e.preventDefault();
+      e.clipboardData.setData("text/plain", text);
+    }
+
+    function onPaste(e) {
+      e.preventDefault();
+      var text = e.clipboardData.getData("text/plain") || e.clipboardData.getData("text");
+      pasteTextIntoSelection(text);
+    }
+
+    function onTableKeyDown(e) {
+      if (engine.editMode) return;
+      if (engine.inputEl && e.target === engine.inputEl) return;
+      if (e.ctrlKey || e.metaKey) {
+        var k = e.key.toLowerCase();
+        if (k === "a") {
+          e.preventDefault();
+          selectAll();
+          return;
+        }
+        if (k === "c") {
+          e.preventDefault();
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(getSelectionText()).catch(function () {});
+          }
+          return;
+        }
+        if (k === "x") {
+          e.preventDefault();
+          cutSelectionAsync();
+          return;
+        }
+        if (k === "v") {
+          e.preventDefault();
+          if (navigator.clipboard && navigator.clipboard.readText) {
+            navigator.clipboard.readText().then(pasteTextIntoSelection).catch(function () {});
+          }
+          return;
+        }
+        if (k === "z") {
+          e.preventDefault();
+          var prev = engine.undoStack.pop();
+          if (!prev) return;
+          engine.redoStack.push(cloneRowList(getRows()));
+          options.setRows(options.normalizeRows ? options.normalizeRows(prev) : prev);
+          if (typeof options.onRowsChange === "function") options.onRowsChange(getRows());
+          refreshGridValues();
+          return;
+        }
+        if (k === "y") {
+          e.preventDefault();
+          var next = engine.redoStack.pop();
+          if (!next) return;
+          engine.undoStack.push(cloneRowList(getRows()));
+          options.setRows(options.normalizeRows ? options.normalizeRows(next) : next);
+          if (typeof options.onRowsChange === "function") options.onRowsChange(getRows());
+          refreshGridValues();
+          return;
+        }
+        return;
+      }
+      if (e.key === "Delete") {
+        e.preventDefault();
+        clearSelectionCells();
+        return;
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        moveByTab(e.shiftKey);
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        moveSelection(e.shiftKey ? engine.selectedCell.row - 1 : engine.selectedCell.row + 1, engine.selectedCell.col);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        moveSelection(engine.selectedCell.row - 1, engine.selectedCell.col);
+        return;
+      }
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        moveSelection(engine.selectedCell.row + 1, engine.selectedCell.col);
+        return;
+      }
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        moveSelection(engine.selectedCell.row, engine.selectedCell.col - 1);
+        return;
+      }
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        moveSelection(engine.selectedCell.row, engine.selectedCell.col + 1);
+        return;
+      }
+      if (e.key === "F2") {
+        e.preventDefault();
+        engine.editSnapshotRows = cloneRowList(getRows());
+        engine.editMode = true;
+        syncInputOverlay();
+        focusInput();
+      }
+    }
+
+    function onInputKeyDown(e) {
+      var row = engine.selectedCell.row;
+      var col = engine.selectedCell.col;
+      var input = e.target;
+      var start = input.selectionStart != null ? input.selectionStart : 0;
+      var end = input.selectionEnd != null ? input.selectionEnd : 0;
+      var len = input.value.length;
+      if (engine.isComposing || e.isComposing) return;
+      if (!engine.editMode) {
+        if (e.key === "Delete") {
+          e.preventDefault();
+          clearSelectionCells();
+          return;
+        }
+        if (e.key === "Tab") {
+          e.preventDefault();
+          moveByTab(e.shiftKey);
+          return;
+        }
+        if (e.key === "Enter") {
+          e.preventDefault();
+          moveSelection(e.shiftKey ? row - 1 : row + 1, col);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          moveSelection(row - 1, col);
+          return;
+        }
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          moveSelection(row + 1, col);
+          return;
+        }
+        if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          moveSelection(row, col - 1);
+          return;
+        }
+        if (e.key === "ArrowRight") {
+          e.preventDefault();
+          moveSelection(row, col + 1);
+          return;
+        }
+      } else {
+        if (e.key === "Tab") {
+          e.preventDefault();
+          moveByTab(e.shiftKey);
+          return;
+        }
+        if (e.key === "Enter") {
+          e.preventDefault();
+          moveSelection(e.shiftKey ? row - 1 : row + 1, col);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          moveSelection(row - 1, col);
+          return;
+        }
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          moveSelection(row + 1, col);
+          return;
+        }
+        if (e.key === "ArrowLeft" && start === 0 && end === 0) {
+          e.preventDefault();
+          moveSelection(row, col - 1);
+          return;
+        }
+        if (e.key === "ArrowRight" && start === len && end === len) {
+          e.preventDefault();
+          moveSelection(row, col + 1);
+          return;
+        }
+      }
+    }
+
+    function onCellMouseDown(e) {
+      var td = e.target.closest("td[data-r]");
+      if (!td || e.button !== 0) return;
+      e.preventDefault();
+      commitActiveCellValue();
+      var row = Number(td.getAttribute("data-r"));
+      var col = Number(td.getAttribute("data-c"));
+      engine.dragging = true;
+      engine.dragStart = { row: row, col: col };
+      engine.selectedCell = { row: row, col: col };
+      engine.editMode = false;
+      var key = cellKey(row, col);
+      var already = engine.selectedKeys.indexOf(key) >= 0;
+      if (e.ctrlKey || e.metaKey) {
+        engine.dragMode = already ? "remove" : "add";
+        if (already) {
+          engine.selectedKeys = engine.selectedKeys.filter(function (item) { return item !== key; });
+        } else {
+          engine.selectedKeys = Array.from(new Set(engine.selectedKeys.concat([key])));
+        }
+      } else {
+        engine.dragMode = "replace";
+        engine.selectedKeys = [key];
+      }
+      engine.dragBaseKeys = engine.selectedKeys.slice();
+      updateSelectionUI();
+      moveInputToCell(row, col);
+      syncEditOrigin();
+      focusInput();
+    }
+
+    function onCellDblClick(e) {
+      var td = e.target.closest("td[data-r]");
+      if (!td) return;
+      commitActiveCellValue();
+      engine.selectedCell = { row: Number(td.getAttribute("data-r")), col: Number(td.getAttribute("data-c")) };
+      engine.selectedKeys = [cellKey(engine.selectedCell.row, engine.selectedCell.col)];
+      engine.editSnapshotRows = cloneRowList(getRows());
+      engine.editMode = true;
+      updateSelectionUI();
+      moveInputToCell(engine.selectedCell.row, engine.selectedCell.col);
+      focusInput();
+    }
+
+    function onHeadMouseDown(e) {
+      var colResizer = e.target.closest("[data-mini-col-resizer]");
+      if (colResizer) {
+        e.preventDefault();
+        if (e.detail >= 2) {
+          engine.colWidths[Number(colResizer.getAttribute("data-mini-col-resizer"))] =
+            getColumns()[Number(colResizer.getAttribute("data-mini-col-resizer"))].width || 100;
+          refreshGridValues();
+          return;
+        }
+        engine.resizing = {
+          kind: "col",
+          index: Number(colResizer.getAttribute("data-mini-col-resizer")),
+          startX: e.clientX,
+          startY: e.clientY,
+          startSize: getColWidth(Number(colResizer.getAttribute("data-mini-col-resizer"))),
+        };
+        return;
+      }
+      var corner = e.target.closest("[data-corner]");
+      if (corner) {
+        e.preventDefault();
+        selectAll();
+        return;
+      }
+      var head = e.target.closest("[data-col-head]");
+      if (head) {
+        e.preventDefault();
+        selectColumn(Number(head.getAttribute("data-col-head")));
+      }
+    }
+
+    function onHeadDoubleClick(e) {
+      var colResizer = e.target.closest("[data-mini-col-resizer]");
+      if (colResizer) {
+        var colIndex = Number(colResizer.getAttribute("data-mini-col-resizer"));
+        engine.colWidths[colIndex] = getColumns()[colIndex].width || 100;
+        refreshGridValues();
+      }
+    }
+
+    function bindGlobalListeners() {
+      if (engine.globalListenersBound) return;
+      engine.globalListenersBound = true;
+      document.addEventListener("mousemove", function (e) {
+        if (engine.resizing) {
+          if (engine.resizing.kind === "col") {
+            engine.colWidths[engine.resizing.index] = Math.max(56, engine.resizing.startSize + (e.clientX - engine.resizing.startX));
+          } else {
+            engine.rowHeights[engine.resizing.index] = Math.max(24, engine.resizing.startSize + (e.clientY - engine.resizing.startY));
+          }
+          refreshGridValues();
+          return;
+        }
+        if (!engine.dragging || !engine.host) return;
+        var el = document.elementFromPoint(e.clientX, e.clientY);
+        var td = el && el.closest ? el.closest("td[data-r]") : null;
+        if (!td || !engine.host.contains(td)) return;
+        var current = { row: Number(td.getAttribute("data-r")), col: Number(td.getAttribute("data-c")) };
+        engine.selectedCell = current;
+        var rectKeys = keysFromPoints(engine.dragStart, current);
+        if (engine.dragMode === "replace") engine.selectedKeys = rectKeys;
+        else if (engine.dragMode === "add") engine.selectedKeys = Array.from(new Set(engine.dragBaseKeys.concat(rectKeys)));
+        else engine.selectedKeys = engine.dragBaseKeys.filter(function (key) { return rectKeys.indexOf(key) < 0; });
+        updateSelectionUI();
+        moveInputToCell(current.row, current.col);
+      });
+      window.addEventListener("mouseup", function () {
+        engine.dragging = false;
+        engine.resizing = null;
+      });
+      document.addEventListener("mousedown", function (e) {
+        var rowResizer = e.target.closest && e.target.closest("[data-mini-row-resizer]");
+        if (!rowResizer || !engine.host || !engine.host.contains(rowResizer)) return;
+        e.preventDefault();
+        if (e.detail >= 2) {
+          engine.rowHeights[Number(rowResizer.getAttribute("data-mini-row-resizer"))] = 28;
+          refreshGridValues();
+          return;
+        }
+        engine.resizing = {
+          kind: "row",
+          index: Number(rowResizer.getAttribute("data-mini-row-resizer")),
+          startX: e.clientX,
+          startY: e.clientY,
+          startSize: getRowHeight(Number(rowResizer.getAttribute("data-mini-row-resizer"))),
+        };
+      });
+      document.addEventListener("mousedown", function (e) {
+        var rowHead = e.target.closest && e.target.closest("[data-row-head]");
+        if (rowHead && engine.host && engine.host.contains(rowHead) && !e.target.closest("[data-mini-row-resizer]")) {
+          e.preventDefault();
+          selectRow(Number(rowHead.getAttribute("data-row-head")));
+        }
+      });
+    }
+
+    engine.attach = function (host) {
+      engine.host = host;
+      ensureRowCount(options.minRows || 12);
+      refreshGridValues();
+      bindGlobalListeners();
+    };
+
+    engine.refresh = function () {
+      if (engine.host) refreshGridValues();
+    };
+
+    return engine;
+  }
+
+  function getWorkSheetEngine() {
+    if (workSheetEngine) return workSheetEngine;
+    workSheetEngine = createMiniSheetEngine({
+      idPrefix: "work-grid",
+      title: "품목 시트",
+      subtitle: "매출현황과 같은 셀 선택/복사/붙여넣기 사용",
+      maxHeight: 460,
+      minRows: 12,
+      columns: workSheetColumns,
+      emptyRow: function () { return {}; },
+      getRows: function () { return normalizeWorkItemsRows(workState.items, 12); },
+      setRows: function (rows) { workState.items = normalizeWorkItemsRows(rows, 12); },
+      normalizeRows: function (rows, minCount) { return normalizeWorkItemsRows(rows, minCount || 12); },
+      normalizeValue: function (rowIndex, colIndex, value) {
+        var key = workSheetColumns[colIndex].key;
+        if (key === "date") return normalizeCellValue(0, value);
+        return value;
+      },
+      formatValue: function (rowIndex, colIndex, raw) {
+        var key = workSheetColumns[colIndex].key;
+        if (key === "qty" || key === "price" || key === "supply" || key === "tax") {
+          return formatDisplayNumber(raw);
+        }
+        return raw;
+      },
+      onRowsChange: function () {
+        scheduleLedgerDraftSave();
+        refreshWorkSummaryUi();
+      },
+    });
+    return workSheetEngine;
+  }
+
+  function getClientSheetEngine() {
+    if (clientSheetEngine) return clientSheetEngine;
+    clientSheetEngine = createMiniSheetEngine({
+      idPrefix: "client-grid",
+      title: "업체 시트",
+      subtitle: "맨 왼쪽 구분 셀에 법인/개인 입력 또는 붙여넣기",
+      maxHeight: 560,
+      minRows: 20,
+      columns: clientSheetColumns,
+      emptyRow: function () { return emptyClientRow(); },
+      getRows: function () { return normalizeClientGridRows(clientState.rows, 20); },
+      setRows: function (rows) { clientState.rows = normalizeClientGridRows(rows, 20); },
+      normalizeRows: function (rows, minCount) { return normalizeClientGridRows(rows, minCount || 20); },
+      normalizeValue: function (rowIndex, colIndex, value) {
+        var key = clientSheetColumns[colIndex].key;
+        if (key === "supplierMode") return parseSupplierModeLabel(value) || normalizeSupplierMode(value);
+        return value;
+      },
+      formatValue: function (rowIndex, colIndex, raw) {
+        var key = clientSheetColumns[colIndex].key;
+        if (key === "supplierMode") return raw === "personal" ? "개인" : raw === "corporate" ? "법인" : "";
+        return raw;
+      },
+      onRowsChange: function () {
+        scheduleLedgerDraftSave();
+      },
+    });
+    return clientSheetEngine;
+  }
+
+  function attachWorkGridWhenNeeded(container) {
+    getWorkSheetEngine().attach(container);
+  }
+
+  function attachClientGridWhenNeeded(container) {
+    getClientSheetEngine().attach(container);
   }
 
   function ensureDraftId() {
@@ -3021,24 +4068,24 @@
               '</div>' +
               '<div class="workdoc-meta-row">' +
                 '<div class="workdoc-label">품목 수</div>' +
-                '<input type="text" class="workdoc-input" value="' + escapeAttr(String(items.filter(function (item) { return item && ["date", "code", "name", "qty", "price", "supply", "tax", "note"].some(function (key) { return item[key] != null && String(item[key]).trim() !== ""; }); }).length)) + '" readonly />' +
+                '<input type="text" class="workdoc-input" id="work-summary-count" value="' + escapeAttr(String(items.filter(function (item) { return item && ["date", "code", "name", "qty", "price", "supply", "tax", "note"].some(function (key) { return item[key] != null && String(item[key]).trim() !== ""; }); }).length)) + '" readonly />' +
               '</div>' +
               '<div class="workdoc-summary">' +
                 '<div class="workdoc-summary-item">' +
                   '<div class="workdoc-summary-label">공급가액</div>' +
-                  '<div class="workdoc-summary-value">' + escapeHtml(formatDisplayNumber(totals.supply)) + '</div>' +
+                  '<div class="workdoc-summary-value" id="work-summary-supply">' + escapeHtml(formatDisplayNumber(totals.supply)) + '</div>' +
                 '</div>' +
                 '<div class="workdoc-summary-item">' +
                   '<div class="workdoc-summary-label">세액</div>' +
-                  '<div class="workdoc-summary-value">' + escapeHtml(formatDisplayNumber(totals.tax)) + '</div>' +
+                  '<div class="workdoc-summary-value" id="work-summary-tax">' + escapeHtml(formatDisplayNumber(totals.tax)) + '</div>' +
                 '</div>' +
                 '<div class="workdoc-summary-item">' +
                   '<div class="workdoc-summary-label">합계</div>' +
-                  '<div class="workdoc-summary-value">' + escapeHtml(formatDisplayNumber(totals.grand)) + '</div>' +
+                  '<div class="workdoc-summary-value" id="work-summary-grand">' + escapeHtml(formatDisplayNumber(totals.grand)) + '</div>' +
                 '</div>' +
                 '<div class="workdoc-summary-item">' +
                   '<div class="workdoc-summary-label">수량합계</div>' +
-                  '<div class="workdoc-summary-value">' + escapeHtml(formatDisplayNumber(totals.qty)) + '</div>' +
+                  '<div class="workdoc-summary-value" id="work-summary-qty">' + escapeHtml(formatDisplayNumber(totals.qty)) + '</div>' +
                 '</div>' +
               '</div>' +
             '</div>' +
@@ -3047,29 +4094,16 @@
         '<div class="workdoc-card">' +
           '<div class="workdoc-head">' +
             '<div class="workdoc-title">' + icon("scroll") + ' 품목</div>' +
-            '<div class="sub">바로 입력 가능</div>' +
+            '<div class="sub">매출현황과 같은 셀 단위 입력</div>' +
           "</div>" +
-          '<div class="items-wrap">' +
-            '<table class="items">' +
-              "<thead><tr>" +
-                '<th class="items-col-date">일자</th>' +
-                '<th class="items-col-code">코드</th>' +
-                '<th class="items-col-name">품명</th>' +
-                '<th class="items-col-qty">수량</th>' +
-                '<th class="items-col-price">단가</th>' +
-                '<th class="items-col-supply">공급가액</th>' +
-                '<th class="items-col-tax">세액</th>' +
-                '<th class="items-col-note">비고</th>' +
-              "</tr></thead>" +
-              "<tbody>" + itemsRows + "</tbody>" +
-            "</table>" +
-          "</div>" +
+          '<div id="work-grid-host"></div>' +
         "</div>" +
       "</div>"
     );
   }
 
   function renderClientTab() {
+    // 업체리스트: 왼쪽 첫 열에서 법인/개인 구분 선택
     var rows = ensureClientRows(clientState.rows, 20);
     clientState.rows = rows;
     var bodyRows = "";
@@ -3095,22 +4129,9 @@
         '<div class="clientdoc-card">' +
           '<div class="clientdoc-head">' +
             '<div class="clientdoc-title">' + icon("building") + ' 업체 리스트</div>' +
-            '<div class="sub">맨 왼쪽 구분에서 법인 / 개인 선택</div>' +
+            '<div class="sub">매출현황처럼 셀 단위 선택/복사/붙여넣기</div>' +
           '</div>' +
-          '<div class="clientdoc-wrap">' +
-            '<table class="clientlist">' +
-              '<thead><tr>' +
-                '<th class="client-col-mode">구분</th>' +
-                '<th class="client-col-name">상호</th>' +
-                '<th class="client-col-biz">사업자등록번호</th>' +
-                '<th class="client-col-ceo">대표자명</th>' +
-                '<th class="client-col-address">주소</th>' +
-                '<th class="client-col-type">업태</th>' +
-                '<th class="client-col-item">종목</th>' +
-              '</tr></thead>' +
-              '<tbody>' + bodyRows + '</tbody>' +
-            '</table>' +
-          '</div>' +
+          '<div id="client-grid-host"></div>' +
         '</div>' +
       '</div>'
     );
