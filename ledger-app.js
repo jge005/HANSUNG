@@ -3001,7 +3001,7 @@
     for (var i = 0; i < rows.length; i++) {
       var row = rows[i] || emptyClientRow();
       bodyRows += "<tr>";
-      bodyRows += '<td><select class="client-input" data-client-row="' + i + '" data-client-field="supplierMode">' +
+      bodyRows += '<td><select class="client-input client-select" data-client-row="' + i + '" data-client-field="supplierMode">' +
         '<option value="corporate"' + (normalizeSupplierMode(row.supplierMode) === "corporate" ? " selected" : "") + '>법인</option>' +
         '<option value="personal"' + (normalizeSupplierMode(row.supplierMode) === "personal" ? " selected" : "") + '>개인</option>' +
       '</select></td>';
@@ -3019,7 +3019,7 @@
         '<div class="clientdoc-card">' +
           '<div class="clientdoc-head">' +
             '<div class="clientdoc-title">' + icon("building") + ' 업체 리스트</div>' +
-            '<div class="sub">상호 / 사업자등록번호 / 대표자명 / 주소 / 업태 / 종목</div>' +
+            '<div class="sub">맨 왼쪽 구분에서 법인 / 개인 선택</div>' +
           '</div>' +
           '<div class="clientdoc-wrap">' +
             '<table class="clientlist">' +
