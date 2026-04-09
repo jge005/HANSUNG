@@ -81,6 +81,7 @@
   };
   var workGridFields = ["date", "code", "name", "qty", "price", "supply", "tax", "note"];
   var clientGridFields = ["supplierMode", "company", "businessNo", "ceoName", "address", "businessType", "businessItem"];
+  var clientDataFields = ["company", "businessNo", "ceoName", "address", "businessType", "businessItem"];
   var workSheetColumns = [
     { key: "date", label: "일자", width: 88 },
     { key: "code", label: "코드", width: 104 },
@@ -451,7 +452,7 @@
     var normalized = ensureClientRows(rows, minCount || 20);
     while (
       normalized.length < (minCount || 20) ||
-      rowHasAnyValue(normalized[normalized.length - 1], clientGridFields)
+      rowHasAnyValue(normalized[normalized.length - 1], clientDataFields)
     ) {
       normalized.push(emptyClientRow());
     }
