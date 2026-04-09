@@ -743,6 +743,7 @@
     var normalized = Array.isArray(rows) ? rows.slice(0, ROW_COUNT) : [];
     for (var i = 0; i < ROW_COUNT; i++) {
       normalized[i] = Object.assign(emptyRow(), normalized[i] || {});
+      recalculateAmountForRow(normalized, i);
     }
     return normalized;
   }
@@ -958,7 +959,36 @@
       o[key] = nextValue;
       return o;
     })());
+    recalculateAmountForRow(rows, r);
     return rows;
+  }
+
+  function parseCalcNumber(value) {
+    if (value == null) return null;
+    var text = String(value).trim().replace(/,/g, "");
+    if (!text) return null;
+    var num = Number(text);
+    return isFinite(num) ? num : null;
+  }
+
+  function formatAmountValue(value) {
+    if (!isFinite(value)) return "";
+    if (Math.round(value) === value) {
+      return String(value);
+    }
+    return String(Math.round(value * 100) / 100);
+  }
+
+  function recalculateAmountForRow(rows, rowIndex) {
+    if (!rows[rowIndex]) return;
+    var qty = parseCalcNumber(rows[rowIndex].qty);
+    var price = parseCalcNumber(rows[rowIndex].price);
+    rows[rowIndex] = Object.assign({}, rows[rowIndex], {
+      amount:
+        qty != null && price != null
+          ? formatAmountValue(qty * price)
+          : "",
+    });
   }
 
   function normalizeCellValue(colIndex, value) {
