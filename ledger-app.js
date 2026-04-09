@@ -1220,6 +1220,24 @@
       var end = input.selectionEnd != null ? input.selectionEnd : 0;
       var len = input.value.length;
 
+      if (e.key === "F2") {
+        e.preventDefault();
+        if (!engine.editMode) {
+          engine.editSnapshotRows = cloneRowList(getRows());
+          engine.editMode = true;
+          syncInputOverlay();
+        }
+        focusInput();
+        return;
+      }
+
+      if (e.key === "Delete" && engine.selectedKeys.length > 1) {
+        e.preventDefault();
+        engine.editMode = false;
+        clearSelectionCells();
+        return;
+      }
+
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a" && !engine.editMode) {
         e.preventDefault();
         selectAll();
@@ -1527,7 +1545,7 @@
     clientSheetEngine = createSheetEngine({
       idPrefix: "client-grid",
       title: "업체 시트",
-      subtitle: "맨 왼쪽 구분 셀에 법인/개인 입력 또는 붙여넣기",
+      subtitle: "맨 왼쪽 구분 셀에서 법인/개인을 선택하거나 붙여넣기",
       maxHeight: 560,
       minRows: 20,
       columns: clientSheetColumns,
@@ -1535,6 +1553,19 @@
       getRows: function () { return normalizeClientGridRows(clientState.rows, 20); },
       setRows: function (rows) { clientState.rows = normalizeClientGridRows(rows, 20); },
       normalizeRows: function (rows, minCount) { return normalizeClientGridRows(rows, minCount || 20); },
+      getCellEditor: function (rowIndex, colIndex) {
+        var key = clientSheetColumns[colIndex].key;
+        if (key === "supplierMode") {
+          return {
+            type: "select",
+            options: [
+              { value: "corporate", label: "법인" },
+              { value: "personal", label: "개인" }
+            ]
+          };
+        }
+        return null;
+      },
       normalizeValue: function (rowIndex, colIndex, value) {
         var key = clientSheetColumns[colIndex].key;
         if (key === "supplierMode") {
@@ -4372,43 +4403,45 @@
       var body;
       if (state.subTab === "status") {
         body =
-          '<div class="toolbar-card" style="margin-bottom:12px">' +
-          '<label>필터:</label>' +
-          '<select id="status-filter-col"><option value="all">전체</option>' +
-          salesColumns.map(function (col) { return '<option value="' + col.key + '">' + col.label + '</option>'; }).join("") +
-          '</select>' +
-          '<input type="text" class="field" id="status-filter-keyword" style="width:180px;height:36px" placeholder="검색어" />' +
-          '<button type="button" class="soft-btn" id="btn-filter-apply">적용</button>' +
-          '<button type="button" class="soft-btn" id="btn-filter-clear">해제</button>' +
-          '<label style="margin-left:12px">정렬:</label>' +
-          '<select id="status-sort-col">' +
-          salesColumns.map(function (col) { return '<option value="' + col.key + '">' + col.label + '</option>'; }).join("") +
-          '</select>' +
-          '<button type="button" class="soft-btn" id="btn-sort-asc">오름차순</button>' +
-          '<button type="button" class="soft-btn" id="btn-sort-desc">내림차순</button>' +
-          '<button type="button" class="soft-btn" id="btn-sort-reset">입력순</button>' +
-          '</div>' +
-          '<div style="display:flex;justify-content:flex-end;gap:12px;margin-bottom:12px;">' +
-          '<button type="button" class="soft-btn" id="btn-send-to-work">' +
-          icon("arrowRight") +
-          "거래작업으로 보내기" +
-          "</button>" +
-          "</div>" +
-          '<div id="sales-table-host"></div>';
+          '<div class="page-pane">' +
+            '<div class="toolbar-card">' +
+            '<label>필터:</label>' +
+            '<select id="status-filter-col"><option value="all">전체</option>' +
+            salesColumns.map(function (col) { return '<option value="' + col.key + '">' + col.label + '</option>'; }).join("") +
+            '</select>' +
+            '<input type="text" class="field" id="status-filter-keyword" style="width:180px;height:36px" placeholder="검색어" />' +
+            '<button type="button" class="soft-btn" id="btn-filter-apply">적용</button>' +
+            '<button type="button" class="soft-btn" id="btn-filter-clear">해제</button>' +
+            '<label style="margin-left:12px">정렬:</label>' +
+            '<select id="status-sort-col">' +
+            salesColumns.map(function (col) { return '<option value="' + col.key + '">' + col.label + '</option>'; }).join("") +
+            '</select>' +
+            '<button type="button" class="soft-btn" id="btn-sort-asc">오름차순</button>' +
+            '<button type="button" class="soft-btn" id="btn-sort-desc">내림차순</button>' +
+            '<button type="button" class="soft-btn" id="btn-sort-reset">입력순</button>' +
+            '</div>' +
+            '<div class="pane-actions">' +
+            '<button type="button" class="soft-btn" id="btn-send-to-work">' +
+            icon("arrowRight") +
+            "거래작업으로 보내기" +
+            "</button>" +
+            "</div>" +
+            '<div id="sales-table-host"></div>' +
+          '</div>';
       } else if (state.subTab === "work") {
-        body = renderWorkTab();
+        body = '<div class="page-pane">' + renderWorkTab() + '</div>';
       } else if (state.subTab === "statement") {
-        body = renderStatementTab();
+        body = '<div class="page-pane">' + renderStatementTab() + '</div>';
       } else if (state.subTab === "client") {
-        body = renderClientTab();
+        body = '<div class="page-pane">' + renderClientTab() + '</div>';
       } else {
         var lab = salesTabs.find(function (x) {
           return x.key === state.subTab;
         });
         body =
-          '<div class="empty-page">' +
+          '<div class="page-pane"><div class="empty-page">' +
           (lab ? lab.label : state.subTab) +
-          " 페이지 (비워둠)</div>";
+          " 페이지 (비워둠)</div></div>";
       }
 
       app.innerHTML = top + '<div class="content">' + tabs + body + "</div>";

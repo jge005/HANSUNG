@@ -20,13 +20,22 @@
       font-family: "Segoe UI", "Malgun Gothic", system-ui, sans-serif;
       font-size: 14px;
       color: var(--text);
+      overflow: hidden;
+    }
+    #app {
+      min-height: 100vh;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
     }
     .hidden { display: none !important; }
 
     .shell-bg {
       min-height: 100vh;
+      height: 100vh;
       background: linear-gradient(180deg, #fff9ef 0%, #f8f1ff 48%, #eef6ff 100%);
       color: var(--text);
+      overflow: hidden;
     }
 
     .login-wrap {
@@ -145,12 +154,22 @@
     .top-bar {
       display: flex;
       justify-content: space-between;
-      padding: 16px;
+      padding: 12px 16px;
+      flex: 0 0 auto;
     }
-    .content { padding: 0 24px 24px; }
+    .content {
+      padding: 0 16px 16px;
+      height: calc(100vh - 64px);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow: hidden;
+      min-height: 0;
+    }
     .main-pick {
       display: flex;
-      min-height: 70vh;
+      min-height: 0;
+      height: 100%;
       align-items: center;
       justify-content: center;
       gap: 24px;
@@ -176,11 +195,11 @@
       align-items: center;
       flex-wrap: wrap;
       gap: 12px;
-      margin-bottom: 16px;
-      padding: 16px;
+      padding: 12px;
       border-radius: 16px;
       background: #fff;
       box-shadow: 0 1px 6px rgba(0, 0, 0, 0.06);
+      flex: 0 0 auto;
     }
     .toolbar-card label { font-size: 14px; font-weight: 500; color: var(--muted2); }
     .toolbar-card select {
@@ -190,7 +209,21 @@
       font-size: 14px;
       outline: none;
     }
-    .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+    .tabs { display: flex; flex-wrap: wrap; gap: 8px; flex: 0 0 auto; }
+    .page-pane {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .pane-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+      margin-bottom: 10px;
+      flex: 0 0 auto;
+    }
     .sub-tab {
       display: inline-flex;
       align-items: center;
@@ -211,7 +244,8 @@
     }
     .empty-page {
       display: flex;
-      height: 520px;
+      height: 100%;
+      min-height: 0;
       align-items: center;
       justify-content: center;
       border-radius: 16px;
@@ -230,9 +264,13 @@
 
     /* Sales table */
     .st-wrap {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      min-height: 0;
       border-radius: 16px;
       background: #fff;
-      padding: 16px;
+      padding: 12px;
       box-shadow: 0 1px 6px rgba(0, 0, 0, 0.06);
     }
     .st-toolbar {
@@ -249,7 +287,8 @@
       font-weight: 700;
     }
     .st-scroll {
-      max-height: 600px;
+      flex: 1;
+      min-height: 0;
       overflow: auto;
       border-radius: 12px;
       border: 1px solid #e9def5;
@@ -437,6 +476,8 @@
       display: flex;
       flex-direction: column;
       gap: 12px;
+      flex: 1;
+      min-height: 0;
     }
     .workdoc-top {
       display: grid;
@@ -449,6 +490,12 @@
       background: rgba(255, 255, 255, 0.95);
       box-shadow: 0 1px 6px rgba(0, 0, 0, 0.06);
       padding: 12px;
+    }
+    .workdoc > .workdoc-card:last-child {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
     }
     .workdoc-head {
       display: flex;
@@ -542,7 +589,9 @@
       border: 1px solid #e9def5;
       overflow: auto;
       background: #fff;
-      max-height: calc(100vh - 310px);
+      flex: 1;
+      min-height: 0;
+      max-height: none;
     }
     table.items {
       width: 100%;
@@ -590,8 +639,14 @@
       display: flex;
       flex-direction: column;
       gap: 12px;
+      flex: 1;
+      min-height: 0;
     }
     .clientdoc-card {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
       border-radius: 12px;
       background: rgba(255, 255, 255, 0.96);
       box-shadow: 0 1px 6px rgba(0, 0, 0, 0.06);
@@ -670,21 +725,25 @@
       display: flex;
       justify-content: flex-end;
       gap: 12px;
-      margin-bottom: 16px;
+      flex: 0 0 auto;
     }
     .statement-page {
       width: 210mm;
-      min-height: 297mm;
+      max-width: 100%;
+      min-height: 0;
+      height: 100%;
       margin: 0 auto;
       padding: 3mm 4mm;
       background: #fff;
       box-shadow: 0 8px 28px rgba(0, 0, 0, 0.08);
+      overflow: hidden;
     }
     .statement-stack {
       display: grid;
       grid-template-rows: 1fr 1fr;
       gap: 3mm;
-      min-height: calc(297mm - 6mm);
+      height: 100%;
+      min-height: 0;
       position: relative;
       align-content: center;
     }
@@ -709,6 +768,19 @@
       position: relative;
       z-index: 1;
       background: #fff;
+    }
+    .statement-print-root {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+    }
+    #sales-table-host,
+    #work-grid-host,
+    #client-grid-host {
+      display: flex;
+      flex: 1;
+      min-height: 0;
     }
     .statement-copy.red {
       --statement-color: #ff3434;

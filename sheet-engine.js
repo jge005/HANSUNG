@@ -63,11 +63,15 @@
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;");
   }
+  function escapeAttr(s) {
+    return escapeHtml(s).replace(/"/g, "&quot;");
+  }
   function createMiniSheetEngine(options) {
     var engine = {
       host: null,
       scrollEl: null,
       inputEl: null,
+      selectEl: null,
       selectedCell: { row: 0, col: 0 },
       selectedKeys: ["0:0"],
       prevSelectedKeys: [],
@@ -144,6 +148,32 @@
         return options.formatValue(r, c, raw, getRows());
       }
       return raw;
+    }
+
+    function getCellEditor(r, c) {
+      if (typeof options.getCellEditor === "function") {
+        return options.getCellEditor(r, c, getRows()) || null;
+      }
+      return null;
+    }
+
+    function isSelectEditor(r, c) {
+      var editor = getCellEditor(r, c);
+      return !!(editor && editor.type === "select" && Array.isArray(editor.options));
+    }
+
+    function populateSelectOptions(r, c) {
+      if (!engine.selectEl) return;
+      var editor = getCellEditor(r, c);
+      if (!editor || editor.type !== "select" || !Array.isArray(editor.options)) return;
+      var currentValue = getRawValue(r, c);
+      engine.selectEl.innerHTML = editor.options.map(function (item) {
+        var option = typeof item === "string"
+          ? { value: item, label: item }
+          : { value: item.value, label: item.label || item.value };
+        return '<option value="' + escapeAttr(option.value) + '">' + escapeHtml(option.label) + '</option>';
+      }).join("");
+      engine.selectEl.value = currentValue;
     }
 
     function setRawValue(rows, r, c, value) {
@@ -302,6 +332,9 @@
       engine.inputEl.type = "text";
       engine.inputEl.setAttribute("spellcheck", "false");
       engine.inputEl.className = "st-input no-edit";
+      engine.selectEl = document.createElement("select");
+      engine.selectEl.className = "st-input st-select";
+      engine.selectEl.style.display = "none";
       moveInputToCell(engine.selectedCell.row, engine.selectedCell.col);
 
       engine.scrollEl.addEventListener("keydown", onTableKeyDown);
@@ -363,13 +396,33 @@
         }
       });
       updateSelectionUI();
+      engine.selectEl.addEventListener("change", function (e) {
+        if (!engine.editMode) {
+          engine.editSnapshotRows = cloneRowList(getRows());
+          engine.editMode = true;
+        }
+        setValue(engine.selectedCell.row, engine.selectedCell.col, e.target.value);
+        commitActiveCellValue();
+        engine.editMode = false;
+        syncInputOverlay();
+        updateSelectionUI();
+        focusInput();
+      });
+      engine.selectEl.addEventListener("keydown", onInputKeyDown);
+      engine.selectEl.addEventListener("blur", function () {
+        if (engine.editMode) {
+          commitActiveCellValue();
+          engine.editMode = false;
+          syncInputOverlay();
+        }
+      });
       syncInputOverlay();
       focusInput();
     }
 
     function moveInputToCell(r, c) {
       if (!engine.host || !engine.inputEl) return;
-      var prevTd = engine.inputEl.closest("td");
+      var prevTd = engine.inputEl.closest("td") || (engine.selectEl ? engine.selectEl.closest("td") : null);
       if (prevTd) {
         var prevDisp = prevTd.querySelector(".st-display");
         var prevGhost = prevTd.querySelector(".st-ghost");
@@ -391,6 +444,9 @@
       var disp = td.querySelector(".st-display");
       if (disp) disp.style.display = "none";
       inner.appendChild(engine.inputEl);
+      if (engine.selectEl && engine.selectEl.parentNode === inner) {
+        inner.removeChild(engine.selectEl);
+      }
       engine.inputEl.value = getRawValue(r, c);
       syncInputOverlay();
     }
@@ -404,14 +460,30 @@
       var inner = td.querySelector(".st-cell-inner");
       var ghost = inner.querySelector(".st-ghost");
       var raw = getRawValue(r, c);
+      var useSelect = engine.editMode && isSelectEditor(r, c);
+      if (useSelect && engine.selectEl.parentNode !== inner) {
+        inner.appendChild(engine.selectEl);
+      } else if (!useSelect && engine.inputEl.parentNode !== inner) {
+        inner.appendChild(engine.inputEl);
+      }
       engine.inputEl.value = raw;
       if (engine.editMode) {
-        engine.inputEl.classList.remove("no-edit");
+        if (useSelect) {
+          populateSelectOptions(r, c);
+          engine.inputEl.style.display = "none";
+          engine.selectEl.style.display = "";
+        } else {
+          engine.selectEl.style.display = "none";
+          engine.inputEl.style.display = "";
+          engine.inputEl.classList.remove("no-edit");
+        }
         if (ghost) {
           ghost.textContent = "";
           ghost.style.display = "none";
         }
       } else {
+        engine.selectEl.style.display = "none";
+        engine.inputEl.style.display = "";
         engine.inputEl.classList.add("no-edit");
         if (ghost) {
           ghost.textContent = getDisplayValue(r, c);
@@ -428,6 +500,11 @@
       requestAnimationFrame(function () {
         if (!engine.inputEl) return;
         if (engine.scrollEl) engine.scrollEl.focus();
+        if (engine.editMode && isSelectEditor(engine.selectedCell.row, engine.selectedCell.col)) {
+          populateSelectOptions(engine.selectedCell.row, engine.selectedCell.col);
+          engine.selectEl.focus();
+          return;
+        }
         engine.inputEl.focus();
         var len = engine.inputEl.value.length;
         if (engine.editMode) engine.inputEl.setSelectionRange(len, len);
@@ -784,6 +861,24 @@
       var start = input.selectionStart != null ? input.selectionStart : 0;
       var end = input.selectionEnd != null ? input.selectionEnd : 0;
       var len = input.value.length;
+
+      if (e.key === "F2") {
+        e.preventDefault();
+        if (!engine.editMode) {
+          engine.editSnapshotRows = cloneRowList(getRows());
+          engine.editMode = true;
+          syncInputOverlay();
+        }
+        focusInput();
+        return;
+      }
+
+      if (e.key === "Delete" && engine.selectedKeys.length > 1) {
+        e.preventDefault();
+        engine.editMode = false;
+        clearSelectionCells();
+        return;
+      }
 
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a" && !engine.editMode) {
         e.preventDefault();
