@@ -79,6 +79,8 @@
   var clientState = {
     rows: [],
   };
+  var workGridFields = ["date", "code", "name", "qty", "price", "supply", "tax", "note"];
+  var clientGridFields = ["supplierMode", "company", "businessNo", "ceoName", "address", "businessType", "businessItem"];
 
   var app = document.getElementById("app");
 
@@ -293,6 +295,13 @@
     return value === "personal" ? "personal" : "corporate";
   }
 
+  function parseSupplierModeLabel(value) {
+    var text = String(value || "").trim().toLowerCase();
+    if (text === "개인" || text === "personal") return "personal";
+    if (text === "법인" || text === "corporate") return "corporate";
+    return "";
+  }
+
   function getCurrentSupplierInfo() {
     var info = ensureWorkInfoShape();
     return info.supplierProfiles[getCurrentSupplierMode()];
@@ -324,6 +333,73 @@
       normalized[i] = Object.assign(emptyClientRow(), normalized[i] || {});
     }
     return normalized;
+  }
+
+  function parseClipboardGrid(text) {
+    var normalized = String(text || "").replace(/\r/g, "");
+    var lines = normalized.split("\n");
+    if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+    return lines.map(function (line) {
+      return line.split("\t");
+    });
+  }
+
+  function pasteGridIntoWorkItems(text, startRow, startField) {
+    var grid = parseClipboardGrid(text);
+    if (!grid.length) return false;
+    var startCol = workGridFields.indexOf(startField);
+    if (startCol < 0) return false;
+
+    var rows = cloneItems(workState.items);
+    var needed = startRow + grid.length;
+    while (rows.length < needed) rows.push({});
+
+    grid.forEach(function (line, rowOffset) {
+      var rowIndex = startRow + rowOffset;
+      if (!rows[rowIndex]) rows[rowIndex] = {};
+      line.forEach(function (value, colOffset) {
+        var field = workGridFields[startCol + colOffset];
+        if (!field) return;
+        rows[rowIndex][field] = value;
+      });
+    });
+
+    workState.items = rows;
+    scheduleLedgerDraftSave();
+    render();
+    return true;
+  }
+
+  function pasteGridIntoClientRows(text, startRow, startField) {
+    var grid = parseClipboardGrid(text);
+    if (!grid.length) return false;
+
+    var startCol = clientGridFields.indexOf(startField);
+    if (startCol < 0) return false;
+
+    if (startField === "supplierMode") {
+      var firstMode = grid[0] && grid[0].length ? parseSupplierModeLabel(grid[0][0]) : "";
+      if (!firstMode) startCol = 1;
+    }
+
+    var rows = ensureClientRows(clientState.rows, startRow + grid.length + 1);
+    grid.forEach(function (line, rowOffset) {
+      var rowIndex = startRow + rowOffset;
+      if (!rows[rowIndex]) rows[rowIndex] = emptyClientRow();
+      line.forEach(function (value, colOffset) {
+        var field = clientGridFields[startCol + colOffset];
+        if (!field) return;
+        rows[rowIndex][field] =
+          field === "supplierMode"
+            ? (parseSupplierModeLabel(value) || rows[rowIndex][field] || "corporate")
+            : value;
+      });
+    });
+
+    clientState.rows = ensureClientRows(rows, rows.length);
+    scheduleLedgerDraftSave();
+    render();
+    return true;
   }
 
   function ensureDraftId() {
@@ -3398,6 +3474,15 @@
           });
         });
         app.querySelectorAll('input[data-work-row]').forEach(function (inp) {
+          inp.addEventListener("paste", function (e) {
+            var r = Number(inp.getAttribute("data-work-row"));
+            var f = inp.getAttribute("data-work-field");
+            if (isNaN(r) || !f) return;
+            var text = e.clipboardData.getData("text/plain") || e.clipboardData.getData("text");
+            if (!text || (text.indexOf("\t") < 0 && text.indexOf("\n") < 0)) return;
+            e.preventDefault();
+            pasteGridIntoWorkItems(text, r, f);
+          });
           inp.addEventListener("input", function () {
             var r = Number(inp.getAttribute("data-work-row"));
             var f = inp.getAttribute("data-work-field");
@@ -3430,7 +3515,7 @@
           if (!wasClientLoaded && state.subTab === "client") render();
         });
         app.querySelectorAll('[data-client-row]').forEach(function (inp) {
-          inp.addEventListener("input", function () {
+          function onClientFieldChange() {
             var r = Number(inp.getAttribute("data-client-row"));
             var f = inp.getAttribute("data-client-field");
             if (isNaN(r) || !f) return;
@@ -3450,7 +3535,22 @@
             }
 
             scheduleLedgerDraftSave();
-          });
+          }
+
+          if (inp.tagName === "INPUT") {
+            inp.addEventListener("paste", function (e) {
+              var r = Number(inp.getAttribute("data-client-row"));
+              var f = inp.getAttribute("data-client-field");
+              if (isNaN(r) || !f) return;
+              var text = e.clipboardData.getData("text/plain") || e.clipboardData.getData("text");
+              if (!text || (text.indexOf("\t") < 0 && text.indexOf("\n") < 0)) return;
+              e.preventDefault();
+              pasteGridIntoClientRows(text, r, f);
+            });
+          }
+
+          inp.addEventListener("input", onClientFieldChange);
+          inp.addEventListener("change", onClientFieldChange);
         });
       }
       return;
