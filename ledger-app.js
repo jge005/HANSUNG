@@ -81,7 +81,7 @@
   };
   var workGridFields = ["date", "code", "name", "qty", "price", "supply", "tax", "note"];
   var clientGridFields = ["supplierMode", "company", "businessNo", "ceoName", "address", "businessType", "businessItem"];
-  var clientDataFields = ["company", "businessNo", "ceoName", "address", "businessType", "businessItem"];
+  var clientDataFields = ["supplierMode", "company", "businessNo", "ceoName", "address", "businessType", "businessItem"];
   var workSheetColumns = [
     { key: "date", label: "일자", width: 88 },
     { key: "code", label: "코드", width: 104 },
@@ -474,8 +474,11 @@
     var normalized = trimTrailingRows(rows, clientDataFields, minCount || 20, emptyClientRow);
     normalized = ensureClientRows(normalized, minCount || 20);
     return normalized.map(function (row) {
-      row.supplierMode = rowHasAnyValue(row, clientDataFields)
-        ? (normalizeSupplierMode(row.supplierMode) || "corporate")
+      var hasAnyClientValue = rowHasAnyValue(row, clientDataFields);
+      var hasClientInfo = rowHasAnyValue(row, ["company", "businessNo", "ceoName", "address", "businessType", "businessItem"]);
+      var normalizedMode = normalizeSupplierMode(row.supplierMode);
+      row.supplierMode = hasAnyClientValue
+        ? (normalizedMode || (hasClientInfo ? "corporate" : ""))
         : "";
       return row;
     });

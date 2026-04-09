@@ -1243,8 +1243,13 @@
         moveInputToCell(current.row, current.col);
       });
       window.addEventListener("mouseup", function () {
+        var hadDrag = engine.dragging;
+        var hadResize = !!engine.resizing;
         engine.dragging = false;
         engine.resizing = null;
+        if (hadDrag || hadResize) {
+          focusInput();
+        }
       });
       document.addEventListener("mousedown", function (e) {
         var rowResizer = e.target.closest && e.target.closest("[data-mini-row-resizer]");
