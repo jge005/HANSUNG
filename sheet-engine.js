@@ -357,6 +357,7 @@
       engine.scrollEl.addEventListener("paste", onPaste);
 
       engine.host.querySelector("tbody").addEventListener("mousedown", onCellMouseDown);
+      engine.host.querySelector("tbody").addEventListener("click", onCellClick);
       engine.host.querySelector("tbody").addEventListener("dblclick", onCellDblClick);
       engine.host.querySelector("thead").addEventListener("mousedown", onHeadMouseDown);
       engine.host.querySelector("thead").addEventListener("dblclick", onHeadDoubleClick);
@@ -374,6 +375,10 @@
           updateSelectionUI();
         });
         selectEl.addEventListener("keydown", function (e) {
+          if (e.key === "F2") {
+            e.preventDefault();
+            return;
+          }
           if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
             e.preventDefault();
             copySelectionAsync();
@@ -1141,6 +1146,26 @@
       moveInputToCell(row, col);
       syncEditOrigin();
       focusInput();
+    }
+
+    function onCellClick(e) {
+      var td = e.target.closest("td[data-r]");
+      if (!td) return;
+      if (e.target.closest("[data-inline-select]")) return;
+      var row = Number(td.getAttribute("data-r"));
+      var col = Number(td.getAttribute("data-c"));
+      var key = cellKey(row, col);
+      if (
+        !engine.dragging &&
+        !engine.editMode &&
+        !isSelectEditor(row, col) &&
+        engine.selectedKeys.length === 1 &&
+        engine.selectedKeys[0] === key &&
+        engine.selectedCell.row === row &&
+        engine.selectedCell.col === col
+      ) {
+        activateEditorForCell(row, col);
+      }
     }
 
     function onCellDblClick(e) {
