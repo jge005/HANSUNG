@@ -448,14 +448,29 @@
     return normalized;
   }
 
-  function normalizeClientGridRows(rows, minCount) {
-    var normalized = ensureClientRows(rows, minCount || 20);
-    while (
-      normalized.length < (minCount || 20) ||
-      rowHasAnyValue(normalized[normalized.length - 1], clientDataFields)
-    ) {
-      normalized.push(emptyClientRow());
+  function trimTrailingRows(rows, dataFields, minCount, factory) {
+    var normalized = Array.isArray(rows)
+      ? rows.map(function (row) { return Object.assign({}, row || {}); })
+      : [];
+    var lastUsed = -1;
+    for (var i = normalized.length - 1; i >= 0; i--) {
+      if (rowHasAnyValue(normalized[i], dataFields)) {
+        lastUsed = i;
+        break;
+      }
     }
+    var target = Math.max(minCount || 0, lastUsed + 2);
+    if (!target) return [];
+    normalized = normalized.slice(0, target);
+    while (normalized.length < target) {
+      normalized.push(factory());
+    }
+    return normalized;
+  }
+
+  function normalizeClientGridRows(rows, minCount) {
+    var normalized = trimTrailingRows(rows, clientDataFields, minCount || 20, emptyClientRow);
+    normalized = ensureClientRows(normalized, minCount || 20);
     return normalized.map(function (row) {
       row.supplierMode = normalizeSupplierMode(row.supplierMode);
       return row;
@@ -1482,16 +1497,18 @@
 
   function getLedgerPayload() {
     var storedRowCount = getStoredRowCount();
+    var trimmedWorkItems = trimTrailingRows(workState.items, workGridFields, 12, function () { return {}; });
+    var trimmedClientRows = normalizeClientGridRows(clientState.rows, 20);
     return {
       statusRows: normalizeSalesRows(ST.rows, storedRowCount).slice(0, storedRowCount),
-      workItems: cloneItems(workState.items),
+      workItems: cloneItems(trimmedWorkItems),
       workInfo: cloneWorkInfo(workState.info),
-      clientRows: cloneClientRows(clientState.rows),
+      clientRows: cloneClientRows(trimmedClientRows),
       sheetLayout: {
         colWidths: ST.colWidths.slice(),
         rowHeights: ST.rowHeights.slice(0, storedRowCount),
       },
-      items: cloneItems(workState.items),
+      items: cloneItems(trimmedWorkItems),
       updatedAt: new Date().toISOString(),
     };
   }
@@ -1505,9 +1522,9 @@
     }
 
     if (Array.isArray(data.workItems)) {
-      workState.items = cloneItems(data.workItems);
+      workState.items = trimTrailingRows(data.workItems, workGridFields, 12, function () { return {}; });
     } else if (Array.isArray(data.items)) {
-      workState.items = cloneItems(data.items);
+      workState.items = trimTrailingRows(data.items, workGridFields, 12, function () { return {}; });
     }
 
     if (data.workInfo && typeof data.workInfo === "object") {
@@ -1515,7 +1532,7 @@
     }
 
     if (Array.isArray(data.clientRows)) {
-      clientState.rows = ensureClientRows(data.clientRows, 20);
+      clientState.rows = normalizeClientGridRows(data.clientRows, 20);
     }
 
     if (data.sheetLayout && typeof data.sheetLayout === "object") {
@@ -4106,27 +4123,7 @@
   }
 
   function renderClientTab() {
-    // 업체리스트: 왼쪽 첫 열에서 법인/개인 구분 선택
-    var rows = ensureClientRows(clientState.rows, 20);
-    clientState.rows = rows;
-    var bodyRows = "";
-
-    for (var i = 0; i < rows.length; i++) {
-      var row = rows[i] || emptyClientRow();
-      bodyRows += "<tr>";
-      bodyRows += '<td><select class="client-input client-select" data-client-row="' + i + '" data-client-field="supplierMode">' +
-        '<option value="corporate"' + (normalizeSupplierMode(row.supplierMode) === "corporate" ? " selected" : "") + '>법인</option>' +
-        '<option value="personal"' + (normalizeSupplierMode(row.supplierMode) === "personal" ? " selected" : "") + '>개인</option>' +
-      '</select></td>';
-      bodyRows += '<td><input class="client-input" type="text" data-client-row="' + i + '" data-client-field="company" value="' + escapeAttr(row.company) + '" /></td>';
-      bodyRows += '<td><input class="client-input" type="text" data-client-row="' + i + '" data-client-field="businessNo" value="' + escapeAttr(row.businessNo) + '" /></td>';
-      bodyRows += '<td><input class="client-input" type="text" data-client-row="' + i + '" data-client-field="ceoName" value="' + escapeAttr(row.ceoName) + '" /></td>';
-      bodyRows += '<td><input class="client-input" type="text" data-client-row="' + i + '" data-client-field="address" value="' + escapeAttr(row.address) + '" /></td>';
-      bodyRows += '<td><input class="client-input" type="text" data-client-row="' + i + '" data-client-field="businessType" value="' + escapeAttr(row.businessType) + '" /></td>';
-      bodyRows += '<td><input class="client-input" type="text" data-client-row="' + i + '" data-client-field="businessItem" value="' + escapeAttr(row.businessItem) + '" /></td>';
-      bodyRows += "</tr>";
-    }
-
+    clientState.rows = normalizeClientGridRows(clientState.rows, 20);
     return (
       '<div class="clientdoc">' +
         '<div class="clientdoc-card">' +
