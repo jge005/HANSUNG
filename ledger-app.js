@@ -2499,21 +2499,22 @@
       var nameClass = "item-name";
       var codeClass = "item-code";
       var noteClass = "item-note";
-      if (String(nameText).length > 38) nameClass += " tighter";
-      else if (String(nameText).length > 24) nameClass += " tight";
+      if (String(nameText).length > 42) nameClass += " tightest";
+      else if (String(nameText).length > 34) nameClass += " tighter";
+      else if (String(nameText).length > 22) nameClass += " tight";
       if (String(codeText).length > 14) codeClass += " tighter";
       else if (String(codeText).length > 10) codeClass += " tight";
       if (String(noteText).length > 14) noteClass += " tighter";
       else if (String(noteText).length > 10) noteClass += " tight";
       rows += "<tr>";
-      rows += statementCell(formatStatementItemDate(item.date || ""), "center");
+      rows += statementCell(formatStatementItemDate(item.date || ""), "item-date center");
       rows += statementCell(nameText, nameClass);
       rows += statementCell(codeText, codeClass);
       rows += statementCell(noteText, noteClass);
-      rows += statementCell(formatDisplayNumber(item.qty), "right");
-      rows += statementCell(formatDisplayNumber(item.price), "right");
-      rows += statementCell(formatDisplayNumber(item.supply), "right");
-      rows += statementCell(formatDisplayNumber(item.tax), "right");
+      rows += statementCell(formatDisplayNumber(item.qty), "item-num right");
+      rows += statementCell(formatDisplayNumber(item.price), "item-num right");
+      rows += statementCell(formatDisplayNumber(item.supply), "item-num right");
+      rows += statementCell(formatDisplayNumber(item.tax), "item-num right");
       rows += "</tr>";
     }
     return rows;
@@ -2616,13 +2617,13 @@
             '<col style="width:10%" />' +
             '<col style="width:13%" />' +
           '</colgroup>' +
-          '<tbody><tr>' +
+            '<tbody><tr>' +
             statementHead("공급가액", "center") +
-            statementCell(formatDisplayNumber(totals.supply), "right") +
+            statementCell(formatDisplayNumber(totals.supply), "statement-value right") +
             statementHead("세액", "center") +
-            statementCell(formatDisplayNumber(totals.tax), "right") +
+            statementCell(formatDisplayNumber(totals.tax), "statement-value right") +
             statementHead("합계", "center") +
-            statementCell(formatDisplayNumber(totals.grand), "right") +
+            statementCell(formatDisplayNumber(totals.grand), "statement-value right") +
             statementHead("인수자", "center") +
             statementCell("", "center") +
           '</tr></tbody>' +
