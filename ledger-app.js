@@ -224,6 +224,28 @@
     };
   }
 
+  function defaultCorporateSupplierInfo() {
+    return {
+      company: "주식회사 한성엔터프라이즈",
+      ceo: "김두식",
+      businessNo: "361-81-01922",
+      address: "경기도 부천시 석천로 380번길 17-7",
+      businessType: "제조",
+      businessItem: "전자부품 제조업",
+    };
+  }
+
+  function defaultPersonalSupplierInfo() {
+    return {
+      company: "한성엔터프라이즈",
+      ceo: "김두식",
+      businessNo: "128-22-30482",
+      address: "경기도 부천시 석천로 380번길 17-7",
+      businessType: "제조",
+      businessItem: "전자부품, 임가공",
+    };
+  }
+
   function ensureWorkInfoShape() {
     if (!workState.info || typeof workState.info !== "object") {
       workState.info = {};
@@ -232,17 +254,17 @@
     var info = workState.info;
     if (!info.supplierProfiles || typeof info.supplierProfiles !== "object") {
       info.supplierProfiles = {
-        corporate: emptySupplierInfo(),
-        personal: emptySupplierInfo(),
+        corporate: defaultCorporateSupplierInfo(),
+        personal: defaultPersonalSupplierInfo(),
       };
     }
 
     info.supplierProfiles.corporate = Object.assign(
-      emptySupplierInfo(),
+      defaultCorporateSupplierInfo(),
       info.supplierProfiles.corporate || {}
     );
     info.supplierProfiles.personal = Object.assign(
-      emptySupplierInfo(),
+      defaultPersonalSupplierInfo(),
       info.supplierProfiles.personal || {}
     );
 
@@ -267,6 +289,10 @@
     return ensureWorkInfoShape().supplierMode;
   }
 
+  function normalizeSupplierMode(value) {
+    return value === "personal" ? "personal" : "corporate";
+  }
+
   function getCurrentSupplierInfo() {
     var info = ensureWorkInfoShape();
     return info.supplierProfiles[getCurrentSupplierMode()];
@@ -274,6 +300,7 @@
 
   function emptyClientRow() {
     return {
+      supplierMode: "corporate",
       company: "",
       businessNo: "",
       ceoName: "",
@@ -2553,6 +2580,30 @@
     cur[parts[parts.length - 1]] = value;
   }
 
+  function findClientRowByCompany(company) {
+    var target = String(company || "").trim();
+    if (!target) return null;
+    for (var i = 0; i < clientState.rows.length; i++) {
+      var row = clientState.rows[i] || {};
+      if (String(row.company || "").trim() === target) return row;
+    }
+    return null;
+  }
+
+  function applyClientToWorkInfo(clientRow) {
+    if (!clientRow) return;
+    ensureWorkInfoShape();
+    workState.info.receiver = Object.assign({}, workState.info.receiver || {}, {
+      company: clientRow.company || "",
+      ceo: clientRow.ceoName || "",
+      businessNo: clientRow.businessNo || "",
+      address: clientRow.address || "",
+      businessType: clientRow.businessType || "",
+      businessItem: clientRow.businessItem || "",
+    });
+    workState.info.supplierMode = normalizeSupplierMode(clientRow.supplierMode);
+  }
+
   function formatBusinessNo(value) {
     var digits = String(value || "").replace(/\D/g, "");
     if (digits.length !== 10) return value == null ? "" : String(value);
@@ -2950,6 +3001,10 @@
     for (var i = 0; i < rows.length; i++) {
       var row = rows[i] || emptyClientRow();
       bodyRows += "<tr>";
+      bodyRows += '<td><select class="client-input" data-client-row="' + i + '" data-client-field="supplierMode">' +
+        '<option value="corporate"' + (normalizeSupplierMode(row.supplierMode) === "corporate" ? " selected" : "") + '>법인</option>' +
+        '<option value="personal"' + (normalizeSupplierMode(row.supplierMode) === "personal" ? " selected" : "") + '>개인</option>' +
+      '</select></td>';
       bodyRows += '<td><input class="client-input" type="text" data-client-row="' + i + '" data-client-field="company" value="' + escapeAttr(row.company) + '" /></td>';
       bodyRows += '<td><input class="client-input" type="text" data-client-row="' + i + '" data-client-field="businessNo" value="' + escapeAttr(row.businessNo) + '" /></td>';
       bodyRows += '<td><input class="client-input" type="text" data-client-row="' + i + '" data-client-field="ceoName" value="' + escapeAttr(row.ceoName) + '" /></td>';
@@ -2969,6 +3024,7 @@
           '<div class="clientdoc-wrap">' +
             '<table class="clientlist">' +
               '<thead><tr>' +
+                '<th class="client-col-mode">구분</th>' +
                 '<th class="client-col-name">상호</th>' +
                 '<th class="client-col-biz">사업자등록번호</th>' +
                 '<th class="client-col-ceo">대표자명</th>' +
@@ -3026,6 +3082,25 @@
     });
 
     workState.items = items;
+    var firstClientName = "";
+    for (var ri = 0; ri < rows.length; ri++) {
+      var selectedRow = ST.rows[rows[ri]] || emptyRow();
+      if (selectedRow.client && String(selectedRow.client).trim() !== "") {
+        firstClientName = String(selectedRow.client).trim();
+        break;
+      }
+    }
+    if (firstClientName) {
+      var matchedClient = findClientRowByCompany(firstClientName);
+      if (matchedClient) {
+        applyClientToWorkInfo(matchedClient);
+      } else {
+        ensureWorkInfoShape();
+        workState.info.receiver = Object.assign({}, workState.info.receiver || {}, {
+          company: firstClientName,
+        });
+      }
+    }
 
     // 5) 거래작업 탭으로 이동 + 복사본 렌더링
     //    (동시에 로컬 백업/Firebase에도 “복사본” 저장)
@@ -3310,6 +3385,15 @@
             var path = inp.getAttribute("data-work-info");
             if (!path) return;
             setWorkInfoValue(path, inp.value);
+            if (path === "receiver.company") {
+              var matchedClient = findClientRowByCompany(inp.value);
+              if (matchedClient) {
+                applyClientToWorkInfo(matchedClient);
+                scheduleLedgerDraftSave();
+                render();
+                return;
+              }
+            }
             scheduleLedgerDraftSave();
           });
         });
@@ -3345,13 +3429,14 @@
         ensureLedgerLoadedFromFirebase().then(function () {
           if (!wasClientLoaded && state.subTab === "client") render();
         });
-        app.querySelectorAll('input[data-client-row]').forEach(function (inp) {
+        app.querySelectorAll('[data-client-row]').forEach(function (inp) {
           inp.addEventListener("input", function () {
             var r = Number(inp.getAttribute("data-client-row"));
             var f = inp.getAttribute("data-client-field");
             if (isNaN(r) || !f) return;
             if (!clientState.rows[r]) clientState.rows[r] = emptyClientRow();
-            clientState.rows[r][f] = inp.value;
+            clientState.rows[r][f] =
+              f === "supplierMode" ? normalizeSupplierMode(inp.value) : inp.value;
 
             var hasAnyValue = Object.keys(clientState.rows[clientState.rows.length - 1] || {}).some(function (key) {
               return clientState.rows[clientState.rows.length - 1][key] != null &&
