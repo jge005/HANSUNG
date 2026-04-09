@@ -314,7 +314,9 @@
   }
 
   function normalizeSupplierMode(value) {
-    return value === "personal" ? "personal" : "corporate";
+    if (value === "personal") return "personal";
+    if (value === "corporate") return "corporate";
+    return "";
   }
 
   function parseSupplierModeLabel(value) {
@@ -331,7 +333,7 @@
 
   function emptyClientRow() {
     return {
-      supplierMode: "corporate",
+      supplierMode: "",
       company: "",
       businessNo: "",
       ceoName: "",
@@ -472,7 +474,9 @@
     var normalized = trimTrailingRows(rows, clientDataFields, minCount || 20, emptyClientRow);
     normalized = ensureClientRows(normalized, minCount || 20);
     return normalized.map(function (row) {
-      row.supplierMode = normalizeSupplierMode(row.supplierMode);
+      row.supplierMode = rowHasAnyValue(row, clientDataFields)
+        ? (normalizeSupplierMode(row.supplierMode) || "corporate")
+        : "";
       return row;
     });
   }
@@ -855,6 +859,14 @@
         normalized = options.normalizeValue(row, col, current, getRows());
       }
       if (normalized === current) {
+        if (
+          engine.editSnapshotRows &&
+          JSON.stringify(engine.editSnapshotRows) !== JSON.stringify(getRows())
+        ) {
+          engine.undoStack.push(engine.editSnapshotRows);
+          if (engine.undoStack.length > 200) engine.undoStack.shift();
+          engine.redoStack = [];
+        }
         engine.editSnapshotRows = null;
         return;
       }
@@ -1168,6 +1180,51 @@
       var start = input.selectionStart != null ? input.selectionStart : 0;
       var end = input.selectionEnd != null ? input.selectionEnd : 0;
       var len = input.value.length;
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a" && !engine.editMode) {
+        e.preventDefault();
+        selectAll();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c" && !engine.editMode) {
+        e.preventDefault();
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(getSelectionText()).catch(function () {});
+        }
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "x" && !engine.editMode) {
+        e.preventDefault();
+        cutSelectionAsync();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v" && !engine.editMode) {
+        e.preventDefault();
+        if (navigator.clipboard && navigator.clipboard.readText) {
+          navigator.clipboard.readText().then(pasteTextIntoSelection).catch(function () {});
+        }
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        var prev = engine.undoStack.pop();
+        if (!prev) return;
+        engine.redoStack.push(cloneRowList(getRows()));
+        options.setRows(options.normalizeRows ? options.normalizeRows(prev) : prev);
+        if (typeof options.onRowsChange === "function") options.onRowsChange(getRows());
+        refreshGridValues();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        var next = engine.redoStack.pop();
+        if (!next) return;
+        engine.undoStack.push(cloneRowList(getRows()));
+        options.setRows(options.normalizeRows ? options.normalizeRows(next) : next);
+        if (typeof options.onRowsChange === "function") options.onRowsChange(getRows());
+        refreshGridValues();
+        return;
+      }
       if (engine.isComposing || e.isComposing) return;
       if (!engine.editMode) {
         if (e.key === "Delete") {
@@ -1442,7 +1499,10 @@
       normalizeRows: function (rows, minCount) { return normalizeClientGridRows(rows, minCount || 20); },
       normalizeValue: function (rowIndex, colIndex, value) {
         var key = clientSheetColumns[colIndex].key;
-        if (key === "supplierMode") return parseSupplierModeLabel(value) || normalizeSupplierMode(value);
+        if (key === "supplierMode") {
+          var parsed = parseSupplierModeLabel(value);
+          return parsed || (String(value || "").trim() ? "corporate" : "");
+        }
         return value;
       },
       formatValue: function (rowIndex, colIndex, raw) {
