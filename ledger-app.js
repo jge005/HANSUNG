@@ -1442,10 +1442,12 @@
   }
 
   function attachWorkGridWhenNeeded(container) {
+    if (!container) return;
     getWorkSheetEngine().attach(container);
   }
 
   function attachClientGridWhenNeeded(container) {
+    if (!container) return;
     getClientSheetEngine().attach(container);
   }
 
@@ -4463,6 +4465,8 @@
           // 처음 로딩인 경우에만 한 번 더 렌더링(값 반영)
           if (!wasLoaded) render();
         });
+        attachWorkGridWhenNeeded(document.getElementById("work-grid-host"));
+        refreshWorkSummaryUi();
 
         // 거래작업 입력 변경 시 로컬 백업/Firebase 자동 저장
         if (workState.saveTimer) {
@@ -4494,31 +4498,6 @@
             scheduleLedgerDraftSave();
           });
         });
-        app.querySelectorAll('input[data-work-row]').forEach(function (inp) {
-          inp.addEventListener("paste", function (e) {
-            var r = Number(inp.getAttribute("data-work-row"));
-            var f = inp.getAttribute("data-work-field");
-            if (isNaN(r) || !f) return;
-            var text = e.clipboardData.getData("text/plain") || e.clipboardData.getData("text");
-            if (!text || (text.indexOf("\t") < 0 && text.indexOf("\n") < 0)) return;
-            e.preventDefault();
-            pasteGridIntoWorkItems(text, r, f);
-          });
-          inp.addEventListener("input", function () {
-            var r = Number(inp.getAttribute("data-work-row"));
-            var f = inp.getAttribute("data-work-field");
-            if (isNaN(r) || !f) return;
-
-            if (!workState.items[r]) workState.items[r] = emptyRow();
-            if (f === "note") {
-              workState.items[r].note = inp.value;
-            } else {
-              workState.items[r][f] = inp.value;
-            }
-
-            scheduleLedgerDraftSave();
-          });
-        });
       } else if (state.subTab === "statement") {
         var wasStatementLoaded = workState.loadedFromFirebase;
         ensureWorkLoadedFromFirebase().then(function () {
@@ -4535,44 +4514,7 @@
         ensureLedgerLoadedFromFirebase().then(function () {
           if (!wasClientLoaded && state.subTab === "client") render();
         });
-        app.querySelectorAll('[data-client-row]').forEach(function (inp) {
-          function onClientFieldChange() {
-            var r = Number(inp.getAttribute("data-client-row"));
-            var f = inp.getAttribute("data-client-field");
-            if (isNaN(r) || !f) return;
-            if (!clientState.rows[r]) clientState.rows[r] = emptyClientRow();
-            clientState.rows[r][f] =
-              f === "supplierMode" ? normalizeSupplierMode(inp.value) : inp.value;
-
-            var hasAnyValue = Object.keys(clientState.rows[clientState.rows.length - 1] || {}).some(function (key) {
-              return clientState.rows[clientState.rows.length - 1][key] != null &&
-                String(clientState.rows[clientState.rows.length - 1][key]).trim() !== "";
-            });
-            if (hasAnyValue) {
-              clientState.rows.push(emptyClientRow());
-              scheduleLedgerDraftSave();
-              render();
-              return;
-            }
-
-            scheduleLedgerDraftSave();
-          }
-
-          if (inp.tagName === "INPUT") {
-            inp.addEventListener("paste", function (e) {
-              var r = Number(inp.getAttribute("data-client-row"));
-              var f = inp.getAttribute("data-client-field");
-              if (isNaN(r) || !f) return;
-              var text = e.clipboardData.getData("text/plain") || e.clipboardData.getData("text");
-              if (!text || (text.indexOf("\t") < 0 && text.indexOf("\n") < 0)) return;
-              e.preventDefault();
-              pasteGridIntoClientRows(text, r, f);
-            });
-          }
-
-          inp.addEventListener("input", onClientFieldChange);
-          inp.addEventListener("change", onClientFieldChange);
-        });
+        attachClientGridWhenNeeded(document.getElementById("client-grid-host"));
       }
       return;
     }
