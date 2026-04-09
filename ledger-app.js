@@ -110,6 +110,11 @@
     prevSelectedKeys: [],
     prevFillKeys: [],
     prevActiveKey: null,
+    visibleRowsDirty: true,
+    visibleRowIndexes: [],
+    visibleRowOffsets: [0],
+    visibleRowPosMap: {},
+    renderRange: { start: -1, end: -1 },
     fillDragging: false,
     fillSourceRect: null,
     fillPreviewKeys: [],
@@ -154,6 +159,7 @@
     var scrollLeft = ST.scrollEl ? ST.scrollEl.scrollLeft : 0;
 
     ST.rows = normalizeSalesRows(ST.rows, targetCount);
+    ST.visibleRowsDirty = true;
     initGridSizing();
 
     if (ST.tableBuilt && ST.host) {
@@ -249,6 +255,7 @@
 
     if (Array.isArray(data.statusRows)) {
       ST.rows = normalizeSalesRows(data.statusRows);
+      ST.visibleRowsDirty = true;
     }
 
     if (Array.isArray(data.workItems)) {
@@ -267,6 +274,7 @@
       }
       if (Array.isArray(data.sheetLayout.rowHeights)) {
         ST.rowHeights = data.sheetLayout.rowHeights.slice();
+        ST.visibleRowsDirty = true;
       }
       initGridSizing();
     }
@@ -757,23 +765,12 @@
   function applyGridSizingUI() {
     if (!ST.host) return;
     initGridSizing();
+    ST.visibleRowsDirty = true;
     for (var c = 0; c < COL_COUNT; c++) {
       var colEl = ST.host.querySelector('col[data-col="' + c + '"]');
       if (colEl) colEl.style.width = getColWidth(c) + "px";
     }
-    for (var r = 0; r < getRowCount(); r++) {
-      var tr = ST.host.querySelector('tr[data-row="' + r + '"]');
-      if (tr) tr.style.height = getRowHeight(r) + "px";
-      var tdCells = ST.host.querySelectorAll('td[data-r="' + r + '"] .st-cell-inner');
-      for (var i = 0; i < tdCells.length; i++) {
-        tdCells[i].style.minHeight = getRowHeight(r) - 4 + "px";
-      }
-      var displays = ST.host.querySelectorAll('td[data-r="' + r + '"] .st-display, td[data-r="' + r + '"] .st-ghost');
-      for (var j = 0; j < displays.length; j++) {
-        displays[j].style.height = getRowHeight(r) - 4 + "px";
-        displays[j].style.lineHeight = getRowHeight(r) - 4 + "px";
-      }
-    }
+    renderVirtualRows(true);
     if (ST.inputEl) {
       ST.inputEl.style.height = getRowHeight(ST.selectedCell.row) - 4 + "px";
       ST.inputEl.style.lineHeight = getRowHeight(ST.selectedCell.row) - 4 + "px";
@@ -788,17 +785,8 @@
 
   function applyRowHeightUI(rowIndex) {
     if (!ST.host) return;
-    var tr = ST.host.querySelector('tr[data-row="' + rowIndex + '"]');
-    if (tr) tr.style.height = getRowHeight(rowIndex) + "px";
-    var tdCells = ST.host.querySelectorAll('td[data-r="' + rowIndex + '"] .st-cell-inner');
-    for (var i = 0; i < tdCells.length; i++) {
-      tdCells[i].style.minHeight = getRowHeight(rowIndex) - 4 + "px";
-    }
-    var displays = ST.host.querySelectorAll('td[data-r="' + rowIndex + '"] .st-display, td[data-r="' + rowIndex + '"] .st-ghost');
-    for (var j = 0; j < displays.length; j++) {
-      displays[j].style.height = getRowHeight(rowIndex) - 4 + "px";
-      displays[j].style.lineHeight = getRowHeight(rowIndex) - 4 + "px";
-    }
+    ST.visibleRowsDirty = true;
+    renderVirtualRows(true);
     if (ST.inputEl && ST.selectedCell.row === rowIndex) {
       ST.inputEl.style.height = getRowHeight(rowIndex) - 4 + "px";
       ST.inputEl.style.lineHeight = getRowHeight(rowIndex) - 4 + "px";
@@ -893,10 +881,9 @@
 
   function applyFilterUI() {
     if (!ST.host) return;
-    for (var r = 0; r < getRowCount(); r++) {
-      var tr = ST.host.querySelector('tr[data-row="' + r + '"]');
-      if (tr) tr.style.display = rowMatchesFilter(ST.rows[r]) ? "" : "none";
-    }
+    ST.visibleRowsDirty = true;
+    renderVirtualRows(true);
+    updateSelectionUI();
   }
 
   function sortRowsByColumn(colKey, direction) {
@@ -1007,7 +994,6 @@
       for (var c = 0; c < COL_COUNT; c++) {
         updateRenderedCell(rowIndex, c);
       }
-      applyRowHeightUI(rowIndex);
     });
     updateStatusBar();
   }
@@ -1030,7 +1016,13 @@
       ST.redoStack = [];
     }
     ST.rows = nextRows;
-    refreshRenderedRows(changedRows || []);
+    if (ST.filter && ST.filter.keyword) {
+      ST.visibleRowsDirty = true;
+      renderVirtualRows(true);
+      updateSelectionUI();
+    } else {
+      refreshRenderedRows(changedRows || []);
+    }
     scheduleLedgerDraftSave();
     return true;
   }
@@ -1046,6 +1038,7 @@
       ST.redoStack = [];
     }
     ST.rows = after;
+    ST.visibleRowsDirty = true;
     refreshGridValues();
     scheduleLedgerDraftSave();
   }
@@ -1059,6 +1052,150 @@
     nextRows[r] = Object.assign({}, nextRows[r] || emptyRow());
     setCellValueInRows(nextRows, r, c, value, false);
     commitRowsMutation(nextRows, [r], false);
+  }
+
+  function rebuildVisibleRowsData() {
+    if (!ST.visibleRowsDirty && ST.visibleRowIndexes.length) return;
+    var indexes = [];
+    var offsets = [0];
+    var posMap = {};
+    var total = 0;
+
+    for (var r = 0; r < getRowCount(); r++) {
+      if (!rowMatchesFilter(ST.rows[r])) continue;
+      posMap[r] = indexes.length;
+      indexes.push(r);
+      total += getRowHeight(r);
+      offsets.push(total);
+    }
+
+    if (!indexes.length) {
+      posMap[0] = 0;
+      indexes.push(0);
+      total = getRowHeight(0);
+      offsets = [0, total];
+    }
+
+    ST.visibleRowIndexes = indexes;
+    ST.visibleRowOffsets = offsets;
+    ST.visibleRowPosMap = posMap;
+    ST.visibleRowsDirty = false;
+  }
+
+  function getVisibleRowPosition(actualRow) {
+    return ST.visibleRowPosMap.hasOwnProperty(actualRow)
+      ? ST.visibleRowPosMap[actualRow]
+      : -1;
+  }
+
+  function findVisibleIndexByOffset(offset) {
+    var offsets = ST.visibleRowOffsets;
+    var low = 0;
+    var high = Math.max(0, offsets.length - 2);
+
+    while (low <= high) {
+      var mid = Math.floor((low + high) / 2);
+      var start = offsets[mid];
+      var end = offsets[mid + 1];
+      if (offset < start) {
+        high = mid - 1;
+      } else if (offset >= end) {
+        low = mid + 1;
+      } else {
+        return mid;
+      }
+    }
+
+    return Math.max(0, Math.min(offsets.length - 2, low));
+  }
+
+  function buildTableRowHtml(r) {
+    var html = '<tr data-row="' + r + '" style="height:' + getRowHeight(r) + 'px">';
+    html +=
+      '<th class="st-row-head" data-row-head="' + r + '">' +
+      (r + 1) +
+      '<div class="st-resizer-row" data-row-resizer="' + r + '"></div>' +
+      "</th>";
+    for (var c = 0; c < COL_COUNT; c++) {
+      var v = getValue(r, c);
+      var active = r === ST.selectedCell.row && c === ST.selectedCell.col;
+      html += '<td data-r="' + r + '" data-c="' + c + '" class="' + (active ? "sel-in sel-active" : "") + '">';
+      html += '<div class="st-cell-inner" style="min-height:' + (getRowHeight(r) - 4) + 'px">';
+      html +=
+        '<div class="st-display" style="' +
+        (active ? "display:none;" : "") +
+        'height:' + (getRowHeight(r) - 4) + 'px;' +
+        'line-height:' + (getRowHeight(r) - 4) + 'px;' +
+        '">' +
+        escapeHtml(v) +
+        "</div>";
+      html += '<div class="st-ghost" style="display:none;height:' + (getRowHeight(r) - 4) + 'px;line-height:' + (getRowHeight(r) - 4) + 'px"></div>';
+      html += "</div></td>";
+    }
+    html += "</tr>";
+    return html;
+  }
+
+  function renderVirtualRows(force) {
+    if (!ST.tableBuilt || !ST.host || !ST.scrollEl) return;
+    var tbody = ST.host.querySelector("tbody");
+    if (!tbody) return;
+
+    rebuildVisibleRowsData();
+
+    var viewportHeight = ST.scrollEl.clientHeight || 600;
+    var scrollTop = ST.scrollEl.scrollTop || 0;
+    var startIndex = Math.max(0, findVisibleIndexByOffset(scrollTop) - 12);
+    var endIndex = Math.min(
+      ST.visibleRowIndexes.length - 1,
+      findVisibleIndexByOffset(scrollTop + viewportHeight) + 16
+    );
+
+    if (!force && ST.renderRange.start === startIndex && ST.renderRange.end === endIndex) {
+      return;
+    }
+
+    var topHeight = ST.visibleRowOffsets[startIndex] || 0;
+    var bottomHeight =
+      ST.visibleRowOffsets[ST.visibleRowOffsets.length - 1] -
+      (ST.visibleRowOffsets[endIndex + 1] || 0);
+    var html = "";
+
+    if (topHeight > 0) {
+      html += '<tr data-spacer="top"><td colspan="' + (COL_COUNT + 1) + '" style="height:' + topHeight + 'px;padding:0;border:none;background:transparent"></td></tr>';
+    }
+
+    for (var i = startIndex; i <= endIndex; i++) {
+      html += buildTableRowHtml(ST.visibleRowIndexes[i]);
+    }
+
+    if (bottomHeight > 0) {
+      html += '<tr data-spacer="bottom"><td colspan="' + (COL_COUNT + 1) + '" style="height:' + bottomHeight + 'px;padding:0;border:none;background:transparent"></td></tr>';
+    }
+
+    tbody.innerHTML = html;
+    ST.cellMap = {};
+    tbody.querySelectorAll("td[data-r][data-c]").forEach(function (td) {
+      ST.cellMap[cellKey(Number(td.getAttribute("data-r")), Number(td.getAttribute("data-c")))] = td;
+    });
+    ST.rowHeadEls = Array.prototype.slice.call(tbody.querySelectorAll("[data-row-head]"));
+    ST.renderRange = { start: startIndex, end: endIndex };
+  }
+
+  function ensureRowVisible(rowIndex) {
+    if (!ST.scrollEl) return;
+    var visiblePos = getVisibleRowPosition(rowIndex);
+    if (visiblePos < 0) return;
+    var top = ST.visibleRowOffsets[visiblePos] || 0;
+    var bottom = ST.visibleRowOffsets[visiblePos + 1] || top + getRowHeight(rowIndex);
+    var viewportTop = ST.scrollEl.scrollTop;
+    var viewportBottom = viewportTop + ST.scrollEl.clientHeight;
+
+    if (top < viewportTop) {
+      ST.scrollEl.scrollTop = top;
+    } else if (bottom > viewportBottom) {
+      ST.scrollEl.scrollTop = Math.max(0, bottom - ST.scrollEl.clientHeight);
+    }
   }
 
   function moveSelection(row, col) {
@@ -1246,25 +1383,11 @@
 
   function refreshGridValues() {
     if (!ST.tableBuilt || !ST.host) return;
-    var tbody = ST.host.querySelector("tbody");
-    if (!tbody) return;
-    for (var r = 0; r < getRowCount(); r++) {
-      for (var c = 0; c < COL_COUNT; c++) {
-        var td = tbody.querySelector('td[data-r="' + r + '"][data-c="' + c + '"]');
-        if (!td) continue;
-        var disp = td.querySelector(".st-display");
-        var ghost = td.querySelector(".st-ghost");
-        var v = getValue(r, c);
-        if (disp) disp.textContent = v;
-        if (ghost) ghost.textContent = v;
-      }
-    }
+    renderVirtualRows(true);
     if (ST.inputEl) {
       ST.inputEl.value = getRawValue(ST.selectedCell.row, ST.selectedCell.col);
     }
     syncInputOverlay();
-    applyGridSizingUI();
-    applyFilterUI();
     updateStatusBar();
   }
 
@@ -1472,6 +1595,8 @@
     if (!ST.tableBuilt || !ST.inputEl || !ST.host) return;
     var r = ST.selectedCell.row;
     var c = ST.selectedCell.col;
+    ensureRowVisible(r);
+    renderVirtualRows();
     var td = ST.host.querySelector('.st-table td[data-r="' + r + '"][data-c="' + c + '"]');
     if (!td) return;
     var inner = td.querySelector(".st-cell-inner");
@@ -1526,6 +1651,7 @@
     }
     ST.editMode = false;
     ST.tableBuilt = true;
+    ST.visibleRowsDirty = true;
 
     var html =
       '<div class="st-wrap">' +
@@ -1549,35 +1675,9 @@
         '<div class="st-resizer-col" data-col-resizer="' + colIndex + '"></div>' +
         "</th>";
     });
-    html += "</tr></thead><tbody>";
-
-    for (var r = 0; r < getRowCount(); r++) {
-      html += '<tr data-row="' + r + '" style="height:' + getRowHeight(r) + 'px">';
-      html +=
-        '<th class="st-row-head" data-row-head="' + r + '">' +
-        (r + 1) +
-        '<div class="st-resizer-row" data-row-resizer="' + r + '"></div>' +
-        "</th>";
-      for (var c = 0; c < COL_COUNT; c++) {
-        var v = getValue(r, c);
-        var active = r === ST.selectedCell.row && c === ST.selectedCell.col;
-        html += '<td data-r="' + r + '" data-c="' + c + '" class="' + (active ? "sel-in sel-active" : "") + '">';
-        html += '<div class="st-cell-inner" style="min-height:' + (getRowHeight(r) - 4) + 'px">';
-        html +=
-          '<div class="st-display" style="' +
-          (active ? "display:none;" : "") +
-          'height:' + (getRowHeight(r) - 4) + 'px;' +
-          'line-height:' + (getRowHeight(r) - 4) + 'px;' +
-          '">' +
-          escapeHtml(v) +
-          "</div>";
-        html += '<div class="st-ghost" style="display:none;height:' + (getRowHeight(r) - 4) + 'px;line-height:' + (getRowHeight(r) - 4) + 'px"></div>';
-        html += "</div></td>";
-      }
-      html += "</tr>";
-    }
+    html += "</tr></thead><tbody></tbody></table>";
     html +=
-      '</tbody></table></div>' +
+      '</div>' +
       '<div class="st-statusbar">' +
       '<div class="st-status-main">' +
       '<span class="st-status-pill">현재 셀 <strong data-st-status="address">A1</strong></span>' +
@@ -1593,17 +1693,15 @@
 
     host.innerHTML = html;
     ST.scrollEl = host.querySelector(".st-scroll");
-    ST.cellMap = {};
-    host.querySelectorAll("td[data-r][data-c]").forEach(function (td) {
-      ST.cellMap[cellKey(Number(td.getAttribute("data-r")), Number(td.getAttribute("data-c")))] = td;
-    });
     ST.colHeadEls = Array.prototype.slice.call(host.querySelectorAll("[data-col-head]"));
-    ST.rowHeadEls = Array.prototype.slice.call(host.querySelectorAll("[data-row-head]"));
+    ST.rowHeadEls = [];
     ST.prevSelectedKeys = [];
     ST.prevFillKeys = [];
     ST.prevActiveKey = null;
+    ST.renderRange = { start: -1, end: -1 };
 
     var tbody = host.querySelector("tbody");
+    renderVirtualRows(true);
     ST.inputEl = document.createElement("input");
     ST.inputEl.type = "text";
     ST.inputEl.setAttribute("spellcheck", "false");
@@ -1624,8 +1722,8 @@
       e.preventDefault();
     });
 
-    tbody.addEventListener("mousedown", onCellMouseDown);
-    tbody.addEventListener("dblclick", onCellDblClick);
+    tbody.addEventListener("mousedown", onTbodyMouseDown);
+    tbody.addEventListener("dblclick", onTbodyDblClick);
     if (!ST.globalListenersBound) {
       document.addEventListener("mousemove", onDocMouseMove);
       window.addEventListener("mouseup", onWindowMouseUp);
@@ -1635,6 +1733,8 @@
       if (ST.scrollEl.scrollTop + ST.scrollEl.clientHeight >= ST.scrollEl.scrollHeight - 120) {
         ensureRowCapacity(getRowCount() + ROW_GROWTH_CHUNK);
       }
+      renderVirtualRows();
+      updateSelectionUI();
     });
     ST.colHeadEls.forEach(function (el) {
       el.addEventListener("mousedown", function (e) {
@@ -1653,14 +1753,6 @@
         selectAllCells();
       });
     }
-    ST.rowHeadEls.forEach(function (el) {
-      el.addEventListener("mousedown", function (e) {
-        if (e.target.closest("[data-row-resizer]")) return;
-        e.preventDefault();
-        commitActiveCellValue();
-        selectRow(Number(el.getAttribute("data-row-head")));
-      });
-    });
     host.querySelectorAll("[data-col-resizer]").forEach(function (el) {
       el.addEventListener("mousedown", function (e) {
         if (e.detail >= 2) {
@@ -1685,29 +1777,6 @@
         scheduleLedgerDraftSave();
       });
     });
-    host.querySelectorAll("[data-row-resizer]").forEach(function (el) {
-      el.addEventListener("mousedown", function (e) {
-        if (e.detail >= 2) {
-          e.preventDefault();
-          e.stopPropagation();
-          ST.rowHeights[Number(el.getAttribute("data-row-resizer"))] = DEFAULT_ROW_HEIGHT;
-          applyGridSizingUI();
-          scheduleLedgerDraftSave();
-          return;
-        }
-        e.preventDefault();
-        e.stopPropagation();
-        startResize("row", Number(el.getAttribute("data-row-resizer")), e.clientX, e.clientY);
-      });
-      el.addEventListener("dblclick", function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        ST.rowHeights[Number(el.getAttribute("data-row-resizer"))] = DEFAULT_ROW_HEIGHT;
-        applyGridSizingUI();
-        scheduleLedgerDraftSave();
-      });
-    });
-
     ST.inputEl.addEventListener("compositionstart", function () {
       ST.isComposing = true;
       if (!ST.editMode) {
@@ -1760,6 +1829,8 @@
 
   function moveInputToCell(r, c) {
     if (!ST.host || !ST.inputEl) return;
+    ensureRowVisible(r);
+    renderVirtualRows();
     var tbody = ST.host.querySelector("tbody");
     if (!tbody) return;
     var prevTd = ST.inputEl.closest("td");
@@ -1839,6 +1910,47 @@
       return;
     }
     ST.dragging = false;
+  }
+
+  function onTbodyMouseDown(e) {
+    var rowResizer = e.target.closest("[data-row-resizer]");
+    if (rowResizer) {
+      if (e.detail >= 2) {
+        e.preventDefault();
+        e.stopPropagation();
+        ST.rowHeights[Number(rowResizer.getAttribute("data-row-resizer"))] = DEFAULT_ROW_HEIGHT;
+        applyGridSizingUI();
+        scheduleLedgerDraftSave();
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      startResize("row", Number(rowResizer.getAttribute("data-row-resizer")), e.clientX, e.clientY);
+      return;
+    }
+
+    var rowHead = e.target.closest("[data-row-head]");
+    if (rowHead) {
+      e.preventDefault();
+      commitActiveCellValue();
+      selectRow(Number(rowHead.getAttribute("data-row-head")));
+      return;
+    }
+
+    onCellMouseDown(e);
+  }
+
+  function onTbodyDblClick(e) {
+    var rowResizer = e.target.closest("[data-row-resizer]");
+    if (rowResizer) {
+      e.preventDefault();
+      e.stopPropagation();
+      ST.rowHeights[Number(rowResizer.getAttribute("data-row-resizer"))] = DEFAULT_ROW_HEIGHT;
+      applyGridSizingUI();
+      scheduleLedgerDraftSave();
+      return;
+    }
+    onCellDblClick(e);
   }
 
   function onCellMouseDown(e) {
