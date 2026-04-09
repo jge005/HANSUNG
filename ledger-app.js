@@ -597,7 +597,7 @@
       }
     }
 
-    function setRows(nextRows, skipHistory, beforeRows) {
+    function setRows(nextRows, skipHistory, beforeRows, skipRefresh) {
       var normalized = options.normalizeRows
         ? options.normalizeRows(cloneRowList(nextRows))
         : cloneRowList(nextRows);
@@ -610,7 +610,7 @@
       if (typeof options.onRowsChange === "function") {
         options.onRowsChange(normalized);
       }
-      refreshGridValues();
+      if (!skipRefresh) refreshGridValues();
     }
 
     function snapshotEditOrigin() {
@@ -900,7 +900,8 @@
       if (getRawValue(r, c) === value) return;
       var nextRows = cloneRowList(getRows());
       setRawValue(nextRows, r, c, value);
-      setRows(nextRows, true);
+      setRows(nextRows, true, null, true);
+      updateStatusBar();
     }
 
     function clearSelectionCells() {
@@ -1488,7 +1489,8 @@
 
   function getWorkSheetEngine() {
     if (workSheetEngine) return workSheetEngine;
-    workSheetEngine = createMiniSheetEngine({
+    var createSheetEngine = window.createSheetEngine || createMiniSheetEngine;
+    workSheetEngine = createSheetEngine({
       idPrefix: "work-grid",
       title: "품목 시트",
       subtitle: "매출현황과 같은 셀 선택/복사/붙여넣기 사용",
@@ -1521,7 +1523,8 @@
 
   function getClientSheetEngine() {
     if (clientSheetEngine) return clientSheetEngine;
-    clientSheetEngine = createMiniSheetEngine({
+    var createSheetEngine = window.createSheetEngine || createMiniSheetEngine;
+    clientSheetEngine = createSheetEngine({
       idPrefix: "client-grid",
       title: "업체 시트",
       subtitle: "맨 왼쪽 구분 셀에 법인/개인 입력 또는 붙여넣기",
@@ -3033,9 +3036,11 @@
     if (!td) return;
     var inner = td.querySelector(".st-cell-inner");
     if (!inner) return;
+    var raw = getRawValue(r, c);
     var v = getValue(r, c);
-    ST.inputEl.value = v;
+    ST.inputEl.value = raw;
     ST.inputEl.style.height = getRowHeight(r) - 4 + "px";
+    ST.inputEl.style.lineHeight = getRowHeight(r) - 4 + "px";
     var gh = inner.querySelector(".st-ghost");
     if (ST.editMode) {
       ST.inputEl.classList.remove("no-edit");
