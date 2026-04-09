@@ -303,18 +303,6 @@
       text-align: right;
       padding-right: 10px;
     }
-    .st-col-head.frozen-col {
-      left: 46px;
-      z-index: 16;
-    }
-    .st-table td.frozen-col {
-      position: sticky;
-      left: 46px;
-      z-index: 8;
-      background: #fff;
-    }
-    .st-table td.frozen-col.sel-in { background: #eef4ff; }
-    .st-table td.frozen-col.sel-fill { background: #e7f0ff; }
     .st-head-active {
       background: #efe7ff !important;
       color: var(--text-dark) !important;
@@ -1195,7 +1183,6 @@
           ? cellAddress(bounds.top, bounds.left) + ":" + cellAddress(bounds.bottom, bounds.right)
           : "-",
       count: String(metrics.count),
-      numcount: String(metrics.numericCount),
       sum: formatMetricNumber(metrics.sum),
       avg: metrics.numericCount ? formatMetricNumber(metrics.avg) : "-",
     };
@@ -1834,9 +1821,7 @@
     html += '<th class="st-corner"></th>';
     salesColumns.forEach(function (col, colIndex) {
       html +=
-        '<th class="st-col-head' +
-        (colIndex === 0 ? ' frozen-col' : '') +
-        '" data-col-head="' + colIndex + '">' +
+        '<th class="st-col-head" data-col-head="' + colIndex + '">' +
         columnLabel(colIndex) +
         '<div style="font-size:11px;font-weight:600;color:#8b82a3">' + col.label + '</div>' +
         '<div class="st-resizer-col" data-col-resizer="' + colIndex + '"></div>' +
@@ -1854,7 +1839,7 @@
       for (var c = 0; c < COL_COUNT; c++) {
         var v = getValue(r, c);
         var active = r === ST.selectedCell.row && c === ST.selectedCell.col;
-        html += '<td data-r="' + r + '" data-c="' + c + '" class="' + (active ? "sel-in sel-active " : "") + (c === 0 ? "frozen-col" : "") + '">';
+        html += '<td data-r="' + r + '" data-c="' + c + '" class="' + (active ? "sel-in sel-active" : "") + '">';
         html += '<div class="st-cell-inner" style="min-height:' + (getRowHeight(r) - 4) + 'px">';
         html +=
           '<div class="st-display" style="' +
@@ -1877,7 +1862,6 @@
       '</div>' +
       '<div class="st-status-metrics">' +
       '<span class="st-status-pill">개수 <strong data-st-status="count">1</strong></span>' +
-      '<span class="st-status-pill">숫자 <strong data-st-status="numcount">0</strong></span>' +
       '<span class="st-status-pill">합계 <strong data-st-status="sum">0</strong></span>' +
       '<span class="st-status-pill">평균 <strong data-st-status="avg">-</strong></span>' +
       '</div>' +
