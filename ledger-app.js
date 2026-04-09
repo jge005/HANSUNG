@@ -60,8 +60,11 @@
     loadedFromFirebase: false,
     loadingPromise: null,
     saveTimer: null,
+    saveRetryTimer: null,
+    loadRetryTimer: null,
     dirty: false,
     localUpdatedAt: null,
+    cloudOffline: false,
   };
 
   // 거래작업 탭에 표시할 “복사본” 데이터(매출현황 ST.rows를 절대 수정하지 않음)
@@ -308,6 +311,61 @@
     }
   }
 
+  function isRetryableFirestoreError(err) {
+    if (
+      window.firebaseFirestoreApi &&
+      typeof window.firebaseFirestoreApi.isRetryableFirestoreError === "function"
+    ) {
+      return window.firebaseFirestoreApi.isRetryableFirestoreError(err);
+    }
+    var code = err && err.code ? String(err.code) : "";
+    var message = err && err.message ? String(err.message).toLowerCase() : "";
+    return (
+      code.indexOf("unavailable") >= 0 ||
+      code.indexOf("failed-precondition") >= 0 ||
+      message.indexOf("offline") >= 0 ||
+      message.indexOf("network") >= 0
+    );
+  }
+
+  function queueLedgerSaveRetry(delay) {
+    if (ledgerState.saveRetryTimer) clearTimeout(ledgerState.saveRetryTimer);
+    ledgerState.saveRetryTimer = setTimeout(function () {
+      ledgerState.saveRetryTimer = null;
+      if (ledgerState.dirty) saveLedgerDraftToFirebase();
+    }, delay || 3000);
+  }
+
+  function queueLedgerLoadRetry(delay) {
+    if (ledgerState.loadRetryTimer) clearTimeout(ledgerState.loadRetryTimer);
+    ledgerState.loadRetryTimer = setTimeout(function () {
+      ledgerState.loadRetryTimer = null;
+      ledgerState.loadingPromise = null;
+      ensureLedgerLoadedFromFirebase();
+    }, delay || 3000);
+  }
+
+  function bindFirestoreRetryListeners() {
+    if (window.__ledgerFirestoreRetryBound) return;
+    window.__ledgerFirestoreRetryBound = true;
+
+    window.addEventListener("online", function () {
+      ledgerState.cloudOffline = false;
+      ledgerState.loadingPromise = null;
+      ensureLedgerLoadedFromFirebase();
+      if (ledgerState.dirty) saveLedgerDraftToFirebase();
+    });
+
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState !== "visible") return;
+      if (!ledgerState.loadedFromFirebase) {
+        ledgerState.loadingPromise = null;
+        ensureLedgerLoadedFromFirebase();
+      }
+      if (ledgerState.dirty) saveLedgerDraftToFirebase();
+    });
+  }
+
   function saveLedgerDraftToFirebase(attempts) {
     attempts = attempts || 0;
     ensureDraftId();
@@ -327,8 +385,15 @@
       .then(function () {
         ledgerState.loadedFromFirebase = true;
         ledgerState.dirty = false;
+        ledgerState.cloudOffline = false;
       })
       .catch(function (err) {
+        ledgerState.cloudOffline = isRetryableFirestoreError(err);
+        if (ledgerState.cloudOffline) {
+          console.warn("Firestore 저장 지연, 재시도 예정:", err);
+          queueLedgerSaveRetry(3000);
+          return;
+        }
         console.error("Firestore 저장 실패:", err);
       });
   }
@@ -353,8 +418,9 @@
       var id = ensureDraftId();
       var tries = 0;
 
-      function finish() {
-        ledgerState.loadedFromFirebase = true;
+      function finish(success) {
+        ledgerState.loadedFromFirebase = !!success;
+        ledgerState.loadingPromise = null;
         resolve();
       }
 
@@ -374,17 +440,24 @@
                   saveLocalLedgerBackup();
                 }
               }
-              finish();
+              ledgerState.cloudOffline = false;
+              finish(true);
             })
             .catch(function (err) {
-              console.error("Firestore 불러오기 실패:", err);
-              finish();
+              ledgerState.cloudOffline = isRetryableFirestoreError(err);
+              if (ledgerState.cloudOffline) {
+                console.warn("Firestore 불러오기 지연, 재시도 예정:", err);
+                queueLedgerLoadRetry(3000);
+              } else {
+                console.error("Firestore 불러오기 실패:", err);
+              }
+              finish(false);
             });
           return;
         }
 
         if (tries >= 30) {
-          finish();
+          finish(false);
           return;
         }
 
@@ -2873,6 +2946,7 @@
     }
   }
 
+  bindFirestoreRetryListeners();
   loadLocalLedgerBackup();
   render();
 })();
