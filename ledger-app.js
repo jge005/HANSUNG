@@ -2660,6 +2660,12 @@
     var items = workState.items || [];
     var totalRows = Math.max(items.length, 12);
     var itemsRows = "";
+    var totals = getStatementTotals(items.filter(function (item) {
+      if (!item) return false;
+      return ["date", "code", "name", "qty", "price", "supply", "tax", "note"].some(function (key) {
+        return item[key] != null && String(item[key]).trim() !== "";
+      });
+    }));
 
     for (var i = 0; i < totalRows; i++) {
       var it = items[i] || {};
@@ -2726,11 +2732,11 @@
 
     return (
       '<div class="workdoc">' +
-        '<div class="workdoc-grid2">' +
+        '<div class="workdoc-top">' +
           '<div class="workdoc-card">' +
             '<div class="workdoc-head">' +
               '<div class="workdoc-title">' + icon("building") + ' 공급자</div>' +
-              '<div class="sub">필수항목만 먼저 UI 구성</div>' +
+              '<div class="sub">기본 정보</div>' +
             "</div>" +
             '<div class="workdoc-form">' +
               '<div class="workdoc-label">상호</div><input class="workdoc-input" data-work-info="supplier.company" value="' + escapeAttr(getWorkInfoValue("supplier.company")) + '" />' +
@@ -2755,18 +2761,45 @@
               '<div class="workdoc-label">종목</div><input class="workdoc-input" data-work-info="receiver.businessItem" value="' + escapeAttr(getWorkInfoValue("receiver.businessItem")) + '" />' +
             "</div>" +
           "</div>" +
-        "</div>" +
-        '<div class="workdoc-card">' +
-          '<div class="workdoc-date-line">' +
-            '<div class="workdoc-title">' + icon("clipboard") + ' 작성일자</div>' +
-            '<input type="date" class="workdoc-input" data-work-info="date" value="' + escapeAttr(getWorkInfoValue("date")) + '" />' +
-            '<div class="sub">한 줄 영역</div>' +
+          '<div class="workdoc-card">' +
+            '<div class="workdoc-head">' +
+              '<div class="workdoc-title">' + icon("clipboard") + ' 작업요약</div>' +
+              '<div class="sub">첫 화면 요약</div>' +
+            "</div>" +
+            '<div class="workdoc-meta">' +
+              '<div class="workdoc-meta-row">' +
+                '<div class="workdoc-label">작성일자</div>' +
+                '<input type="date" class="workdoc-input" data-work-info="date" value="' + escapeAttr(getWorkInfoValue("date")) + '" />' +
+              '</div>' +
+              '<div class="workdoc-meta-row">' +
+                '<div class="workdoc-label">품목 수</div>' +
+                '<input type="text" class="workdoc-input" value="' + escapeAttr(String(items.filter(function (item) { return item && ["date", "code", "name", "qty", "price", "supply", "tax", "note"].some(function (key) { return item[key] != null && String(item[key]).trim() !== ""; }); }).length)) + '" readonly />' +
+              '</div>' +
+              '<div class="workdoc-summary">' +
+                '<div class="workdoc-summary-item">' +
+                  '<div class="workdoc-summary-label">공급가액</div>' +
+                  '<div class="workdoc-summary-value">' + escapeHtml(formatDisplayNumber(totals.supply)) + '</div>' +
+                '</div>' +
+                '<div class="workdoc-summary-item">' +
+                  '<div class="workdoc-summary-label">세액</div>' +
+                  '<div class="workdoc-summary-value">' + escapeHtml(formatDisplayNumber(totals.tax)) + '</div>' +
+                '</div>' +
+                '<div class="workdoc-summary-item">' +
+                  '<div class="workdoc-summary-label">합계</div>' +
+                  '<div class="workdoc-summary-value">' + escapeHtml(formatDisplayNumber(totals.grand)) + '</div>' +
+                '</div>' +
+                '<div class="workdoc-summary-item">' +
+                  '<div class="workdoc-summary-label">수량합계</div>' +
+                  '<div class="workdoc-summary-value">' + escapeHtml(formatDisplayNumber(totals.qty)) + '</div>' +
+                '</div>' +
+              '</div>' +
+            '</div>' +
           "</div>" +
         "</div>" +
         '<div class="workdoc-card">' +
           '<div class="workdoc-head">' +
             '<div class="workdoc-title">' + icon("scroll") + ' 품목</div>' +
-            '<div class="sub">표 구조만 먼저 추가 (엔진은 추후)</div>' +
+            '<div class="sub">바로 입력 가능</div>' +
           "</div>" +
           '<div class="items-wrap">' +
             '<table class="items">' +
