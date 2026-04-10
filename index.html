@@ -20,6 +20,7 @@
       font-family: "Segoe UI", "Malgun Gothic", system-ui, sans-serif;
       font-size: 14px;
       color: var(--text);
+      color-scheme: light;
     }
     .hidden { display: none !important; }
 
@@ -53,6 +54,7 @@
       padding: 0 16px;
       font-size: 13px;
       outline: none;
+      color-scheme: light;
     }
     .field:focus {
       border-color: #c3a7ff;
@@ -376,6 +378,7 @@
       padding: 0 6px;
       line-height: 24px;
       box-sizing: border-box;
+      color-scheme: light;
     }
     .st-input.no-edit {
       color: transparent;
@@ -394,6 +397,7 @@
       color: #514867;
       padding: 0 18px 0 4px;
       cursor: pointer;
+      color-scheme: light;
     }
     .st-ghost {
       display: none;
@@ -684,6 +688,60 @@
     .client-col-address { width: 360px; }
     .client-col-type { width: 120px; }
     .client-col-item { width: 140px; }
+    .price-layout {
+      display: grid;
+      grid-template-columns: 240px minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+    }
+    .price-sidebar {
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: 0 1px 6px rgba(0, 0, 0, 0.06);
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .price-client-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 560px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+    .price-client-item {
+      width: 100%;
+      border: 1px solid #eadff6;
+      border-radius: 8px;
+      background: #fff;
+      color: var(--text);
+      text-align: left;
+      padding: 8px 10px;
+      font: inherit;
+      cursor: pointer;
+    }
+    .price-client-item.active {
+      border-color: #c3a7ff;
+      background: #f6efff;
+      color: var(--text-dark);
+      font-weight: 700;
+    }
+    .price-main-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    @media (max-width: 920px) {
+      .price-layout {
+        grid-template-columns: 1fr;
+      }
+      .price-client-list {
+        max-height: 220px;
+      }
+    }
 
     /* 거래명세서 */
     .statement-toolbar {

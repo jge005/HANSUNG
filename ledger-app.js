@@ -3397,6 +3397,7 @@
     if (!ST.globalListenersBound) {
       document.addEventListener("mousemove", onDocMouseMove);
       window.addEventListener("mouseup", onWindowMouseUp);
+      document.addEventListener("keydown", onGlobalSalesKeyDown, true);
       ST.globalListenersBound = true;
     }
     ST.scrollEl.addEventListener("scroll", function () {
@@ -3741,6 +3742,33 @@
       });
 
     updateSelectionUI();
+  }
+
+  function isEditableDomTarget(target) {
+    if (!target || !target.closest) return false;
+    if (target === ST.inputEl) return true;
+    return !!target.closest('input, textarea, select, [contenteditable="true"]');
+  }
+
+  function onGlobalSalesKeyDown(e) {
+    if (!ST.tableBuilt || state.mainTab !== "sales" || state.subTab !== "status") return;
+    if (isEditableDomTarget(e.target)) return;
+    var key = e.key;
+    var lowered = String(key || "").toLowerCase();
+    var shouldHandle =
+      key === "ArrowUp" ||
+      key === "ArrowDown" ||
+      key === "ArrowLeft" ||
+      key === "ArrowRight" ||
+      key === "Tab" ||
+      key === "Enter" ||
+      key === "Delete" ||
+      key === "F2" ||
+      key === "Escape" ||
+      ((e.ctrlKey || e.metaKey) && (lowered === "a" || lowered === "c" || lowered === "x" || lowered === "v" || lowered === "z" || lowered === "y" || lowered === "f")) ||
+      (e.altKey && (key === "ArrowDown" || key === "ArrowUp" || key === "F2"));
+    if (!shouldHandle) return;
+    onTableKeyDown(e);
   }
 
   function onTableKeyDown(e) {
@@ -4246,6 +4274,58 @@
     priceState.activeClient = label;
   }
 
+  function renamePriceClient(oldName, newName) {
+    var oldLabel = String(oldName || "").trim();
+    var newLabel = String(newName || "").trim();
+    var oldNormalized = normalizeCompanyMatchText(oldLabel);
+    var newNormalized = normalizeCompanyMatchText(newLabel);
+    if (!oldLabel || !newLabel || !oldNormalized || !newNormalized) return false;
+    if (oldNormalized === newNormalized) {
+      priceState.activeClient = newLabel;
+      priceState.rows = normalizePriceGridRows(
+        priceState.rows.map(function (row) {
+          var nextRow = Object.assign(emptyPriceRow(), row || {});
+          if (normalizeCompanyMatchText(nextRow.client) === oldNormalized) {
+            nextRow.client = newLabel;
+          }
+          return nextRow;
+        }),
+        80
+      );
+      return true;
+    }
+
+    priceState.rows = normalizePriceGridRows(
+      priceState.rows.map(function (row) {
+        var nextRow = Object.assign(emptyPriceRow(), row || {});
+        if (normalizeCompanyMatchText(nextRow.client) === oldNormalized) {
+          nextRow.client = newLabel;
+        }
+        return nextRow;
+      }),
+      80
+    );
+    priceState.activeClient = newLabel;
+    return true;
+  }
+
+  function deletePriceClient(clientName) {
+    var label = String(clientName || "").trim();
+    var normalized = normalizeCompanyMatchText(label);
+    if (!label || !normalized) return false;
+
+    priceState.rows = normalizePriceGridRows(
+      priceState.rows.filter(function (row) {
+        return normalizeCompanyMatchText(row && row.client) !== normalized;
+      }),
+      80
+    );
+
+    var remainingClients = getAllPriceClientOptions();
+    priceState.activeClient = remainingClients[0] || "";
+    return true;
+  }
+
   function findPriceMatches(clientInput, codeInput) {
     var clientToken = normalizeCompanyMatchText(clientInput);
     var codeToken = normalizeLookupText(codeInput);
@@ -4715,24 +4795,37 @@
     var clientOptions = getAllPriceClientOptions();
     return (
       '<div class="clientdoc">' +
-        '<div class="toolbar-card" style="margin-bottom:12px">' +
-          '<label>업체:</label>' +
-          '<input type="text" class="field" id="price-active-client" list="price-client-list" style="width:260px;height:36px" placeholder="업체명 입력 또는 선택" value="' + escapeAttr(activeClient) + '" />' +
-          '<datalist id="price-client-list">' +
-            clientOptions.map(function (company) {
-              return '<option value="' + escapeAttr(company) + '"></option>';
-            }).join("") +
-          '</datalist>' +
-          '<button type="button" class="soft-btn" id="btn-price-open">불러오기</button>' +
-          '<button type="button" class="soft-btn" id="btn-price-new">새 업체로 시작</button>' +
-          '<div class="sub" style="margin-left:auto">업체 하나를 선택하면 그 업체 단가만 아래 시트에서 관리합니다</div>' +
-        '</div>' +
-        '<div class="clientdoc-card">' +
-          '<div class="clientdoc-head">' +
-            '<div class="clientdoc-title">' + icon("tags") + ' 매출단가 리스트</div>' +
-            '<div class="sub">' + escapeHtml(activeClient ? activeClient + ' 단가표' : '업체를 먼저 선택하세요') + '</div>' +
+        '<div class="price-layout">' +
+          '<div class="price-sidebar">' +
+            '<div class="clientdoc-title">' + icon("building") + ' 업체 목록</div>' +
+            '<input type="text" class="field" id="price-active-client" list="price-client-list" style="height:36px" placeholder="업체명 입력 또는 선택" value="' + escapeAttr(activeClient) + '" />' +
+            '<datalist id="price-client-list">' +
+              clientOptions.map(function (company) {
+                return '<option value="' + escapeAttr(company) + '"></option>';
+              }).join("") +
+            '</datalist>' +
+            '<div class="price-main-actions">' +
+              '<button type="button" class="soft-btn" id="btn-price-open">불러오기</button>' +
+              '<button type="button" class="soft-btn" id="btn-price-new">새 업체</button>' +
+            '</div>' +
+            '<div class="price-client-list">' +
+              clientOptions.map(function (company) {
+                var activeClass = normalizeCompanyMatchText(company) === normalizeCompanyMatchText(activeClient) ? " active" : "";
+                return '<button type="button" class="price-client-item' + activeClass + '" data-price-client="' + escapeAttr(company) + '">' + escapeHtml(company) + '</button>';
+              }).join("") +
+            '</div>' +
           '</div>' +
-          '<div id="price-grid-host"></div>' +
+          '<div class="clientdoc-card">' +
+            '<div class="clientdoc-head">' +
+              '<div class="clientdoc-title">' + icon("tags") + ' 매출단가 리스트</div>' +
+              '<div class="price-main-actions">' +
+                '<button type="button" class="soft-btn" id="btn-price-rename">업체명 수정</button>' +
+                '<button type="button" class="soft-btn" id="btn-price-delete">업체 삭제</button>' +
+              '</div>' +
+            '</div>' +
+            '<div class="sub" style="margin-bottom:10px">' + escapeHtml(activeClient ? activeClient + ' 단가표' : '왼쪽에서 업체를 선택하거나 새 업체를 입력하세요') + '</div>' +
+            '<div id="price-grid-host"></div>' +
+          '</div>' +
         '</div>' +
       '</div>'
     );
@@ -4765,10 +4858,12 @@
     //    -> 거래작업 품목표 컬럼에 매핑
     var items = rows.map(function (r) {
       var row = ST.rows[r] || emptyRow();
+      var matchedClientRow = findClientRowByCompany(row.client || "");
+      var isPersonalClient = getClientRowSupplierMode(matchedClientRow) === "personal";
       return {
         date: row.date,
-        code: row.code,
-        name: row.name,
+        code: isPersonalClient ? "" : row.code,
+        name: isPersonalClient ? (row.code || row.name) : row.name,
         qty: row.qty,
         price: row.price,
         supply: row.amount,
@@ -5139,6 +5234,8 @@
         var priceClientInput = document.getElementById("price-active-client");
         var priceOpenBtn = document.getElementById("btn-price-open");
         var priceNewBtn = document.getElementById("btn-price-new");
+        var priceRenameBtn = document.getElementById("btn-price-rename");
+        var priceDeleteBtn = document.getElementById("btn-price-delete");
         function applyActivePriceClient() {
           if (!priceClientInput) return;
           priceState.activeClient = String(priceClientInput.value || "").trim();
@@ -5156,6 +5253,28 @@
             render();
           });
         }
+        if (priceRenameBtn) {
+          priceRenameBtn.addEventListener("click", function () {
+            if (!priceClientInput) return;
+            var nextName = String(priceClientInput.value || "").trim();
+            var previousName = String(priceState.activeClient || "").trim();
+            if (!previousName || !nextName) return;
+            if (renamePriceClient(previousName, nextName)) {
+              scheduleLedgerDraftSave();
+              render();
+            }
+          });
+        }
+        if (priceDeleteBtn) {
+          priceDeleteBtn.addEventListener("click", function () {
+            var currentName = String(priceState.activeClient || "").trim();
+            if (!currentName) return;
+            if (deletePriceClient(currentName)) {
+              scheduleLedgerDraftSave();
+              render();
+            }
+          });
+        }
         if (priceClientInput) {
           priceClientInput.addEventListener("change", applyActivePriceClient);
           priceClientInput.addEventListener("keydown", function (e) {
@@ -5165,6 +5284,13 @@
             }
           });
         }
+        app.querySelectorAll("[data-price-client]").forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            priceState.activeClient = btn.getAttribute("data-price-client") || "";
+            scheduleLedgerDraftSave();
+            render();
+          });
+        });
       } else if (state.subTab === "client") {
         var wasClientLoaded = ledgerState.loadedFromFirebase;
         ensureLedgerLoadedFromFirebase().then(function () {
