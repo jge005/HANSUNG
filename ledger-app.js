@@ -2731,17 +2731,23 @@
     });
     ST.rowHeadEls = Array.prototype.slice.call(tbody.querySelectorAll("[data-row-head]"));
     ST.renderRange = { start: startIndex, end: endIndex };
+    restoreActiveInputBinding();
+  }
 
-    if (ST.inputEl) {
-      var activeTd = ST.cellMap[cellKey(ST.selectedCell.row, ST.selectedCell.col)];
-      if (activeTd) {
-        var inner = activeTd.querySelector(".st-cell-inner");
-        if (inner && ST.inputEl.parentNode !== inner) {
-          inner.appendChild(ST.inputEl);
-        }
-        syncInputOverlay();
-      }
+  function restoreActiveInputBinding() {
+    if (!ST.inputEl || !ST.host) return;
+    var activeTd = ST.cellMap[cellKey(ST.selectedCell.row, ST.selectedCell.col)];
+    if (!activeTd) return;
+    var inner = activeTd.querySelector(".st-cell-inner");
+    var disp = activeTd.querySelector(".st-display");
+    var ghost = activeTd.querySelector(".st-ghost");
+    if (!inner) return;
+    if (ST.inputEl.parentNode !== inner) {
+      inner.appendChild(ST.inputEl);
     }
+    if (disp) disp.style.display = "none";
+    if (ghost) ghost.style.display = "none";
+    syncInputOverlay();
   }
 
   function ensureRowVisible(rowIndex) {
@@ -3935,6 +3941,7 @@
       buildSalesTable(container);
     } else {
       updateSelectionUI();
+      restoreActiveInputBinding();
       moveInputToCell(ST.selectedCell.row, ST.selectedCell.col);
       syncEditOrigin();
       focusInput();
