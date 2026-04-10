@@ -291,6 +291,21 @@
     };
   }
 
+  function getDefaultSupplierInfoForMode(mode) {
+    return mode === "personal"
+      ? defaultPersonalSupplierInfo()
+      : defaultCorporateSupplierInfo();
+  }
+
+  function resetSupplierProfileToDefault(mode) {
+    var info = ensureWorkInfoShape();
+    var normalizedMode = mode === "personal" ? "personal" : "corporate";
+    info.supplierProfiles[normalizedMode] = Object.assign(
+      emptySupplierInfo(),
+      getDefaultSupplierInfoForMode(normalizedMode)
+    );
+  }
+
   function ensureWorkInfoShape() {
     if (!workState.info || typeof workState.info !== "object") {
       workState.info = {};
@@ -2766,6 +2781,35 @@
     }
   }
 
+  function focusLastUsedSalesRow() {
+    if (!ST.tableBuilt || !ST.scrollEl) return;
+    var lastUsedRow = getLastUsedRowIndex(ST.rows);
+    if (lastUsedRow < 0) return;
+
+    var targetCol = Math.max(0, Math.min(COL_COUNT - 1, ST.selectedCell.col || 0));
+    ST.selectedCell = { row: lastUsedRow, col: targetCol };
+    ST.selectedKeys = [cellKey(lastUsedRow, targetCol)];
+    ST.editMode = false;
+    ST.isComposing = false;
+    ST.fillPreviewKeys = [];
+    ST.fillSourceRect = null;
+    ST.fillDirection = null;
+
+    rebuildVisibleRowsData();
+    var visiblePos = getVisibleRowPosition(lastUsedRow);
+    if (visiblePos >= 0) {
+      var rowTop = ST.visibleRowOffsets[visiblePos] || 0;
+      var anchorOffset = Math.max(0, ST.scrollEl.clientHeight - getRowHeight(lastUsedRow) * 6);
+      ST.scrollEl.scrollTop = Math.max(0, rowTop - anchorOffset);
+    }
+
+    renderVirtualRows(true);
+    updateSelectionUI();
+    moveInputToCell(lastUsedRow, targetCol);
+    syncEditOrigin();
+    focusInput();
+  }
+
   function moveSelection(row, col) {
     commitActiveCellValue();
     if (row >= getRowCount() - 5) ensureRowCapacity(row + ROW_GROWTH_CHUNK);
@@ -3992,11 +4036,21 @@
   function findClientRowByCompany(company) {
     var target = String(company || "").trim();
     if (!target) return null;
+    var targetNormalized = normalizeCompanyMatchText(target);
+    var partialMatch = null;
     for (var i = 0; i < clientState.rows.length; i++) {
       var row = clientState.rows[i] || {};
-      if (String(row.company || "").trim() === target) return row;
+      var companyName = String(row.company || "").trim();
+      if (!companyName) continue;
+      if (companyName === target) return row;
+      var rowNormalized = normalizeCompanyMatchText(companyName);
+      if (!rowNormalized || !targetNormalized) continue;
+      if (rowNormalized === targetNormalized) return row;
+      if (!partialMatch && (rowNormalized.indexOf(targetNormalized) >= 0 || targetNormalized.indexOf(rowNormalized) >= 0)) {
+        partialMatch = row;
+      }
     }
-    return null;
+    return partialMatch;
   }
 
   function applyClientToWorkInfo(clientRow) {
@@ -4018,7 +4072,20 @@
       .trim()
       .toUpperCase()
       .replace(/\s+/g, "")
-      .replace(/[-_/]/g, "");
+      .replace(/[-_/().]/g, "");
+  }
+
+  function normalizeCompanyMatchText(value) {
+    return normalizeLookupText(
+      String(value || "")
+        .replace(/㈜/g, "")
+        .replace(/\(주\)/gi, "")
+        .replace(/주식회사/gi, "")
+        .replace(/유한회사/gi, "")
+        .replace(/유한책임회사/gi, "")
+        .replace(/합자회사/gi, "")
+        .replace(/합명회사/gi, "")
+    );
   }
 
   function getPriceRowsWithValues() {
@@ -4032,20 +4099,25 @@
     var items = [];
     getPriceRowsWithValues().forEach(function (row) {
       var company = String(row.client || "").trim();
-      if (!company || seen[company]) return;
-      seen[company] = true;
+      var normalized = normalizeCompanyMatchText(company);
+      if (!company || !normalized || seen[normalized]) return;
+      seen[normalized] = true;
       items.push(company);
     });
     return items.sort();
   }
 
   function findPriceMatches(clientInput, codeInput) {
-    var clientToken = normalizeLookupText(clientInput);
+    var clientToken = normalizeCompanyMatchText(clientInput);
     var codeToken = normalizeLookupText(codeInput);
     return getPriceRowsWithValues().filter(function (row) {
-      var rowClient = normalizeLookupText(row.client);
+      var rowClient = normalizeCompanyMatchText(row.client);
       var rowCode = normalizeLookupText(row.code);
-      var clientMatched = !clientToken || rowClient === clientToken || rowClient.indexOf(clientToken) >= 0;
+      var clientMatched =
+        !clientToken ||
+        rowClient === clientToken ||
+        rowClient.indexOf(clientToken) >= 0 ||
+        clientToken.indexOf(rowClient) >= 0;
       var codeMatched = !codeToken || rowCode === codeToken || rowCode.indexOf(codeToken) >= 0;
       return clientMatched && codeMatched;
     });
@@ -4054,10 +4126,10 @@
   function findResolvedPriceRow(clientInput, codeInput) {
     var matches = findPriceMatches(clientInput, codeInput);
     if (!matches.length) return null;
-    var clientToken = normalizeLookupText(clientInput);
+    var clientToken = normalizeCompanyMatchText(clientInput);
     var codeToken = normalizeLookupText(codeInput);
     var exact = matches.filter(function (row) {
-      var rowClient = normalizeLookupText(row.client);
+      var rowClient = normalizeCompanyMatchText(row.client);
       var rowCode = normalizeLookupText(row.code);
       var clientExact = !clientToken || rowClient === clientToken;
       var codeExact = !codeToken || rowCode === codeToken;
@@ -4148,10 +4220,11 @@
   }
 
   function getClientSuggestionOptions(keyword) {
-    var token = normalizeLookupText(keyword);
+    var token = normalizeCompanyMatchText(keyword);
     return getDistinctPriceClients()
       .filter(function (company) {
-        return !token || normalizeLookupText(company).indexOf(token) >= 0;
+        var normalized = normalizeCompanyMatchText(company);
+        return !token || normalized.indexOf(token) >= 0 || token.indexOf(normalized) >= 0;
       })
       .slice(0, 30)
       .map(function (company) {
@@ -4401,13 +4474,14 @@
         '<div class="workdoc-top">' +
           '<div class="workdoc-card">' +
             '<div class="workdoc-head">' +
-              '<div class="workdoc-title">' + icon("building") + ' 공급자</div>' +
+              '<div class="workdoc-title">' + icon("building") + ' 공급자(우리 회사)</div>' +
               '<div class="workdoc-head-actions">' +
                 '<div class="sub">구분</div>' +
                 '<select class="workdoc-input workdoc-select" id="supplier-mode">' +
                   '<option value="corporate"' + (getCurrentSupplierMode() === "corporate" ? " selected" : "") + '>법인</option>' +
                   '<option value="personal"' + (getCurrentSupplierMode() === "personal" ? " selected" : "") + '>개인</option>' +
                 '</select>' +
+                '<button type="button" class="soft-btn" id="btn-supplier-reset-current">기본값 불러오기</button>' +
               '</div>' +
             "</div>" +
             '<div class="workdoc-form">' +
@@ -4766,6 +4840,7 @@
             refreshGridValues();
             updateSelectionUI();
             applyFilterUI();
+            focusLastUsedSalesRow();
           }
         });
         var applyBtn = document.getElementById("btn-filter-apply");
@@ -4841,6 +4916,15 @@
         if (supplierModeSelect) {
           supplierModeSelect.addEventListener("change", function () {
             ensureWorkInfoShape().supplierMode = supplierModeSelect.value === "personal" ? "personal" : "corporate";
+            scheduleLedgerDraftSave();
+            render();
+          });
+        }
+        var supplierResetBtn = document.getElementById("btn-supplier-reset-current");
+        if (supplierResetBtn) {
+          supplierResetBtn.addEventListener("click", function () {
+            var currentMode = getCurrentSupplierMode();
+            resetSupplierProfileToDefault(currentMode);
             scheduleLedgerDraftSave();
             render();
           });
