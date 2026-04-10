@@ -2674,6 +2674,7 @@
       html += '<div class="st-cell-inner" style="min-height:' + (getRowHeight(r) - 4) + 'px">';
       html +=
         '<div class="st-display" style="' +
+        (active ? "display:none;" : "") +
         'height:' + (getRowHeight(r) - 4) + 'px;' +
         'line-height:' + (getRowHeight(r) - 4) + 'px;' +
         '">' +
@@ -2730,6 +2731,17 @@
     });
     ST.rowHeadEls = Array.prototype.slice.call(tbody.querySelectorAll("[data-row-head]"));
     ST.renderRange = { start: startIndex, end: endIndex };
+
+    if (ST.inputEl) {
+      var activeTd = ST.cellMap[cellKey(ST.selectedCell.row, ST.selectedCell.col)];
+      if (activeTd) {
+        var inner = activeTd.querySelector(".st-cell-inner");
+        if (inner && ST.inputEl.parentNode !== inner) {
+          inner.appendChild(ST.inputEl);
+        }
+        syncInputOverlay();
+      }
+    }
   }
 
   function ensureRowVisible(rowIndex) {
