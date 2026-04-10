@@ -55,9 +55,11 @@
   var DRAFT_ID_KEY = "ledgerDraftId";
   var LEGACY_DRAFT_ID_KEY = "workDraftId";
   var LOCAL_BACKUP_KEY = "ledgerDraftBackup";
+  var SHARED_DRAFT_ID = "shared-ledger-main";
 
   var ledgerState = {
     draftId: null,
+    legacyDraftId: null,
     loadedFromFirebase: false,
     loadingPromise: null,
     saveTimer: null,
@@ -84,6 +86,7 @@
   var priceState = {
     rows: [],
     activeClient: "",
+    sidebarScrollTop: 0,
   };
   var shippingState = {
     profile: "vina",
@@ -98,6 +101,8 @@
     items: [],
     boxes: [],
     notes: "",
+    fillStatus: "",
+    fillOutputPath: "",
   };
   var workGridFields = ["date", "code", "name", "qty", "price", "supply", "tax", "note"];
   var clientGridFields = ["supplierMode", "company", "businessNo", "ceoName", "address", "businessType", "businessItem"];
@@ -357,6 +362,8 @@
     shippingState.clientName = shippingState.clientName || "";
     shippingState.matchedClientName = shippingState.matchedClientName || "";
     shippingState.notes = shippingState.notes || "";
+    shippingState.fillStatus = shippingState.fillStatus || "";
+    shippingState.fillOutputPath = shippingState.fillOutputPath || "";
     shippingState.items = normalizeShippingItems(shippingState.items);
     shippingState.boxes = normalizeShippingBoxes(shippingState.boxes, shippingState.items);
     return shippingState;
@@ -1849,29 +1856,24 @@
   function ensureDraftId() {
     if (ledgerState.draftId) return ledgerState.draftId;
 
-    var id = null;
+    var localId = null;
     try {
-      id =
+      localId =
         localStorage.getItem(DRAFT_ID_KEY) ||
         localStorage.getItem(LEGACY_DRAFT_ID_KEY);
     } catch (err) {}
 
-    if (!id) {
-      id =
-        window.crypto && crypto.randomUUID
-          ? crypto.randomUUID()
-          : String(Date.now());
-    }
-
-    ledgerState.draftId = id;
-    workState.draftId = id;
+    ledgerState.legacyDraftId =
+      localId && localId !== SHARED_DRAFT_ID ? localId : null;
+    ledgerState.draftId = SHARED_DRAFT_ID;
+    workState.draftId = SHARED_DRAFT_ID;
 
     try {
-      localStorage.setItem(DRAFT_ID_KEY, id);
-      localStorage.setItem(LEGACY_DRAFT_ID_KEY, id);
+      localStorage.setItem(DRAFT_ID_KEY, SHARED_DRAFT_ID);
+      localStorage.setItem(LEGACY_DRAFT_ID_KEY, SHARED_DRAFT_ID);
     } catch (err) {}
 
-    return id;
+    return SHARED_DRAFT_ID;
   }
 
   function getLedgerPayload() {
@@ -2121,6 +2123,35 @@
                   applyLedgerData(data);
                   saveLocalLedgerBackup();
                 }
+                ledgerState.cloudOffline = false;
+                finish(true);
+                return;
+              }
+              if (
+                !data &&
+                ledgerState.legacyDraftId &&
+                ledgerState.legacyDraftId !== id
+              ) {
+                window.firebaseFirestoreApi
+                  .loadWorkDraft(ledgerState.legacyDraftId)
+                  .then(function (legacyData) {
+                    if (legacyData && !ledgerState.dirty) {
+                      applyLedgerData(legacyData);
+                      saveLocalLedgerBackup();
+                      window.firebaseFirestoreApi
+                        .saveWorkDraft(id, legacyData)
+                        .catch(function (migrationErr) {
+                          console.warn("기존 Firestore 문서를 공용 문서로 옮기지 못했습니다:", migrationErr);
+                        });
+                    }
+                    ledgerState.cloudOffline = false;
+                    finish(true);
+                  })
+                  .catch(function () {
+                    ledgerState.cloudOffline = false;
+                    finish(true);
+                  });
+                return;
               }
               ledgerState.cloudOffline = false;
               finish(true);
@@ -3447,6 +3478,8 @@
   function focusInput() {
     if (ST.scrollEl) ST.scrollEl.focus();
     requestAnimationFrame(function () {
+      if (!ST.inputEl) return;
+      if (!ST.editMode) return;
       if (ST.inputEl) {
         ST.inputEl.focus();
         var len = ST.inputEl.value.length;
@@ -3551,6 +3584,12 @@
     ST.scrollEl.addEventListener("dragstart", function (e) {
       e.preventDefault();
     });
+    ST.scrollEl.addEventListener("wheel", function (e) {
+      if (!ST.scrollEl) return;
+      e.preventDefault();
+      ST.scrollEl.scrollTop += e.deltaY;
+      if (e.deltaX) ST.scrollEl.scrollLeft += e.deltaX;
+    }, { passive: false });
 
     tbody.addEventListener("mousedown", onTbodyMouseDown);
     tbody.addEventListener("dblclick", onTbodyDblClick);
@@ -4991,6 +5030,18 @@
     );
   }
 
+  function capturePriceSidebarScroll() {
+    var listEl = document.querySelector(".price-client-list");
+    if (!listEl) return;
+    priceState.sidebarScrollTop = listEl.scrollTop || 0;
+  }
+
+  function restorePriceSidebarScroll() {
+    var listEl = document.querySelector(".price-client-list");
+    if (!listEl) return;
+    listEl.scrollTop = priceState.sidebarScrollTop || 0;
+  }
+
   function renderShippingItemsRows(items) {
     if (!items.length) {
       return '<tr><td colspan="6" class="center muted">매출현황에서 품목을 선택해 출하작업으로 보내면 여기에 채워집니다.</td></tr>';
@@ -5022,6 +5073,118 @@
         "</tr>"
       );
     }).join("");
+  }
+
+  function buildVinaPayloadFromShipping() {
+    var shipping = ensureShippingStateShape();
+    var itemRows = normalizeShippingItems(shipping.items).filter(function (item) {
+      return String(item.code || "").trim() !== "";
+    }).map(function (item) {
+      return {
+        code: String(item.code || "").trim(),
+        name: String(item.name || "").trim(),
+        qty: parseCalcNumber(item.qty) || 0,
+        price: parseCalcNumber(item.price) || 0,
+      };
+    });
+
+    var boxGroups = {};
+    normalizeShippingBoxes(shipping.boxes, shipping.items).forEach(function (row) {
+      var boxNo = String(row.boxNo || "").trim();
+      var itemCode = String(row.itemCode || "").trim();
+      if (!boxNo || !itemCode) return;
+      if (!boxGroups[boxNo]) {
+        boxGroups[boxNo] = { boxNo: boxNo, items: [] };
+      }
+      boxGroups[boxNo].items.push({
+        code: itemCode,
+        qty: parseCalcNumber(row.qty) || 0,
+      });
+    });
+
+    var boxes = Object.keys(boxGroups).sort(function (a, b) {
+      return Number(a) - Number(b);
+    }).map(function (key) {
+      return boxGroups[key];
+    });
+
+    if (!boxes.length) {
+      boxes = [{
+        boxNo: 1,
+        items: itemRows.map(function (item) {
+          return { code: item.code, qty: item.qty };
+        }),
+      }];
+    }
+
+    var payload = {
+      shipDate: shipping.shipDate || todayIsoString(),
+      transport: normalizeShippingTransport(shipping.transport),
+      remarkCode: String(shipping.remarkCode || ""),
+      clientName: String(shipping.clientName || ""),
+      items: itemRows,
+      boxes: boxes,
+    };
+
+    if (shipping.saveFolder) {
+      var token = String(payload.shipDate || todayIsoString()).replace(/-/g, "").slice(2);
+      payload.outputPath = String(shipping.saveFolder).replace(/[\\\/]+$/, "") +
+        "\\" + "[HANSUNG] " + token + " VINA (" + payload.transport + ") filled detail.xlsx";
+    }
+
+    return payload;
+  }
+
+  function setShippingFillStatus(message, outputPath) {
+    ensureShippingStateShape();
+    shippingState.fillStatus = message || "";
+    shippingState.fillOutputPath = outputPath || "";
+    var statusEl = document.getElementById("shipping-fill-status");
+    if (statusEl) {
+      statusEl.textContent = shippingState.fillStatus || "";
+    }
+    var pathEl = document.getElementById("shipping-fill-path");
+    if (pathEl) {
+      pathEl.textContent = shippingState.fillOutputPath || "";
+    }
+  }
+
+  function checkVinaBridgeHealth() {
+    return fetch("http://127.0.0.1:18765/health", {
+      method: "GET",
+    }).then(function (res) {
+      if (!res.ok) throw new Error("브리지 응답이 없습니다.");
+      return res.json();
+    });
+  }
+
+  function runVinaFillFromShipping() {
+    var payload = buildVinaPayloadFromShipping();
+    if (!payload.items.length) {
+      setShippingFillStatus("보낼 품목이 없습니다. 매출현황에서 먼저 선택해 주세요.", "");
+      return Promise.resolve(false);
+    }
+    setShippingFillStatus("VINA 엑셀 자동 채우는 중...", "");
+    return fetch("http://127.0.0.1:18765/vina/fill", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    })
+      .then(function (res) {
+        return res.json().then(function (data) {
+          if (!res.ok || !data.ok) {
+            throw new Error((data && data.error) || "브리지 실행 실패");
+          }
+          setShippingFillStatus("완료: 엑셀 채워넣기 성공", data.outputPath || "");
+          return true;
+        });
+      })
+      .catch(function (err) {
+        setShippingFillStatus("실패: " + err.message + " / start-vina-bridge.cmd를 먼저 실행해 주세요.", "");
+        return false;
+      });
   }
 
   function renderShippingTab() {
@@ -5118,6 +5281,12 @@
             '<ol class="shippingdoc-steps">' +
               templateSteps.map(function (step) { return '<li>' + escapeHtml(step) + '</li>'; }).join("") +
             '</ol>' +
+            '<div class="price-main-actions" style="margin-top:12px">' +
+              '<button type="button" class="soft-btn" id="btn-shipping-bridge-check">브리지 확인</button>' +
+              '<button type="button" class="soft-btn" id="btn-shipping-fill-vina">VINA 엑셀 채우기</button>' +
+            '</div>' +
+            '<div class="sub" id="shipping-fill-status" style="margin-top:10px; min-height:20px">' + escapeHtml(shipping.fillStatus || "") + '</div>' +
+            '<div class="sub" id="shipping-fill-path" style="word-break:break-all">' + escapeHtml(shipping.fillOutputPath || "") + '</div>' +
             '<textarea class="workdoc-input shippingdoc-notes" id="shipping-notes" placeholder="출하 메모 / 사람이 마지막으로 확인할 포인트">' + escapeHtml(shipping.notes || "") + '</textarea>' +
           '</div>' +
         '</div>' +
@@ -5596,6 +5765,8 @@
         var shippingRemarkCode = document.getElementById("shipping-remark-code");
         var shippingSaveFolder = document.getElementById("shipping-save-folder");
         var shippingNotes = document.getElementById("shipping-notes");
+        var shippingBridgeCheckBtn = document.getElementById("btn-shipping-bridge-check");
+        var shippingFillVinaBtn = document.getElementById("btn-shipping-fill-vina");
 
         function bindShippingValue(el, setter, rerender) {
           if (!el) return;
@@ -5628,6 +5799,24 @@
         bindShippingValue(shippingSaveFolder, function (value) { shippingState.saveFolder = value; });
         bindShippingValue(shippingNotes, function (value) { shippingState.notes = value; });
 
+        if (shippingBridgeCheckBtn) {
+          shippingBridgeCheckBtn.addEventListener("click", function () {
+            setShippingFillStatus("브리지 확인 중...", "");
+            checkVinaBridgeHealth()
+              .then(function () {
+                setShippingFillStatus("브리지 연결됨", "");
+              })
+              .catch(function (err) {
+                setShippingFillStatus("브리지 연결 실패: start-vina-bridge.cmd를 먼저 실행해 주세요.", "");
+              });
+          });
+        }
+        if (shippingFillVinaBtn) {
+          shippingFillVinaBtn.addEventListener("click", function () {
+            runVinaFillFromShipping();
+          });
+        }
+
         var addBoxBtn = document.getElementById("btn-shipping-add-box");
         if (addBoxBtn) {
           addBoxBtn.addEventListener("click", function () {
@@ -5653,13 +5842,21 @@
           if (!wasPriceLoaded && state.subTab === "price") render();
         });
         attachPriceGridWhenNeeded(document.getElementById("price-grid-host"));
+        restorePriceSidebarScroll();
         var priceClientInput = document.getElementById("price-active-client");
         var priceOpenBtn = document.getElementById("btn-price-open");
         var priceNewBtn = document.getElementById("btn-price-new");
         var priceRenameBtn = document.getElementById("btn-price-rename");
         var priceDeleteBtn = document.getElementById("btn-price-delete");
+        var priceClientListEl = document.querySelector(".price-client-list");
+        if (priceClientListEl) {
+          priceClientListEl.addEventListener("scroll", function () {
+            priceState.sidebarScrollTop = priceClientListEl.scrollTop || 0;
+          });
+        }
         function applyActivePriceClient() {
           if (!priceClientInput) return;
+          capturePriceSidebarScroll();
           priceState.activeClient = String(priceClientInput.value || "").trim();
           scheduleLedgerDraftSave();
           render();
@@ -5682,6 +5879,7 @@
             var previousName = String(priceState.activeClient || "").trim();
             if (!previousName || !nextName) return;
             if (renamePriceClient(previousName, nextName)) {
+              capturePriceSidebarScroll();
               scheduleLedgerDraftSave();
               render();
             }
@@ -5692,6 +5890,7 @@
             var currentName = String(priceState.activeClient || "").trim();
             if (!currentName) return;
             if (deletePriceClient(currentName)) {
+              capturePriceSidebarScroll();
               scheduleLedgerDraftSave();
               render();
             }
@@ -5708,6 +5907,7 @@
         }
         app.querySelectorAll("[data-price-client]").forEach(function (btn) {
           btn.addEventListener("click", function () {
+            capturePriceSidebarScroll();
             priceState.activeClient = btn.getAttribute("data-price-client") || "";
             scheduleLedgerDraftSave();
             render();
