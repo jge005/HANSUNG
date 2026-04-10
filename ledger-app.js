@@ -23,6 +23,7 @@
     { key: "status", label: "매출현황", icon: "clipboard" },
     { key: "work", label: "거래작업", icon: "scroll" },
     { key: "statement", label: "거래명세서", icon: "folder" },
+    { key: "shipping", label: "출하작업", icon: "folder" },
     { key: "price", label: "매출단가", icon: "tags" },
     { key: "client", label: "업체리스트", icon: "building" },
   ];
@@ -60,6 +61,7 @@
     loadedFromFirebase: false,
     loadingPromise: null,
     saveTimer: null,
+    localSaveTimer: null,
     saveRetryTimer: null,
     loadRetryTimer: null,
     dirty: false,
@@ -82,6 +84,20 @@
   var priceState = {
     rows: [],
     activeClient: "",
+  };
+  var shippingState = {
+    profile: "vina",
+    transport: "AIR",
+    shipDate: "",
+    invoiceNo: "",
+    packingNo: "",
+    remarkCode: "",
+    saveFolder: "",
+    clientName: "",
+    matchedClientName: "",
+    items: [],
+    boxes: [],
+    notes: "",
   };
   var workGridFields = ["date", "code", "name", "qty", "price", "supply", "tax", "note"];
   var clientGridFields = ["supplierMode", "company", "businessNo", "ceoName", "address", "businessType", "businessItem"];
@@ -257,6 +273,121 @@
       price: "",
       name: "",
     };
+  }
+
+  function emptyShippingBox() {
+    return {
+      boxNo: "",
+      itemCode: "",
+      itemName: "",
+      qty: "",
+      shippingMark: "",
+      note: "",
+    };
+  }
+
+  function todayIsoString() {
+    var now = new Date();
+    var year = now.getFullYear();
+    var month = String(now.getMonth() + 1).padStart(2, "0");
+    var day = String(now.getDate()).padStart(2, "0");
+    return year + "-" + month + "-" + day;
+  }
+
+  function normalizeShippingProfile(value, fallbackClientName) {
+    var text = String(value || "").trim().toLowerCase();
+    if (text === "vina" || text === "대영vina" || text === "대영비나") return "vina";
+    if (text === "dgt" || text === "디지티") return "dgt";
+    var clientText = normalizeCompanyMatchText(fallbackClientName || "");
+    if (clientText.indexOf("VINA") >= 0) return "vina";
+    if (clientText.indexOf("DGT") >= 0 || clientText.indexOf("디지티") >= 0) return "dgt";
+    return "vina";
+  }
+
+  function normalizeShippingTransport(value) {
+    var text = String(value || "").trim().toUpperCase();
+    return text === "VSL" ? "VSL" : "AIR";
+  }
+
+  function normalizeShippingItems(items) {
+    if (!Array.isArray(items)) return [];
+    return items.map(function (item) {
+      return {
+        date: item && item.date != null ? String(item.date) : "",
+        client: item && item.client != null ? String(item.client) : "",
+        code: item && item.code != null ? String(item.code) : "",
+        name: item && item.name != null ? String(item.name) : "",
+        qty: item && item.qty != null ? String(item.qty) : "",
+        price: item && item.price != null ? String(item.price) : "",
+        amount: item && item.amount != null ? String(item.amount) : "",
+      };
+    });
+  }
+
+  function normalizeShippingBoxes(boxes, items) {
+    var normalized = Array.isArray(boxes)
+      ? boxes.map(function (box) { return Object.assign(emptyShippingBox(), box || {}); })
+      : [];
+    var target = Math.max(4, normalized.length, Array.isArray(items) ? items.length : 0);
+    for (var i = 0; i < target; i++) {
+      var sourceItem = items && items[i] ? items[i] : null;
+      normalized[i] = Object.assign(emptyShippingBox(), normalized[i] || {});
+      if (!normalized[i].boxNo) normalized[i].boxNo = i < target - 1 ? String(i + 1) : "";
+      if (sourceItem) {
+        if (!normalized[i].itemCode) normalized[i].itemCode = sourceItem.code || "";
+        if (!normalized[i].itemName) normalized[i].itemName = sourceItem.name || "";
+        if (!normalized[i].qty) normalized[i].qty = sourceItem.qty || "";
+      }
+    }
+    while (normalized.length < target) normalized.push(emptyShippingBox());
+    return normalized;
+  }
+
+  function ensureShippingStateShape() {
+    if (!shippingState || typeof shippingState !== "object") {
+      shippingState = {};
+    }
+    shippingState.profile = normalizeShippingProfile(shippingState.profile, shippingState.clientName);
+    shippingState.transport = normalizeShippingTransport(shippingState.transport);
+    shippingState.shipDate = shippingState.shipDate || todayIsoString();
+    shippingState.invoiceNo = shippingState.invoiceNo || "";
+    shippingState.packingNo = shippingState.packingNo || "";
+    shippingState.remarkCode = shippingState.remarkCode || "";
+    shippingState.saveFolder = shippingState.saveFolder || "";
+    shippingState.clientName = shippingState.clientName || "";
+    shippingState.matchedClientName = shippingState.matchedClientName || "";
+    shippingState.notes = shippingState.notes || "";
+    shippingState.items = normalizeShippingItems(shippingState.items);
+    shippingState.boxes = normalizeShippingBoxes(shippingState.boxes, shippingState.items);
+    return shippingState;
+  }
+
+  function buildShippingTemplates(profile, transport) {
+    var normalizedProfile = normalizeShippingProfile(profile);
+    var normalizedTransport = normalizeShippingTransport(transport);
+    if (normalizedProfile === "dgt") {
+      return [
+        "DGT 오퍼시트.xlsx -> PDF 저장",
+        "DGT 라벨양식.xls -> 박스 수만큼 생성",
+        "DGT 패킹 양식.xlsx -> 박스별 구성 입력",
+      ];
+    }
+    var list = [
+      "출하정보.xlsx -> 출하 시트 입력 / 무게 계산",
+      normalizedTransport === "VSL"
+        ? "(HANSUNG) Invoice+Packing ...(VSL)...xlsx -> INVOICE / PACKING LIST"
+        : "(HANSUNG) Invoice+Packing ...(AIR)...xlsx -> INVOICE / PACKING LIST",
+      "쉬핑마크 시트 작성",
+    ];
+    if (normalizedTransport === "VSL") {
+      list.push("DETAIL LIST / DETAIL PACKING LIST / CNTR 날짜 변경 후 엑셀 저장");
+    }
+    return list;
+  }
+
+  function getShippingMatchedClientRow() {
+    ensureShippingStateShape();
+    return findClientRowByCompany(shippingState.clientName || shippingState.matchedClientName || "");
   }
 
   function emptySupplierInfo() {
@@ -532,7 +663,7 @@
         break;
       }
     }
-    var target = Math.max(minCount || 80, lastUsed + 51);
+    var target = Math.max(minCount || 40, lastUsed + 21);
     for (var i = 0; i < target; i++) {
       normalized[i] = Object.assign(emptyPriceRow(), normalized[i] || {});
     }
@@ -559,7 +690,7 @@
         break;
       }
     }
-    var target = Math.max(minCount || 80, lastUsed + 51);
+    var target = Math.max(minCount || 40, lastUsed + 21);
     for (var j = 0; j < target; j++) {
       normalized[j] = Object.assign({ code: "", price: "", name: "" }, normalized[j] || {});
     }
@@ -1692,12 +1823,12 @@
       title: "업체별 매출단가 시트",
       subtitle: "선택한 업체의 코드 / 단가 / 품목명을 엑셀처럼 복사·붙여넣기",
       maxHeight: 560,
-      minRows: 80,
+      minRows: 40,
       columns: priceSheetColumns,
       emptyRow: function () { return { code: "", price: "", name: "" }; },
       getRows: function () { return getPriceRowsForClient(ensureActivePriceClient()); },
       setRows: function (rows) { setPriceRowsForClient(ensureActivePriceClient(), rows); },
-      normalizeRows: function (rows, minCount) { return normalizePriceEditorRows(rows, minCount || 80); },
+      normalizeRows: function (rows, minCount) { return normalizePriceEditorRows(rows, minCount || 40); },
       formatValue: function (rowIndex, colIndex, raw) {
         var key = priceSheetColumns[colIndex].key;
         if (key === "price") return formatDisplayNumber(raw);
@@ -1752,6 +1883,10 @@
       statusRows: normalizeSalesRows(ST.rows, storedRowCount).slice(0, storedRowCount),
       workItems: cloneItems(trimmedWorkItems),
       workInfo: cloneWorkInfo(workState.info),
+      shippingJob: Object.assign({}, ensureShippingStateShape(), {
+        items: normalizeShippingItems(shippingState.items),
+        boxes: normalizeShippingBoxes(shippingState.boxes, shippingState.items),
+      }),
       clientRows: cloneClientRows(trimmedClientRows),
       priceRows: trimmedPriceRows.map(function (row) { return Object.assign({}, row); }),
       priceActiveClient: priceState.activeClient || "",
@@ -1776,6 +1911,11 @@
       workState.items = trimTrailingRows(data.workItems, workGridFields, 12, function () { return {}; });
     } else if (Array.isArray(data.items)) {
       workState.items = trimTrailingRows(data.items, workGridFields, 12, function () { return {}; });
+    }
+
+    if (data.shippingJob && typeof data.shippingJob === "object") {
+      shippingState = Object.assign({}, ensureShippingStateShape(), data.shippingJob || {});
+      ensureShippingStateShape();
     }
 
     if (data.workInfo && typeof data.workInfo === "object") {
@@ -1833,6 +1973,22 @@
     }
   }
 
+  function flushLocalLedgerBackup() {
+    if (ledgerState.localSaveTimer) {
+      clearTimeout(ledgerState.localSaveTimer);
+      ledgerState.localSaveTimer = null;
+    }
+    saveLocalLedgerBackup();
+  }
+
+  function scheduleLocalLedgerBackup(delay) {
+    if (ledgerState.localSaveTimer) clearTimeout(ledgerState.localSaveTimer);
+    ledgerState.localSaveTimer = setTimeout(function () {
+      ledgerState.localSaveTimer = null;
+      saveLocalLedgerBackup();
+    }, delay || 600);
+  }
+
   function isRetryableFirestoreError(err) {
     if (
       window.firebaseFirestoreApi &&
@@ -1886,12 +2042,16 @@
       }
       if (ledgerState.dirty) saveLedgerDraftToFirebase();
     });
+
+    window.addEventListener("beforeunload", function () {
+      if (ledgerState.dirty) flushLocalLedgerBackup();
+    });
   }
 
   function saveLedgerDraftToFirebase(attempts) {
     attempts = attempts || 0;
     ensureDraftId();
-    saveLocalLedgerBackup();
+    flushLocalLedgerBackup();
 
     if (!window.firebaseFirestoreApi || !window.firebaseFirestoreApi.saveWorkDraft) {
       if (attempts < 30) {
@@ -1922,12 +2082,12 @@
 
   function scheduleLedgerDraftSave() {
     ledgerState.dirty = true;
-    saveLocalLedgerBackup();
+    scheduleLocalLedgerBackup(700);
 
     if (ledgerState.saveTimer) clearTimeout(ledgerState.saveTimer);
     ledgerState.saveTimer = setTimeout(function () {
       saveLedgerDraftToFirebase();
-    }, 500);
+    }, 1200);
   }
 
   function ensureLedgerLoadedFromFirebase() {
@@ -4790,7 +4950,7 @@
   }
 
   function renderPriceTab() {
-    priceState.rows = normalizePriceGridRows(priceState.rows, 80);
+    priceState.rows = normalizePriceGridRows(priceState.rows, 40);
     var activeClient = ensureActivePriceClient();
     var clientOptions = getAllPriceClientOptions();
     return (
@@ -4825,6 +4985,140 @@
             '</div>' +
             '<div class="sub" style="margin-bottom:10px">' + escapeHtml(activeClient ? activeClient + ' 단가표' : '왼쪽에서 업체를 선택하거나 새 업체를 입력하세요') + '</div>' +
             '<div id="price-grid-host"></div>' +
+          '</div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function renderShippingItemsRows(items) {
+    if (!items.length) {
+      return '<tr><td colspan="6" class="center muted">매출현황에서 품목을 선택해 출하작업으로 보내면 여기에 채워집니다.</td></tr>';
+    }
+    return items.map(function (item, index) {
+      return (
+        "<tr>" +
+          "<td>" + escapeHtml(item.date || "") + "</td>" +
+          "<td>" + escapeHtml(item.code || "") + "</td>" +
+          "<td>" + escapeHtml(item.name || "") + "</td>" +
+          "<td class=\"right\">" + escapeHtml(formatDisplayNumber(item.qty || "")) + "</td>" +
+          "<td class=\"right\">" + escapeHtml(formatDisplayNumber(item.price || "")) + "</td>" +
+          "<td class=\"right\">" + escapeHtml(formatDisplayNumber(item.amount || "")) + "</td>" +
+        "</tr>"
+      );
+    }).join("");
+  }
+
+  function renderShippingBoxesRows(boxes) {
+    return boxes.map(function (box, index) {
+      return (
+        "<tr>" +
+          '<td><input class="workdoc-input shipping-cell" data-ship-box-row="' + index + '" data-ship-box-field="boxNo" value="' + escapeAttr(box.boxNo || "") + '" /></td>' +
+          '<td><input class="workdoc-input shipping-cell" data-ship-box-row="' + index + '" data-ship-box-field="itemCode" value="' + escapeAttr(box.itemCode || "") + '" /></td>' +
+          '<td><input class="workdoc-input shipping-cell" data-ship-box-row="' + index + '" data-ship-box-field="itemName" value="' + escapeAttr(box.itemName || "") + '" /></td>' +
+          '<td><input class="workdoc-input shipping-cell" data-ship-box-row="' + index + '" data-ship-box-field="qty" value="' + escapeAttr(box.qty || "") + '" /></td>' +
+          '<td><input class="workdoc-input shipping-cell" data-ship-box-row="' + index + '" data-ship-box-field="shippingMark" value="' + escapeAttr(box.shippingMark || "") + '" /></td>' +
+          '<td><input class="workdoc-input shipping-cell" data-ship-box-row="' + index + '" data-ship-box-field="note" value="' + escapeAttr(box.note || "") + '" /></td>' +
+        "</tr>"
+      );
+    }).join("");
+  }
+
+  function renderShippingTab() {
+    var shipping = ensureShippingStateShape();
+    var matchedClient = getShippingMatchedClientRow();
+    var templateSteps = buildShippingTemplates(shipping.profile, shipping.transport);
+    var totalQty = shipping.items.reduce(function (acc, item) {
+      return acc + (parseCalcNumber(item.qty) || 0);
+    }, 0);
+    var totalAmount = shipping.items.reduce(function (acc, item) {
+      return acc + (parseCalcNumber(item.amount) || 0);
+    }, 0);
+    return (
+      '<div class="shippingdoc">' +
+        '<div class="shippingdoc-grid">' +
+          '<div class="shippingdoc-card">' +
+            '<div class="clientdoc-head">' +
+              '<div class="clientdoc-title">' + icon("folder") + ' 출하 헤더</div>' +
+              '<div class="sub">매출현황 선택행 기준</div>' +
+            '</div>' +
+            '<div class="workdoc-form">' +
+              '<div class="workdoc-label">작업유형</div>' +
+              '<select class="workdoc-input workdoc-select" id="shipping-profile">' +
+                '<option value="vina"' + (shipping.profile === "vina" ? " selected" : "") + '>대영VINA</option>' +
+                '<option value="dgt"' + (shipping.profile === "dgt" ? " selected" : "") + '>디지티</option>' +
+              '</select>' +
+              '<div class="workdoc-label">거래처</div><input class="workdoc-input" id="shipping-client-name" value="' + escapeAttr(shipping.clientName || "") + '" />' +
+              '<div class="workdoc-label">출하일</div><input type="date" class="workdoc-input" id="shipping-ship-date" value="' + escapeAttr(shipping.shipDate || "") + '" />' +
+              '<div class="workdoc-label">운송방식</div>' +
+              '<select class="workdoc-input workdoc-select" id="shipping-transport">' +
+                '<option value="AIR"' + (shipping.transport === "AIR" ? " selected" : "") + '>AIR</option>' +
+                '<option value="VSL"' + (shipping.transport === "VSL" ? " selected" : "") + '>VSL</option>' +
+              '</select>' +
+            '</div>' +
+          '</div>' +
+          '<div class="shippingdoc-card">' +
+            '<div class="clientdoc-head">' +
+              '<div class="clientdoc-title">' + icon("sheet") + ' 문서 헤더</div>' +
+              '<div class="sub">자동저장용 메모</div>' +
+            '</div>' +
+            '<div class="workdoc-form">' +
+              '<div class="workdoc-label">Invoice No</div><input class="workdoc-input" id="shipping-invoice-no" value="' + escapeAttr(shipping.invoiceNo || "") + '" />' +
+              '<div class="workdoc-label">Packing No</div><input class="workdoc-input" id="shipping-packing-no" value="' + escapeAttr(shipping.packingNo || "") + '" />' +
+              '<div class="workdoc-label">Remark/Code</div><input class="workdoc-input" id="shipping-remark-code" value="' + escapeAttr(shipping.remarkCode || "") + '" ' + (shipping.transport === "VSL" ? "" : 'placeholder="VSL일 때 사용"') + ' />' +
+              '<div class="workdoc-label">저장폴더</div><input class="workdoc-input" id="shipping-save-folder" placeholder="예: C:\\문서\\VINA\\2026-04-10" value="' + escapeAttr(shipping.saveFolder || "") + '" />' +
+            '</div>' +
+          '</div>' +
+          '<div class="shippingdoc-card">' +
+            '<div class="clientdoc-head">' +
+              '<div class="clientdoc-title">' + icon("building") + ' 거래처 연결</div>' +
+            '</div>' +
+            '<div class="shippingdoc-pills">' +
+              '<span class="st-status-pill">매출현황 <strong>' + escapeHtml(shipping.clientName || "-") + '</strong></span>' +
+              '<span class="st-status-pill">업체리스트 <strong>' + escapeHtml(matchedClient ? matchedClient.company : (shipping.matchedClientName || "-")) + '</strong></span>' +
+              '<span class="st-status-pill">건수 <strong>' + escapeHtml(String(shipping.items.length)) + '</strong></span>' +
+            '</div>' +
+            '<div class="shippingdoc-receiver">' +
+              '<div><strong>대표자</strong> ' + escapeHtml(matchedClient ? matchedClient.ceoName : "") + '</div>' +
+              '<div><strong>사업자등록번호</strong> ' + escapeHtml(matchedClient ? matchedClient.businessNo : "") + '</div>' +
+              '<div><strong>주소</strong> ' + escapeHtml(matchedClient ? matchedClient.address : "") + '</div>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="shippingdoc-card">' +
+          '<div class="clientdoc-head">' +
+            '<div class="clientdoc-title">' + icon("scroll") + ' VINA 품목 원본</div>' +
+            '<div class="shippingdoc-pills">' +
+              '<span class="st-status-pill">수량합계 <strong>' + escapeHtml(formatDisplayNumber(totalQty)) + '</strong></span>' +
+              '<span class="st-status-pill">금액합계 <strong>' + escapeHtml(formatDisplayNumber(totalAmount)) + '</strong></span>' +
+            '</div>' +
+          '</div>' +
+          '<div class="shippingdoc-table-wrap">' +
+            '<table class="shippingdoc-table"><thead><tr><th>일자</th><th>코드</th><th>품명</th><th>수량</th><th>단가</th><th>금액</th></tr></thead><tbody>' +
+            renderShippingItemsRows(shipping.items) +
+            '</tbody></table>' +
+          '</div>' +
+        '</div>' +
+        '<div class="shippingdoc-bottom">' +
+          '<div class="shippingdoc-card">' +
+            '<div class="clientdoc-head">' +
+              '<div class="clientdoc-title">' + icon("clipboard") + ' 박스 배분표</div>' +
+              '<button type="button" class="soft-btn" id="btn-shipping-add-box">박스행 추가</button>' +
+            '</div>' +
+            '<div class="shippingdoc-table-wrap">' +
+              '<table class="shippingdoc-table"><thead><tr><th>BOX</th><th>코드</th><th>품명</th><th>수량</th><th>쉬핑마크</th><th>비고</th></tr></thead><tbody>' +
+              renderShippingBoxesRows(shipping.boxes) +
+              '</tbody></table>' +
+            '</div>' +
+          '</div>' +
+          '<div class="shippingdoc-card">' +
+            '<div class="clientdoc-head">' +
+              '<div class="clientdoc-title">' + icon("tags") + ' 생성 대상 파일</div>' +
+            '</div>' +
+            '<ol class="shippingdoc-steps">' +
+              templateSteps.map(function (step) { return '<li>' + escapeHtml(step) + '</li>'; }).join("") +
+            '</ol>' +
+            '<textarea class="workdoc-input shippingdoc-notes" id="shipping-notes" placeholder="출하 메모 / 사람이 마지막으로 확인할 포인트">' + escapeHtml(shipping.notes || "") + '</textarea>' +
           '</div>' +
         '</div>' +
       '</div>'
@@ -4903,6 +5197,56 @@
     workState.loadedFromFirebase = true;
     scheduleLedgerDraftSave();
 
+    render();
+  }
+
+  function sendSelectedStatusRowsToShipping() {
+    var keys = ST.selectedKeys || [];
+    if (!keys.length) return;
+
+    var rowSet = new Set();
+    keys.forEach(function (key) {
+      var p = String(key).split(":");
+      if (p.length >= 2) rowSet.add(Number(p[0]));
+    });
+
+    var rows = Array.from(rowSet).sort(function (a, b) { return a - b; });
+    if (!rows.length) return;
+
+    var shippingItems = rows.map(function (r) {
+      var row = ST.rows[r] || emptyRow();
+      return {
+        date: row.date || "",
+        client: row.client || "",
+        code: row.code || "",
+        name: row.name || "",
+        qty: row.qty || "",
+        price: row.price || "",
+        amount: row.amount || "",
+      };
+    });
+
+    var firstClientName = "";
+    for (var i = 0; i < shippingItems.length; i++) {
+      if (shippingItems[i].client && String(shippingItems[i].client).trim() !== "") {
+        firstClientName = String(shippingItems[i].client).trim();
+        break;
+      }
+    }
+
+    var matchedClient = findClientRowByCompany(firstClientName);
+    shippingState.clientName = firstClientName;
+    shippingState.matchedClientName = matchedClient ? matchedClient.company : "";
+    shippingState.profile = normalizeShippingProfile(shippingState.profile, firstClientName);
+    shippingState.transport = normalizeShippingTransport(shippingState.transport);
+    shippingState.shipDate = shippingState.shipDate || todayIsoString();
+    shippingState.items = normalizeShippingItems(shippingItems);
+    shippingState.boxes = normalizeShippingBoxes([], shippingState.items);
+    ensureShippingStateShape();
+
+    state.subTab = "shipping";
+    ensureDraftId();
+    scheduleLedgerDraftSave();
     render();
   }
 
@@ -5048,6 +5392,10 @@
           '<button type="button" class="soft-btn" id="btn-sort-asc">오름차순</button>' +
           '<button type="button" class="soft-btn" id="btn-sort-desc">내림차순</button>' +
           '<button type="button" class="soft-btn" id="btn-sort-reset">입력순</button>' +
+          '<button type="button" class="soft-btn" id="btn-send-to-shipping">' +
+          icon("folder") +
+          "출하작업으로 보내기" +
+          "</button>" +
           '<button type="button" class="soft-btn" id="btn-send-to-work" style="margin-left:auto">' +
           icon("arrowRight") +
           "거래작업으로 보내기" +
@@ -5058,6 +5406,8 @@
         body = renderWorkTab();
       } else if (state.subTab === "statement") {
         body = renderStatementTab();
+      } else if (state.subTab === "shipping") {
+        body = renderShippingTab();
       } else if (state.subTab === "price") {
         body = renderPriceTab();
       } else if (state.subTab === "client") {
@@ -5152,6 +5502,12 @@
             }
           });
         }
+        var sendShippingBtn = document.getElementById("btn-send-to-shipping");
+        if (sendShippingBtn) {
+          sendShippingBtn.addEventListener("click", function () {
+            sendSelectedStatusRowsToShipping();
+          });
+        }
         var sendBtn = document.getElementById("btn-send-to-work");
         if (sendBtn) {
           sendBtn.addEventListener("click", function () {
@@ -5225,6 +5581,72 @@
             window.print();
           });
         }
+      } else if (state.subTab === "shipping") {
+        var wasShippingLoaded = ledgerState.loadedFromFirebase;
+        ensureLedgerLoadedFromFirebase().then(function () {
+          if (!wasShippingLoaded && state.subTab === "shipping") render();
+        });
+        ensureShippingStateShape();
+        var shippingProfile = document.getElementById("shipping-profile");
+        var shippingTransport = document.getElementById("shipping-transport");
+        var shippingShipDate = document.getElementById("shipping-ship-date");
+        var shippingClientName = document.getElementById("shipping-client-name");
+        var shippingInvoiceNo = document.getElementById("shipping-invoice-no");
+        var shippingPackingNo = document.getElementById("shipping-packing-no");
+        var shippingRemarkCode = document.getElementById("shipping-remark-code");
+        var shippingSaveFolder = document.getElementById("shipping-save-folder");
+        var shippingNotes = document.getElementById("shipping-notes");
+
+        function bindShippingValue(el, setter, rerender) {
+          if (!el) return;
+          el.addEventListener("input", function () {
+            setter(el.value);
+            scheduleLedgerDraftSave();
+          });
+          el.addEventListener("change", function () {
+            setter(el.value);
+            scheduleLedgerDraftSave();
+            if (rerender) render();
+          });
+        }
+
+        bindShippingValue(shippingProfile, function (value) {
+          shippingState.profile = normalizeShippingProfile(value, shippingState.clientName);
+        }, true);
+        bindShippingValue(shippingTransport, function (value) {
+          shippingState.transport = normalizeShippingTransport(value);
+        }, true);
+        bindShippingValue(shippingShipDate, function (value) { shippingState.shipDate = value; });
+        bindShippingValue(shippingClientName, function (value) {
+          shippingState.clientName = String(value || "").trim();
+          var matched = findClientRowByCompany(shippingState.clientName);
+          shippingState.matchedClientName = matched ? matched.company : "";
+        }, true);
+        bindShippingValue(shippingInvoiceNo, function (value) { shippingState.invoiceNo = value; });
+        bindShippingValue(shippingPackingNo, function (value) { shippingState.packingNo = value; });
+        bindShippingValue(shippingRemarkCode, function (value) { shippingState.remarkCode = value; });
+        bindShippingValue(shippingSaveFolder, function (value) { shippingState.saveFolder = value; });
+        bindShippingValue(shippingNotes, function (value) { shippingState.notes = value; });
+
+        var addBoxBtn = document.getElementById("btn-shipping-add-box");
+        if (addBoxBtn) {
+          addBoxBtn.addEventListener("click", function () {
+            shippingState.boxes = normalizeShippingBoxes((shippingState.boxes || []).concat([emptyShippingBox()]), shippingState.items);
+            scheduleLedgerDraftSave();
+            render();
+          });
+        }
+        app.querySelectorAll("[data-ship-box-row]").forEach(function (inp) {
+          inp.addEventListener("input", function () {
+            var rowIndex = Number(inp.getAttribute("data-ship-box-row"));
+            var field = inp.getAttribute("data-ship-box-field");
+            if (isNaN(rowIndex) || !field) return;
+            ensureShippingStateShape();
+            if (!shippingState.boxes[rowIndex]) shippingState.boxes[rowIndex] = emptyShippingBox();
+            shippingState.boxes[rowIndex][field] = inp.value;
+            scheduleLedgerDraftSave();
+          });
+        });
       } else if (state.subTab === "price") {
         var wasPriceLoaded = ledgerState.loadedFromFirebase;
         ensureLedgerLoadedFromFirebase().then(function () {
