@@ -506,12 +506,21 @@
   }
 
   function normalizePriceGridRows(rows, minCount) {
-    var normalized = trimTrailingRows(rows, priceGridFields, minCount || 30, emptyPriceRow);
-    var target = Math.max(minCount || 30, normalized.length);
+    var normalized = Array.isArray(rows)
+      ? rows.map(function (row) { return Object.assign(emptyPriceRow(), row || {}); })
+      : [];
+    var lastUsed = -1;
+    for (var i = normalized.length - 1; i >= 0; i--) {
+      if (rowHasAnyValue(normalized[i], priceGridFields)) {
+        lastUsed = i;
+        break;
+      }
+    }
+    var target = Math.max(minCount || 80, lastUsed + 51);
     for (var i = 0; i < target; i++) {
       normalized[i] = Object.assign(emptyPriceRow(), normalized[i] || {});
     }
-    while (normalized.length < target || rowHasAnyValue(normalized[normalized.length - 1], priceGridFields)) {
+    while (normalized.length < target) {
       normalized.push(emptyPriceRow());
     }
     return normalized;
@@ -1640,12 +1649,12 @@
       title: "매출단가 시트",
       subtitle: "업체 / 코드 / 단가 / 품목명 입력 후 엑셀처럼 복사·붙여넣기",
       maxHeight: 560,
-      minRows: 30,
+      minRows: 80,
       columns: priceSheetColumns,
       emptyRow: function () { return emptyPriceRow(); },
-      getRows: function () { return normalizePriceGridRows(priceState.rows, 30); },
-      setRows: function (rows) { priceState.rows = normalizePriceGridRows(rows, 30); },
-      normalizeRows: function (rows, minCount) { return normalizePriceGridRows(rows, minCount || 30); },
+      getRows: function () { return normalizePriceGridRows(priceState.rows, 80); },
+      setRows: function (rows) { priceState.rows = normalizePriceGridRows(rows, 80); },
+      normalizeRows: function (rows, minCount) { return normalizePriceGridRows(rows, minCount || 80); },
       formatValue: function (rowIndex, colIndex, raw) {
         var key = priceSheetColumns[colIndex].key;
         if (key === "price") return formatDisplayNumber(raw);
@@ -1695,7 +1704,7 @@
     var storedRowCount = getStoredRowCount();
     var trimmedWorkItems = trimTrailingRows(workState.items, workGridFields, 12, function () { return {}; });
     var trimmedClientRows = normalizeClientGridRows(clientState.rows, 20);
-    var trimmedPriceRows = normalizePriceGridRows(priceState.rows, 30);
+    var trimmedPriceRows = trimTrailingRows(priceState.rows, priceGridFields, 30, emptyPriceRow);
     return {
       statusRows: normalizeSalesRows(ST.rows, storedRowCount).slice(0, storedRowCount),
       workItems: cloneItems(trimmedWorkItems),
@@ -2665,7 +2674,6 @@
       html += '<div class="st-cell-inner" style="min-height:' + (getRowHeight(r) - 4) + 'px">';
       html +=
         '<div class="st-display" style="' +
-        (active ? "display:none;" : "") +
         'height:' + (getRowHeight(r) - 4) + 'px;' +
         'line-height:' + (getRowHeight(r) - 4) + 'px;' +
         '">' +
@@ -3636,6 +3644,12 @@
     if (ST.editMode) return;
     if (ST.inputEl && e.target === ST.inputEl) return;
 
+    if (e.altKey && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+      e.preventDefault();
+      openSalesAutocompletePicker();
+      return;
+    }
+
     if (e.ctrlKey || e.metaKey) {
       var k = e.key.toLowerCase();
       if (k === "a") {
@@ -3769,6 +3783,12 @@
   function onInputKeyDown(e) {
     var rowIndex = ST.selectedCell.row;
     var colIndex = ST.selectedCell.col;
+
+    if (e.altKey && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+      e.preventDefault();
+      openSalesAutocompletePicker();
+      return;
+    }
 
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c" && !ST.editMode) {
       e.preventDefault();
@@ -4076,6 +4096,36 @@
       return '<option value="' + escapeAttr(item.value) + '"' + labelAttr + '></option>';
     }).join("");
     ST.inputEl.setAttribute("list", "sales-grid-datalist");
+  }
+
+  function hasSalesAutocompleteOptions() {
+    return !!(ST.autocompleteEl && ST.autocompleteEl.querySelector("option"));
+  }
+
+  function openSalesAutocompletePicker() {
+    var activeColumn = salesColumns[ST.selectedCell.col];
+    var activeKey = activeColumn ? activeColumn.key : "";
+    if (activeKey !== "client" && activeKey !== "code") return false;
+    if (!ST.editMode) {
+      snapshotEditOrigin();
+      ST.editMode = true;
+    }
+    syncInputOverlay();
+    updateSalesAutocomplete();
+    if (!hasSalesAutocompleteOptions()) {
+      focusInput();
+      return false;
+    }
+    requestAnimationFrame(function () {
+      if (!ST.inputEl) return;
+      ST.inputEl.focus();
+      if (typeof ST.inputEl.showPicker === "function") {
+        try {
+          ST.inputEl.showPicker();
+        } catch (err) {}
+      }
+    });
+    return true;
   }
 
   function getClientSuggestionOptions(keyword) {
@@ -4649,13 +4699,11 @@
           '<button type="button" class="soft-btn" id="btn-sort-asc">오름차순</button>' +
           '<button type="button" class="soft-btn" id="btn-sort-desc">내림차순</button>' +
           '<button type="button" class="soft-btn" id="btn-sort-reset">입력순</button>' +
-          '</div>' +
-          '<div style="display:flex;justify-content:flex-end;gap:12px;margin-bottom:12px;">' +
-          '<button type="button" class="soft-btn" id="btn-send-to-work">' +
+          '<button type="button" class="soft-btn" id="btn-send-to-work" style="margin-left:auto">' +
           icon("arrowRight") +
           "거래작업으로 보내기" +
           "</button>" +
-          "</div>" +
+          '</div>' +
           '<div id="sales-table-host"></div>';
       } else if (state.subTab === "work") {
         body = renderWorkTab();
