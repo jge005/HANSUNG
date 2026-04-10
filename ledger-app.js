@@ -3300,6 +3300,15 @@
     ST.host = host;
     initGridSizing();
     ST.rows = normalizeSalesRows(ST.rows);
+    var lastUsedOnOpen = getLastUsedRowIndex(ST.rows);
+    if (
+      lastUsedOnOpen >= 0 &&
+      (!ST.selectedKeys.length ||
+        (ST.selectedCell.row === 0 && ST.selectedCell.col === 0 && !rowHasAnyValue(ST.rows[0], salesColumns.map(function (col) { return col.key; }))))
+    ) {
+      ST.selectedCell = { row: lastUsedOnOpen, col: 0 };
+      ST.selectedKeys = [cellKey(lastUsedOnOpen, 0)];
+    }
     ST.selectedCell = {
       row: Math.max(0, Math.min(getRowCount() - 1, ST.selectedCell.row || 0)),
       col: Math.max(0, Math.min(COL_COUNT - 1, ST.selectedCell.col || 0)),
@@ -4081,6 +4090,7 @@
     if (!target) return null;
     var targetNormalized = normalizeCompanyMatchText(target);
     var partialMatch = null;
+    var partialScore = Infinity;
     for (var i = 0; i < clientState.rows.length; i++) {
       var row = clientState.rows[i] || {};
       var companyName = String(row.company || "").trim();
@@ -4089,11 +4099,25 @@
       var rowNormalized = normalizeCompanyMatchText(companyName);
       if (!rowNormalized || !targetNormalized) continue;
       if (rowNormalized === targetNormalized) return row;
-      if (!partialMatch && (rowNormalized.indexOf(targetNormalized) >= 0 || targetNormalized.indexOf(rowNormalized) >= 0)) {
-        partialMatch = row;
+      if (rowNormalized.indexOf(targetNormalized) >= 0 || targetNormalized.indexOf(rowNormalized) >= 0) {
+        var score = Math.abs(rowNormalized.length - targetNormalized.length);
+        if (!partialMatch || score < partialScore) {
+          partialMatch = row;
+          partialScore = score;
+        }
       }
     }
     return partialMatch;
+  }
+
+  function getClientRowSupplierMode(clientRow) {
+    if (!clientRow) return getCurrentSupplierMode();
+    return (
+      normalizeSupplierMode(clientRow.supplierMode) ||
+      parseSupplierModeLabel(clientRow.supplierMode) ||
+      getCurrentSupplierMode() ||
+      "corporate"
+    );
   }
 
   function applyClientToWorkInfo(clientRow) {
@@ -4107,7 +4131,7 @@
       businessType: clientRow.businessType || "",
       businessItem: clientRow.businessItem || "",
     });
-    workState.info.supplierMode = normalizeSupplierMode(clientRow.supplierMode);
+    workState.info.supplierMode = getClientRowSupplierMode(clientRow);
   }
 
   function normalizeLookupText(value) {
@@ -4972,12 +4996,17 @@
         if (filterKeyword) filterKeyword.value = ST.filter.keyword || "";
         if (sortCol) sortCol.value = ST.filter.colKey && ST.filter.colKey !== "all" ? ST.filter.colKey : "date";
         attachSalesTableWhenNeeded(document.getElementById("sales-table-host"));
+        requestAnimationFrame(function () {
+          if (state.subTab === "status") focusLastUsedSalesRow();
+        });
         ensureLedgerLoadedFromFirebase().then(function () {
           if (state.subTab === "status") {
             refreshGridValues();
             updateSelectionUI();
             applyFilterUI();
-            focusLastUsedSalesRow();
+            requestAnimationFrame(function () {
+              if (state.subTab === "status") focusLastUsedSalesRow();
+            });
           }
         });
         var applyBtn = document.getElementById("btn-filter-apply");
@@ -5041,6 +5070,13 @@
           // 처음 로딩인 경우에만 한 번 더 렌더링(값 반영)
           if (!wasLoaded) render();
         });
+        var existingReceiverCompany = getWorkInfoValue("receiver.company");
+        if (existingReceiverCompany) {
+          var autoMatchedClient = findClientRowByCompany(existingReceiverCompany);
+          if (autoMatchedClient) {
+            applyClientToWorkInfo(autoMatchedClient);
+          }
+        }
         attachWorkGridWhenNeeded(document.getElementById("work-grid-host"));
         refreshWorkSummaryUi();
 
