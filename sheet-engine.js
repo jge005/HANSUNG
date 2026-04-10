@@ -95,6 +95,9 @@
       cellMap: {},
       rowHeadEls: [],
       colHeadEls: [],
+      findQuery: "",
+      findMatches: [],
+      findIndex: -1,
     };
 
     function getColumns() {
@@ -261,7 +264,19 @@
       var rows = getRows();
       var html =
         '<div class="st-wrap">' +
-          '<div class="st-toolbar"><strong>' + escapeHtml(options.title || "") + '</strong><span>' + escapeHtml(options.subtitle || "") + '</span></div>' +
+          '<div class="st-toolbar">' +
+            '<div style="display:flex;align-items:center;gap:10px;min-width:0;flex:1">' +
+              '<strong>' + escapeHtml(options.title || "") + '</strong>' +
+              '<span>' + escapeHtml(options.subtitle || "") + '</span>' +
+            '</div>' +
+            '<div id="' + options.idPrefix + '-find-wrap" style="display:' + (engine.findQuery ? 'flex' : 'none') + ';align-items:center;gap:8px;flex-shrink:0">' +
+              '<input type="text" id="' + options.idPrefix + '-find-input" class="field" placeholder="찾기 (Ctrl+F)" style="width:180px;height:32px" value="' + escapeAttr(engine.findQuery) + '" />' +
+              '<button type="button" class="soft-btn" id="' + options.idPrefix + '-find-prev">이전</button>' +
+              '<button type="button" class="soft-btn" id="' + options.idPrefix + '-find-next">다음</button>' +
+              '<span class="sub" id="' + options.idPrefix + '-find-status"></span>' +
+              '<button type="button" class="soft-btn" id="' + options.idPrefix + '-find-close">닫기</button>' +
+            '</div>' +
+          '</div>' +
           '<div class="st-scroll" tabindex="0" style="max-height:' + (options.maxHeight || 420) + 'px">' +
             '<table class="st-table"><thead><tr>' +
               '<th class="st-corner" data-corner="1"></th>';
@@ -363,6 +378,45 @@
       engine.host.querySelector("tbody").addEventListener("dblclick", onCellDblClick);
       engine.host.querySelector("thead").addEventListener("mousedown", onHeadMouseDown);
       engine.host.querySelector("thead").addEventListener("dblclick", onHeadDoubleClick);
+      var findInputEl = document.getElementById(options.idPrefix + "-find-input");
+      var findPrevBtn = document.getElementById(options.idPrefix + "-find-prev");
+      var findNextBtn = document.getElementById(options.idPrefix + "-find-next");
+      var findCloseBtn = document.getElementById(options.idPrefix + "-find-close");
+      if (findInputEl) {
+        findInputEl.addEventListener("input", function () {
+          engine.findQuery = findInputEl.value;
+          collectFindMatches();
+          if (engine.findMatches.length) moveToFindMatch(1);
+        });
+        findInputEl.addEventListener("keydown", function (e) {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            moveToFindMatch(e.shiftKey ? -1 : 1);
+            return;
+          }
+          if (e.key === "Escape") {
+            e.preventDefault();
+            closeFindBar();
+            focusInput();
+          }
+        });
+      }
+      if (findPrevBtn) {
+        findPrevBtn.addEventListener("click", function () {
+          moveToFindMatch(-1);
+        });
+      }
+      if (findNextBtn) {
+        findNextBtn.addEventListener("click", function () {
+          moveToFindMatch(1);
+        });
+      }
+      if (findCloseBtn) {
+        findCloseBtn.addEventListener("click", function () {
+          closeFindBar();
+          focusInput();
+        });
+      }
       engine.host.querySelectorAll("[data-inline-select]").forEach(function (selectEl) {
         selectEl.addEventListener("mousedown", function (e) {
           e.stopPropagation();
@@ -379,6 +433,11 @@
         selectEl.addEventListener("keydown", function (e) {
           if (e.key === "F2") {
             e.preventDefault();
+            return;
+          }
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+            e.preventDefault();
+            openFindBar(engine.findQuery);
             return;
           }
           if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
@@ -503,6 +562,7 @@
         }
       });
       syncInputOverlay();
+      refreshFindStatus();
       focusInput();
     }
 
@@ -900,6 +960,11 @@
       if (engine.inputEl && e.target === engine.inputEl) return;
       if (e.ctrlKey || e.metaKey) {
         var k = e.key.toLowerCase();
+        if (k === "f") {
+          e.preventDefault();
+          openFindBar(engine.findQuery);
+          return;
+        }
         if (k === "a") {
           e.preventDefault();
           selectAll();
@@ -983,6 +1048,12 @@
       var start = input.selectionStart != null ? input.selectionStart : 0;
       var end = input.selectionEnd != null ? input.selectionEnd : 0;
       var len = input.value.length;
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        openFindBar(engine.findQuery);
+        return;
+      }
 
       if (e.key === "F2") {
         e.preventDefault();
@@ -1173,6 +1244,83 @@
       ) {
         activateEditorForCell(row, col);
       }
+    }
+
+    function refreshFindStatus() {
+      if (!engine.host) return;
+      var statusEl = document.getElementById(options.idPrefix + "-find-status");
+      var inputEl = document.getElementById(options.idPrefix + "-find-input");
+      if (inputEl && inputEl.value !== engine.findQuery) {
+        inputEl.value = engine.findQuery;
+      }
+      if (statusEl) {
+        if (!engine.findQuery) {
+          statusEl.textContent = "";
+        } else if (!engine.findMatches.length) {
+          statusEl.textContent = "0건";
+        } else {
+          statusEl.textContent = String(engine.findIndex + 1) + " / " + String(engine.findMatches.length);
+        }
+      }
+    }
+
+    function collectFindMatches() {
+      var query = String(engine.findQuery || "").trim().toLowerCase();
+      engine.findMatches = [];
+      engine.findIndex = -1;
+      if (!query) {
+        refreshFindStatus();
+        return;
+      }
+      for (var r = 0; r < getRowCount(); r++) {
+        for (var c = 0; c < getColCount(); c++) {
+          var haystack = String(getDisplayValue(r, c) || getRawValue(r, c) || "").toLowerCase();
+          if (haystack.indexOf(query) >= 0) {
+            engine.findMatches.push({ row: r, col: c });
+          }
+        }
+      }
+      refreshFindStatus();
+    }
+
+    function moveToFindMatch(step) {
+      if (!engine.findMatches.length) {
+        refreshFindStatus();
+        return false;
+      }
+      if (engine.findIndex < 0) {
+        engine.findIndex = 0;
+      } else {
+        engine.findIndex =
+          (engine.findIndex + step + engine.findMatches.length) % engine.findMatches.length;
+      }
+      var match = engine.findMatches[engine.findIndex];
+      moveSelection(match.row, match.col);
+      refreshFindStatus();
+      return true;
+    }
+
+    function openFindBar(initialValue) {
+      if (!engine.host) return;
+      var wrapEl = document.getElementById(options.idPrefix + "-find-wrap");
+      var inputEl = document.getElementById(options.idPrefix + "-find-input");
+      if (!wrapEl || !inputEl) return;
+      wrapEl.style.display = "flex";
+      if (typeof initialValue === "string") {
+        engine.findQuery = initialValue;
+        collectFindMatches();
+      } else {
+        refreshFindStatus();
+      }
+      inputEl.value = engine.findQuery;
+      inputEl.focus();
+      inputEl.select();
+    }
+
+    function closeFindBar() {
+      if (!engine.host) return;
+      var wrapEl = document.getElementById(options.idPrefix + "-find-wrap");
+      if (wrapEl) wrapEl.style.display = "none";
     }
 
     function onCellDblClick(e) {

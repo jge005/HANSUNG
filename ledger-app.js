@@ -81,11 +81,13 @@
   };
   var priceState = {
     rows: [],
+    activeClient: "",
   };
   var workGridFields = ["date", "code", "name", "qty", "price", "supply", "tax", "note"];
   var clientGridFields = ["supplierMode", "company", "businessNo", "ceoName", "address", "businessType", "businessItem"];
   var clientDataFields = ["supplierMode", "company", "businessNo", "ceoName", "address", "businessType", "businessItem"];
   var priceGridFields = ["client", "code", "price", "name"];
+  var priceEditorFields = ["code", "price", "name"];
   var workSheetColumns = [
     { key: "date", label: "일자", width: 88 },
     { key: "code", label: "코드", width: 104 },
@@ -106,7 +108,6 @@
     { key: "businessItem", label: "종목", width: 180 },
   ];
   var priceSheetColumns = [
-    { key: "client", label: "업체", width: 180 },
     { key: "code", label: "코드", width: 130 },
     { key: "price", label: "단가", width: 100 },
     { key: "name", label: "품목명", width: 360 },
@@ -537,6 +538,33 @@
     }
     while (normalized.length < target) {
       normalized.push(emptyPriceRow());
+    }
+    return normalized;
+  }
+
+  function normalizePriceEditorRows(rows, minCount) {
+    var normalized = Array.isArray(rows)
+      ? rows.map(function (row) {
+          return {
+            code: row && row.code != null ? String(row.code) : "",
+            price: row && row.price != null ? String(row.price) : "",
+            name: row && row.name != null ? String(row.name) : "",
+          };
+        })
+      : [];
+    var lastUsed = -1;
+    for (var i = normalized.length - 1; i >= 0; i--) {
+      if (rowHasAnyValue(normalized[i], priceEditorFields)) {
+        lastUsed = i;
+        break;
+      }
+    }
+    var target = Math.max(minCount || 80, lastUsed + 51);
+    for (var j = 0; j < target; j++) {
+      normalized[j] = Object.assign({ code: "", price: "", name: "" }, normalized[j] || {});
+    }
+    while (normalized.length < target) {
+      normalized.push({ code: "", price: "", name: "" });
     }
     return normalized;
   }
@@ -1661,15 +1689,15 @@
     var createSheetEngine = window.createSheetEngine || createMiniSheetEngine;
     priceSheetEngine = createSheetEngine({
       idPrefix: "price-grid",
-      title: "매출단가 시트",
-      subtitle: "업체 / 코드 / 단가 / 품목명 입력 후 엑셀처럼 복사·붙여넣기",
+      title: "업체별 매출단가 시트",
+      subtitle: "선택한 업체의 코드 / 단가 / 품목명을 엑셀처럼 복사·붙여넣기",
       maxHeight: 560,
       minRows: 80,
       columns: priceSheetColumns,
-      emptyRow: function () { return emptyPriceRow(); },
-      getRows: function () { return normalizePriceGridRows(priceState.rows, 80); },
-      setRows: function (rows) { priceState.rows = normalizePriceGridRows(rows, 80); },
-      normalizeRows: function (rows, minCount) { return normalizePriceGridRows(rows, minCount || 80); },
+      emptyRow: function () { return { code: "", price: "", name: "" }; },
+      getRows: function () { return getPriceRowsForClient(ensureActivePriceClient()); },
+      setRows: function (rows) { setPriceRowsForClient(ensureActivePriceClient(), rows); },
+      normalizeRows: function (rows, minCount) { return normalizePriceEditorRows(rows, minCount || 80); },
       formatValue: function (rowIndex, colIndex, raw) {
         var key = priceSheetColumns[colIndex].key;
         if (key === "price") return formatDisplayNumber(raw);
@@ -1726,6 +1754,7 @@
       workInfo: cloneWorkInfo(workState.info),
       clientRows: cloneClientRows(trimmedClientRows),
       priceRows: trimmedPriceRows.map(function (row) { return Object.assign({}, row); }),
+      priceActiveClient: priceState.activeClient || "",
       sheetLayout: {
         colWidths: ST.colWidths.slice(),
         rowHeights: ST.rowHeights.slice(0, storedRowCount),
@@ -1759,6 +1788,9 @@
 
     if (Array.isArray(data.priceRows)) {
       priceState.rows = normalizePriceGridRows(data.priceRows, 30);
+    }
+    if (typeof data.priceActiveClient === "string") {
+      priceState.activeClient = data.priceActiveClient;
     }
 
     if (data.sheetLayout && typeof data.sheetLayout === "object") {
@@ -3714,6 +3746,11 @@
 
     if (e.ctrlKey || e.metaKey) {
       var k = e.key.toLowerCase();
+      if (k === "f") {
+        e.preventDefault();
+        focusSalesFilterInput();
+        return;
+      }
       if (k === "a") {
         e.preventDefault();
         selectAllCells();
@@ -3849,6 +3886,12 @@
     if (e.altKey && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
       e.preventDefault();
       openSalesAutocompletePicker();
+      return;
+    }
+
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+      e.preventDefault();
+      focusSalesFilterInput();
       return;
     }
 
@@ -4107,6 +4150,78 @@
     return items.sort();
   }
 
+  function getAllPriceClientOptions() {
+    var seen = {};
+    var items = [];
+
+    function pushClient(name) {
+      var label = String(name || "").trim();
+      var normalized = normalizeCompanyMatchText(label);
+      if (!label || !normalized || seen[normalized]) return;
+      seen[normalized] = true;
+      items.push(label);
+    }
+
+    getDistinctPriceClients().forEach(pushClient);
+    clientState.rows.forEach(function (row) {
+      pushClient(row && row.company);
+    });
+
+    return items.sort();
+  }
+
+  function ensureActivePriceClient() {
+    var current = String(priceState.activeClient || "").trim();
+    if (current) return current;
+    var options = getAllPriceClientOptions();
+    priceState.activeClient = options[0] || "";
+    return priceState.activeClient;
+  }
+
+  function getPriceRowsForClient(clientName) {
+    var target = normalizeCompanyMatchText(clientName);
+    var rows = priceState.rows.filter(function (row) {
+      return target && normalizeCompanyMatchText(row && row.client) === target;
+    }).map(function (row) {
+      return {
+        code: row && row.code != null ? String(row.code) : "",
+        price: row && row.price != null ? String(row.price) : "",
+        name: row && row.name != null ? String(row.name) : "",
+      };
+    });
+    return normalizePriceEditorRows(rows, 80);
+  }
+
+  function setPriceRowsForClient(clientName, rows) {
+    var label = String(clientName || "").trim();
+    var normalized = normalizeCompanyMatchText(label);
+    if (!label || !normalized) {
+      priceState.rows = normalizePriceGridRows(priceState.rows, 80);
+      return;
+    }
+
+    var preserved = priceState.rows.filter(function (row) {
+      return normalizeCompanyMatchText(row && row.client) !== normalized &&
+        rowHasAnyValue(row, priceGridFields);
+    }).map(function (row) {
+      return Object.assign(emptyPriceRow(), row || {});
+    });
+
+    var nextRows = (rows || []).filter(function (row) {
+      return rowHasAnyValue(row, priceEditorFields);
+    }).map(function (row) {
+      return {
+        client: label,
+        code: row.code || "",
+        price: row.price || "",
+        name: row.name || "",
+      };
+    });
+
+    priceState.rows = normalizePriceGridRows(preserved.concat(nextRows), 80);
+    priceState.activeClient = label;
+  }
+
   function findPriceMatches(clientInput, codeInput) {
     var clientToken = normalizeCompanyMatchText(clientInput);
     var codeToken = normalizeLookupText(codeInput);
@@ -4216,6 +4331,14 @@
         } catch (err) {}
       }
     });
+    return true;
+  }
+
+  function focusSalesFilterInput() {
+    var filterKeyword = document.getElementById("status-filter-keyword");
+    if (!filterKeyword) return false;
+    filterKeyword.focus();
+    filterKeyword.select();
     return true;
   }
 
@@ -4563,13 +4686,27 @@
   }
 
   function renderPriceTab() {
-    priceState.rows = normalizePriceGridRows(priceState.rows, 30);
+    priceState.rows = normalizePriceGridRows(priceState.rows, 80);
+    var activeClient = ensureActivePriceClient();
+    var clientOptions = getAllPriceClientOptions();
     return (
       '<div class="clientdoc">' +
+        '<div class="toolbar-card" style="margin-bottom:12px">' +
+          '<label>업체:</label>' +
+          '<input type="text" class="field" id="price-active-client" list="price-client-list" style="width:260px;height:36px" placeholder="업체명 입력 또는 선택" value="' + escapeAttr(activeClient) + '" />' +
+          '<datalist id="price-client-list">' +
+            clientOptions.map(function (company) {
+              return '<option value="' + escapeAttr(company) + '"></option>';
+            }).join("") +
+          '</datalist>' +
+          '<button type="button" class="soft-btn" id="btn-price-open">불러오기</button>' +
+          '<button type="button" class="soft-btn" id="btn-price-new">새 업체로 시작</button>' +
+          '<div class="sub" style="margin-left:auto">업체 하나를 선택하면 그 업체 단가만 아래 시트에서 관리합니다</div>' +
+        '</div>' +
         '<div class="clientdoc-card">' +
           '<div class="clientdoc-head">' +
             '<div class="clientdoc-title">' + icon("tags") + ' 매출단가 리스트</div>' +
-            '<div class="sub">업체 / 코드 / 단가 / 품목명 순서로 엑셀 복사·붙여넣기</div>' +
+            '<div class="sub">' + escapeHtml(activeClient ? activeClient + ' 단가표' : '업체를 먼저 선택하세요') + '</div>' +
           '</div>' +
           '<div id="price-grid-host"></div>' +
         '</div>' +
@@ -4963,6 +5100,35 @@
           if (!wasPriceLoaded && state.subTab === "price") render();
         });
         attachPriceGridWhenNeeded(document.getElementById("price-grid-host"));
+        var priceClientInput = document.getElementById("price-active-client");
+        var priceOpenBtn = document.getElementById("btn-price-open");
+        var priceNewBtn = document.getElementById("btn-price-new");
+        function applyActivePriceClient() {
+          if (!priceClientInput) return;
+          priceState.activeClient = String(priceClientInput.value || "").trim();
+          scheduleLedgerDraftSave();
+          render();
+        }
+        if (priceOpenBtn) {
+          priceOpenBtn.addEventListener("click", applyActivePriceClient);
+        }
+        if (priceNewBtn) {
+          priceNewBtn.addEventListener("click", function () {
+            if (!priceClientInput) return;
+            priceState.activeClient = String(priceClientInput.value || "").trim();
+            scheduleLedgerDraftSave();
+            render();
+          });
+        }
+        if (priceClientInput) {
+          priceClientInput.addEventListener("change", applyActivePriceClient);
+          priceClientInput.addEventListener("keydown", function (e) {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              applyActivePriceClient();
+            }
+          });
+        }
       } else if (state.subTab === "client") {
         var wasClientLoaded = ledgerState.loadedFromFirebase;
         ensureLedgerLoadedFromFirebase().then(function () {
