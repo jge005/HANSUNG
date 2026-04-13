@@ -409,11 +409,11 @@
   function emptyClosingOutsourceRow(name, type) {
     var row = {
       employee: name || "",
+      joinDate: "",
       type: type || "",
-      weeklyAllowance: "",
-      perfectAllowance: "",
-      retirementShare: "",
-      agencyFee: "",
+      payCalc: "",
+      bonus: "",
+      payAmount: "",
     };
     closingAttendanceDayFields.forEach(function (field) {
       row[field] = "";
@@ -438,14 +438,14 @@
       var source = rows[index] || {};
       var next = Object.assign({}, baseRow);
       next.employee = source.employee != null ? String(source.employee) : next.employee;
+      next.joinDate = source.joinDate != null ? String(source.joinDate) : "";
       next.type = source.type != null ? String(source.type) : next.type;
       closingAttendanceDayFields.forEach(function (field) {
         next[field] = source[field] != null ? String(source[field]) : "";
       });
-      next.weeklyAllowance = source.weeklyAllowance != null ? String(source.weeklyAllowance) : "";
-      next.perfectAllowance = source.perfectAllowance != null ? String(source.perfectAllowance) : "";
-      next.retirementShare = source.retirementShare != null ? String(source.retirementShare) : "";
-      next.agencyFee = source.agencyFee != null ? String(source.agencyFee) : "";
+      next.payCalc = source.payCalc != null ? String(source.payCalc) : "";
+      next.bonus = source.bonus != null ? String(source.bonus) : "";
+      next.payAmount = source.payAmount != null ? String(source.payAmount) : "";
       return next;
     });
   }
@@ -524,6 +524,207 @@
     ensureClosingAttendanceState();
     closingState.outsourceRowsByKey[getClosingOutsourceKey(monthLabel, vendor)] =
       normalizeClosingOutsourceRows(rows);
+  }
+
+  function getClosingAttendanceYear() {
+    return new Date().getFullYear();
+  }
+
+  function getClosingAttendanceMonthNumber() {
+    ensureClosingAttendanceState();
+    var match = String(closingState.attendanceMonth || "").match(/^(\d+)월$/);
+    return match ? Number(match[1]) : new Date().getMonth() + 1;
+  }
+
+  function getClosingDaysInMonth() {
+    var year = getClosingAttendanceYear();
+    var month = getClosingAttendanceMonthNumber();
+    return new Date(year, month, 0).getDate();
+  }
+
+  function getClosingWeekdayLabel(day) {
+    var labels = ["일", "월", "화", "수", "목", "금", "토"];
+    var year = getClosingAttendanceYear();
+    var month = getClosingAttendanceMonthNumber();
+    return labels[new Date(year, month - 1, day).getDay()];
+  }
+
+  function getClosingWeekdayClass(day) {
+    var label = getClosingWeekdayLabel(day);
+    if (label === "일") return " sunday";
+    if (label === "토") return " saturday";
+    return "";
+  }
+
+  function calculateClosingOutsourceTimeTotal(row) {
+    var total = 0;
+    closingAttendanceDayFields.forEach(function (field, index) {
+      if (index + 1 > getClosingDaysInMonth()) return;
+      total += parseCalcNumber(row && row[field]) || 0;
+    });
+    return total;
+  }
+
+  function calculateClosingOutsourceGrandTotal(rows) {
+    var grouped = [];
+    for (var i = 0; i < rows.length; i += closingOutsourceMarkers.length) {
+      var block = rows.slice(i, i + closingOutsourceMarkers.length);
+      var amount = 0;
+      block.forEach(function (row) {
+        amount += parseCalcNumber(row && row.payAmount) || 0;
+      });
+      grouped.push(amount);
+    }
+    return grouped.reduce(function (sum, value) { return sum + value; }, 0);
+  }
+
+  function getClosingOutsourceVendorLabel() {
+    var current = closingOutsourceVendors.find(function (item) {
+      return item.value === closingState.outsourceVendor;
+    });
+    return current ? current.label : "아웃소싱";
+  }
+
+  function renderClosingOutsourceMatrix() {
+    var rows = getClosingOutsourceRows(closingState.attendanceMonth, closingState.outsourceVendor);
+    var daysInMonth = getClosingDaysInMonth();
+    var year = getClosingAttendanceYear();
+    var monthNumber = getClosingAttendanceMonthNumber();
+    var grandTotal = calculateClosingOutsourceGrandTotal(rows);
+    var headDays = "";
+    for (var day = 1; day <= 31; day++) {
+      var weekday = day <= daysInMonth ? getClosingWeekdayLabel(day) : "";
+      headDays +=
+        '<th class="closing-matrix-day-head' + (day <= daysInMonth ? getClosingWeekdayClass(day) : ' disabled') + '">' +
+          '<div class="closing-matrix-weekday">' + escapeHtml(weekday) + '</div>' +
+          '<div class="closing-matrix-daynum">' + (day <= daysInMonth ? day : "") + '</div>' +
+        '</th>';
+    }
+    var body = "";
+    for (var index = 0, group = 1; index < rows.length; index += closingOutsourceMarkers.length, group++) {
+      var block = rows.slice(index, index + closingOutsourceMarkers.length);
+      var headerRow = block[0] || emptyClosingOutsourceRow("", "정상");
+      var groupTotal = 0;
+      block.forEach(function (row) {
+        groupTotal += parseCalcNumber(row && row.payAmount) || 0;
+      });
+      for (var markerIndex = 0; markerIndex < closingOutsourceMarkers.length; markerIndex++) {
+        var row = block[markerIndex] || emptyClosingOutsourceRow("", closingOutsourceMarkers[markerIndex]);
+        var timeTotal = calculateClosingOutsourceTimeTotal(row);
+        body += '<tr class="closing-matrix-row">';
+        if (markerIndex === 0) {
+          body += '<th rowspan="' + closingOutsourceMarkers.length + '" class="closing-matrix-sticky left center">' + group + '</th>';
+          body += '<th rowspan="' + closingOutsourceMarkers.length + '" class="closing-matrix-sticky left">';
+          body += '<input type="text" class="closing-matrix-meta-input" data-outsource-group="' + index + '" data-outsource-meta="employee" value="' + escapeAttr(headerRow.employee || "") + '" />';
+          body += '</th>';
+          body += '<th rowspan="' + closingOutsourceMarkers.length + '" class="closing-matrix-sticky left">';
+          body += '<input type="text" class="closing-matrix-meta-input" data-outsource-group="' + index + '" data-outsource-meta="joinDate" value="' + escapeAttr(headerRow.joinDate || "") + '" placeholder="YYYY-MM-DD" />';
+          body += '</th>';
+        }
+        body += '<th class="closing-matrix-type">' + escapeHtml(row.type || closingOutsourceMarkers[markerIndex]) + '</th>';
+        for (var dayCol = 1; dayCol <= 31; dayCol++) {
+          var field = "d" + dayCol;
+          var isDisabled = dayCol > daysInMonth;
+          body += '<td class="closing-matrix-cell' + (isDisabled ? ' disabled' : getClosingWeekdayClass(dayCol)) + '">';
+          body += '<input type="text" class="closing-matrix-input" data-outsource-row="' + (index + markerIndex) + '" data-outsource-field="' + field + '" value="' + escapeAttr(row[field] || "") + '"' + (isDisabled ? ' disabled' : '') + ' />';
+          body += '</td>';
+        }
+        body += '<td class="closing-matrix-summary center">' + escapeHtml(formatDisplayNumber(timeTotal || 0)) + '</td>';
+        body += '<td class="closing-matrix-summary"><input type="text" class="closing-matrix-input right" data-outsource-row="' + (index + markerIndex) + '" data-outsource-field="payCalc" value="' + escapeAttr(row.payCalc || "") + '" /></td>';
+        body += '<td class="closing-matrix-summary"><input type="text" class="closing-matrix-input right" data-outsource-row="' + (index + markerIndex) + '" data-outsource-field="bonus" value="' + escapeAttr(row.bonus || "") + '" /></td>';
+        body += '<td class="closing-matrix-summary"><input type="text" class="closing-matrix-input right" data-outsource-row="' + (index + markerIndex) + '" data-outsource-field="payAmount" value="' + escapeAttr(row.payAmount || "") + '" /></td>';
+        if (markerIndex === 0) {
+          body += '<td rowspan="' + closingOutsourceMarkers.length + '" class="closing-matrix-total right">' + escapeHtml(formatDisplayNumber(groupTotal || 0)) + '</td>';
+        }
+        body += '</tr>';
+      }
+    }
+    return (
+      '<div class="closing-matrix-wrap">' +
+        '<div class="closing-matrix-summarybar">' +
+          '<div class="closing-matrix-badge">' + escapeHtml(year + "년 " + monthNumber + "월 " + getClosingOutsourceVendorLabel() + " 급여 청구내역") + '</div>' +
+          '<div class="closing-matrix-badge strong">총 금액 ' + escapeHtml(formatDisplayNumber(grandTotal)) + '</div>' +
+        '</div>' +
+        '<div class="closing-matrix-table-wrap">' +
+          '<table class="closing-matrix-table">' +
+            '<thead>' +
+              '<tr>' +
+                '<th class="closing-matrix-sticky left" rowspan="2">순번</th>' +
+                '<th class="closing-matrix-sticky left" rowspan="2">성명</th>' +
+                '<th class="closing-matrix-sticky left" rowspan="2">입사일</th>' +
+                '<th rowspan="2">구분</th>' +
+                headDays +
+                '<th rowspan="2">시간</th>' +
+                '<th rowspan="2">급여계산</th>' +
+                '<th rowspan="2">만근수당<br/>소급분</th>' +
+                '<th rowspan="2">급여지급액</th>' +
+                '<th rowspan="2">총 금액</th>' +
+              '</tr>' +
+            '</thead>' +
+            '<tbody>' + body + '</tbody>' +
+          '</table>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function renderClosingEmployeeMatrix() {
+    var rows = getClosingEmployeeRows(closingState.attendanceMonth);
+    var daysInMonth = getClosingDaysInMonth();
+    var year = getClosingAttendanceYear();
+    var monthNumber = getClosingAttendanceMonthNumber();
+    var headDays = "";
+    for (var day = 1; day <= 31; day++) {
+      var weekday = day <= daysInMonth ? getClosingWeekdayLabel(day) : "";
+      headDays +=
+        '<th class="closing-matrix-day-head' + (day <= daysInMonth ? getClosingWeekdayClass(day) : ' disabled') + '">' +
+          '<div class="closing-matrix-weekday">' + escapeHtml(weekday) + '</div>' +
+          '<div class="closing-matrix-daynum">' + (day <= daysInMonth ? day : "") + '</div>' +
+        '</th>';
+    }
+    var body = "";
+    for (var index = 0, group = 1; index < rows.length; index += closingEmployeeMarkers.length, group++) {
+      var block = rows.slice(index, index + closingEmployeeMarkers.length);
+      var headerRow = block[0] || emptyClosingEmployeeRow("", "야근");
+      for (var markerIndex = 0; markerIndex < closingEmployeeMarkers.length; markerIndex++) {
+        var row = block[markerIndex] || emptyClosingEmployeeRow("", closingEmployeeMarkers[markerIndex]);
+        body += '<tr class="closing-matrix-row closing-matrix-row-employee">';
+        if (markerIndex === 0) {
+          body += '<th rowspan="' + closingEmployeeMarkers.length + '" class="closing-matrix-sticky left center">' + group + '</th>';
+          body += '<th rowspan="' + closingEmployeeMarkers.length + '" class="closing-matrix-sticky left employee">' + escapeHtml(headerRow.employee || "") + '</th>';
+        }
+        body += '<th class="closing-matrix-type">' + escapeHtml(row.type || closingEmployeeMarkers[markerIndex]) + '</th>';
+        for (var dayCol = 1; dayCol <= 31; dayCol++) {
+          var field = "d" + dayCol;
+          var isDisabled = dayCol > daysInMonth;
+          body += '<td class="closing-matrix-cell' + (isDisabled ? ' disabled' : getClosingWeekdayClass(dayCol)) + '">';
+          body += '<input type="text" class="closing-matrix-input center" data-employee-row="' + (index + markerIndex) + '" data-employee-field="' + field + '" value="' + escapeAttr(row[field] || "") + '"' + (isDisabled ? ' disabled' : '') + ' />';
+          body += '</td>';
+        }
+        body += '</tr>';
+      }
+    }
+    return (
+      '<div class="closing-matrix-wrap">' +
+        '<div class="closing-matrix-summarybar">' +
+          '<div class="closing-matrix-badge">' + escapeHtml(year + "년 " + monthNumber + "월 정직원 근태 표시 시트") + '</div>' +
+          '<div class="closing-matrix-badge">야근 / 특근 / 지각 / 조퇴 / 결근 수기 표시</div>' +
+        '</div>' +
+        '<div class="closing-matrix-table-wrap">' +
+          '<table class="closing-matrix-table closing-matrix-table-employee">' +
+            '<thead>' +
+              '<tr>' +
+                '<th class="closing-matrix-sticky left" rowspan="2">순번</th>' +
+                '<th class="closing-matrix-sticky left" rowspan="2">성명</th>' +
+                '<th rowspan="2">구분</th>' +
+                headDays +
+              '</tr>' +
+            '</thead>' +
+            '<tbody>' + body + '</tbody>' +
+          '</table>' +
+        '</div>' +
+      '</div>'
+    );
   }
 
   function todayIsoString() {
@@ -6041,7 +6242,9 @@
             : '') +
         '</div>' +
         '<div class="closing-card closing-sheet-card">' +
-          '<div id="' + (isEmployeeView ? 'closing-attendance-grid-host' : 'closing-outsource-grid-host') + '"></div>' +
+          (isEmployeeView
+            ? renderClosingEmployeeMatrix()
+            : renderClosingOutsourceMatrix()) +
         '</div>' +
       '</div>'
     );
@@ -6709,21 +6912,70 @@
             scheduleLedgerDraftSave();
           });
         }
-        if (closingState.attendanceView !== "outsource") {
-          attachClosingAttendanceGridWhenNeeded(document.getElementById("closing-attendance-grid-host"));
-        }
         var closingOutsourceVendorSelect = document.getElementById("closing-outsource-vendor");
         if (closingOutsourceVendorSelect) {
           closingOutsourceVendorSelect.value = closingState.outsourceVendor || "leaders";
           closingOutsourceVendorSelect.addEventListener("change", function () {
             closingState.outsourceVendor = closingOutsourceVendorSelect.value || "leaders";
             ensureClosingAttendanceState();
-            if (closingOutsourceSheetEngine) closingOutsourceSheetEngine.refresh();
-            scheduleLedgerDraftSave();
+            render();
           });
         }
         if (closingState.attendanceView === "outsource") {
-          attachClosingOutsourceGridWhenNeeded(document.getElementById("closing-outsource-grid-host"));
+          var outsourceWrap = app.querySelector(".closing-matrix-wrap");
+          if (outsourceWrap) {
+            outsourceWrap.addEventListener("input", function (e) {
+              var target = e.target;
+              if (!(target instanceof HTMLInputElement)) return;
+              var rowIndex = Number(target.getAttribute("data-outsource-row"));
+              var field = target.getAttribute("data-outsource-field");
+              var groupIndex = Number(target.getAttribute("data-outsource-group"));
+              var metaField = target.getAttribute("data-outsource-meta");
+              var rows = normalizeClosingOutsourceRows(getClosingOutsourceRows(closingState.attendanceMonth, closingState.outsourceVendor));
+              if (!isNaN(rowIndex) && field) {
+                rows[rowIndex] = Object.assign({}, rows[rowIndex] || {}, (function () {
+                  var next = {};
+                  next[field] = target.value;
+                  return next;
+                })());
+                setClosingOutsourceRows(closingState.attendanceMonth, closingState.outsourceVendor, rows);
+                scheduleLedgerDraftSave();
+                return;
+              }
+              if (!isNaN(groupIndex) && metaField) {
+                var baseIndex = groupIndex;
+                rows[baseIndex] = Object.assign({}, rows[baseIndex] || {}, (function () {
+                  var next = {};
+                  next[metaField] = target.value;
+                  return next;
+                })());
+                setClosingOutsourceRows(closingState.attendanceMonth, closingState.outsourceVendor, rows);
+                scheduleLedgerDraftSave();
+              }
+            });
+            outsourceWrap.addEventListener("change", function () {
+              render();
+            });
+          }
+        } else {
+          var employeeWrap = app.querySelector(".closing-matrix-wrap");
+          if (employeeWrap) {
+            employeeWrap.addEventListener("input", function (e) {
+              var target = e.target;
+              if (!(target instanceof HTMLInputElement)) return;
+              var rowIndex = Number(target.getAttribute("data-employee-row"));
+              var field = target.getAttribute("data-employee-field");
+              if (isNaN(rowIndex) || !field) return;
+              var rows = normalizeClosingEmployeeRows(getClosingEmployeeRows(closingState.attendanceMonth));
+              rows[rowIndex] = Object.assign({}, rows[rowIndex] || {}, (function () {
+                var next = {};
+                next[field] = target.value;
+                return next;
+              })());
+              setClosingEmployeeRows(closingState.attendanceMonth, rows);
+              scheduleLedgerDraftSave();
+            });
+          }
         }
       }
       return;
