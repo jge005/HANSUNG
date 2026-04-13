@@ -105,6 +105,10 @@
     endMonth: "",
     client: "",
   };
+  var closingState = {
+    attendanceMonth: "",
+    employeeRowsByMonth: {},
+  };
   var activeLedgerKind = "sales";
   var salesLedgerBundle = null;
   var purchaseLedgerBundle = null;
@@ -114,6 +118,43 @@
   var clientDataFields = ["supplierMode", "company", "businessNo", "ceoName", "address", "businessType", "businessItem"];
   var priceGridFields = ["client", "code", "price", "name"];
   var priceEditorFields = ["code", "price", "name"];
+  var closingAttendanceDayFields = [];
+  for (var closingDayIndex = 1; closingDayIndex <= 31; closingDayIndex++) {
+    closingAttendanceDayFields.push("d" + closingDayIndex);
+  }
+  var closingEmployeeNames = [
+    "김은숙",
+    "이지연",
+    "정인숙",
+    "안현수",
+    "최성근 사원",
+    "김규헌 차장",
+    "고광운 과장",
+    "박재현 대리",
+    "김현규 대리",
+    "조영빈 대리",
+    "김주헌 대리",
+    "장진우 대리",
+    "최성규 사원",
+    "김용원 사원",
+    "김미은 주임",
+    "김인선 사원",
+    "박지안 사원",
+    "이수안 사원",
+    "김애정 사원"
+  ];
+  var closingEmployeeMarkers = ["야근", "특근", "지각", "조퇴", "결근"];
+  var closingAttendanceColumns = [
+    { key: "employee", label: "이름", width: 118 },
+    { key: "type", label: "구분", width: 76 }
+  ];
+  closingAttendanceDayFields.forEach(function (field, index) {
+    closingAttendanceColumns.push({
+      key: field,
+      label: String(index + 1),
+      width: 48
+    });
+  });
   var workSheetColumns = [
     { key: "date", label: "일자", width: 88 },
     { key: "code", label: "코드", width: 104 },
@@ -141,6 +182,7 @@
   var workSheetEngine = null;
   var clientSheetEngine = null;
   var priceSheetEngine = null;
+  var closingAttendanceSheetEngine = null;
 
   var app = document.getElementById("app");
 
@@ -289,6 +331,95 @@
       price: "",
       name: "",
     };
+  }
+
+  function defaultClosingMonthLabel() {
+    return new Date().getMonth() + 1 + "월";
+  }
+
+  function getClosingMonthOptions() {
+    var options = [];
+    for (var month = 1; month <= 12; month++) {
+      options.push({ value: month + "월", label: month + "월" });
+    }
+    return options;
+  }
+
+  function emptyClosingEmployeeRow(name, type) {
+    var row = {
+      employee: name || "",
+      type: type || "",
+    };
+    closingAttendanceDayFields.forEach(function (field) {
+      row[field] = "";
+    });
+    return row;
+  }
+
+  function buildClosingEmployeeTemplateRows() {
+    var rows = [];
+    closingEmployeeNames.forEach(function (name) {
+      closingEmployeeMarkers.forEach(function (type) {
+        rows.push(emptyClosingEmployeeRow(name, type));
+      });
+    });
+    return rows;
+  }
+
+  function normalizeClosingEmployeeRows(rows) {
+    var template = buildClosingEmployeeTemplateRows();
+    if (!Array.isArray(rows) || !rows.length) return template;
+    return template.map(function (baseRow, index) {
+      var source = rows[index] || {};
+      var next = Object.assign({}, baseRow);
+      closingAttendanceDayFields.forEach(function (field) {
+        next[field] = source[field] != null ? String(source[field]) : "";
+      });
+      return next;
+    });
+  }
+
+  function cloneClosingRowsMap(rowsByMonth) {
+    var source = rowsByMonth && typeof rowsByMonth === "object" ? rowsByMonth : {};
+    var cloned = {};
+    Object.keys(source).forEach(function (monthKey) {
+      cloned[monthKey] = normalizeClosingEmployeeRows(source[monthKey]);
+    });
+    return cloned;
+  }
+
+  function ensureClosingAttendanceState() {
+    if (!closingState.attendanceMonth || !/^\d+월$/.test(closingState.attendanceMonth)) {
+      closingState.attendanceMonth = defaultClosingMonthLabel();
+    }
+    if (!closingState.employeeRowsByMonth || typeof closingState.employeeRowsByMonth !== "object") {
+      closingState.employeeRowsByMonth = {};
+    }
+    if (!closingState.employeeRowsByMonth[closingState.attendanceMonth]) {
+      closingState.employeeRowsByMonth[closingState.attendanceMonth] = buildClosingEmployeeTemplateRows();
+    } else {
+      closingState.employeeRowsByMonth[closingState.attendanceMonth] =
+        normalizeClosingEmployeeRows(closingState.employeeRowsByMonth[closingState.attendanceMonth]);
+    }
+    return closingState;
+  }
+
+  function getClosingEmployeeRows(monthLabel) {
+    ensureClosingAttendanceState();
+    var key = monthLabel || closingState.attendanceMonth;
+    if (!closingState.employeeRowsByMonth[key]) {
+      closingState.employeeRowsByMonth[key] = buildClosingEmployeeTemplateRows();
+    } else {
+      closingState.employeeRowsByMonth[key] =
+        normalizeClosingEmployeeRows(closingState.employeeRowsByMonth[key]);
+    }
+    return closingState.employeeRowsByMonth[key];
+  }
+
+  function setClosingEmployeeRows(monthLabel, rows) {
+    ensureClosingAttendanceState();
+    closingState.employeeRowsByMonth[monthLabel || closingState.attendanceMonth] =
+      normalizeClosingEmployeeRows(rows);
   }
 
   function todayIsoString() {
@@ -902,14 +1033,14 @@
       var sum = document.getElementById(options.idPrefix + "-status-sum");
       var avg = document.getElementById(options.idPrefix + "-status-avg");
       if (addr) {
-        addr.textContent = String.fromCharCode(65 + engine.selectedCell.col) + (engine.selectedCell.row + 1);
+        addr.textContent = columnLabel(engine.selectedCell.col) + (engine.selectedCell.row + 1);
       }
       if (range) {
         var bounds = selectionBounds();
         range.textContent =
-          String.fromCharCode(65 + bounds.left) + (bounds.top + 1) +
+          columnLabel(bounds.left) + (bounds.top + 1) +
           ":" +
-          String.fromCharCode(65 + bounds.right) + (bounds.bottom + 1);
+          columnLabel(bounds.right) + (bounds.bottom + 1);
       }
       if (count) count.textContent = String(engine.selectedKeys.length);
       if (sum || avg) {
@@ -1892,6 +2023,32 @@
     getPriceSheetEngine().attach(container);
   }
 
+  function getClosingAttendanceSheetEngine() {
+    if (closingAttendanceSheetEngine) return closingAttendanceSheetEngine;
+    var createSheetEngine = window.createSheetEngine || createMiniSheetEngine;
+    closingAttendanceSheetEngine = createSheetEngine({
+      idPrefix: "closing-attendance-grid",
+      title: "정직원 표시 시트",
+      subtitle: "야근 / 특근 / 지각 / 조퇴 / 결근을 월별로 수기 표시",
+      maxHeight: 520,
+      minRows: closingEmployeeNames.length * closingEmployeeMarkers.length,
+      columns: closingAttendanceColumns,
+      emptyRow: function () { return emptyClosingEmployeeRow("", ""); },
+      getRows: function () { return getClosingEmployeeRows(closingState.attendanceMonth); },
+      setRows: function (rows) { setClosingEmployeeRows(closingState.attendanceMonth, rows); },
+      normalizeRows: function (rows) { return normalizeClosingEmployeeRows(rows); },
+      onRowsChange: function () {
+        scheduleLedgerDraftSave();
+      },
+    });
+    return closingAttendanceSheetEngine;
+  }
+
+  function attachClosingAttendanceGridWhenNeeded(container) {
+    if (!container) return;
+    getClosingAttendanceSheetEngine().attach(container);
+  }
+
   function ensureDraftId() {
     if (ledgerState.draftId) return ledgerState.draftId;
 
@@ -1951,6 +2108,10 @@
         workItems: cloneItems(trimmedWorkItems),
         workInfo: cloneWorkInfo(workState.info),
       },
+      closing: {
+        attendanceMonth: closingState.attendanceMonth || defaultClosingMonthLabel(),
+        employeeRowsByMonth: cloneClosingRowsMap(closingState.employeeRowsByMonth),
+      },
       updatedAt: new Date().toISOString(),
     };
   }
@@ -1962,6 +2123,7 @@
     var salesData = data.sales && typeof data.sales === "object" ? data.sales : data;
     var purchaseData = data.purchase && typeof data.purchase === "object" ? data.purchase : null;
     var sharedData = data.shared && typeof data.shared === "object" ? data.shared : data;
+    var closingData = data.closing && typeof data.closing === "object" ? data.closing : null;
 
     if (Array.isArray(salesData.statusRows)) {
       salesLedgerBundle.rows = normalizeSalesRows(salesData.statusRows);
@@ -2056,6 +2218,14 @@
         client: data.purchaseManageState.client || "",
       };
     }
+
+    if (closingData) {
+      closingState.attendanceMonth = /^\d+월$/.test(String(closingData.attendanceMonth || ""))
+        ? closingData.attendanceMonth
+        : defaultClosingMonthLabel();
+      closingState.employeeRowsByMonth = cloneClosingRowsMap(closingData.employeeRowsByMonth);
+    }
+    ensureClosingAttendanceState();
 
     switchLedgerModule(activeLedgerKind, true);
     ST.visibleRowsDirty = true;
@@ -5664,6 +5834,14 @@
   }
 
   function renderClosingAttendanceTab() {
+    ensureClosingAttendanceState();
+    var monthOptions = getClosingMonthOptions().map(function (option) {
+      return (
+        '<option value="' + escapeHtml(option.value) + '"' +
+        (option.value === closingState.attendanceMonth ? " selected" : "") +
+        ">" + escapeHtml(option.label) + "</option>"
+      );
+    }).join("");
     return (
       '<div class="closing-page">' +
         '<div class="closing-grid">' +
@@ -5697,6 +5875,21 @@
               '<div class="closing-file-item">지문 미사용 인원 수기 반영</div>' +
             '</div>' +
           '</div>' +
+        '</div>' +
+        '<div class="closing-card closing-sheet-card">' +
+          '<div class="closing-sheet-toolbar">' +
+            '<div>' +
+              '<div class="closing-title">' + icon("clipboard") + ' 정직원 수기 시트</div>' +
+              '<div class="closing-copy">월별로 야근, 특근, 지각, 조퇴, 결근만 바로 표시해두는 자리입니다.</div>' +
+            '</div>' +
+            '<div class="closing-inline-controls">' +
+              '<label class="closing-inline-label" for="closing-attendance-month">대상월</label>' +
+              '<select id="closing-attendance-month" class="closing-inline-select">' +
+                monthOptions +
+              '</select>' +
+            '</div>' +
+          '</div>' +
+          '<div id="closing-attendance-grid-host"></div>' +
         '</div>' +
       '</div>'
     );
@@ -6333,6 +6526,29 @@
           render();
         });
       });
+      if (state.closingSubTab === "attendance") {
+        var wasClosingLoaded = ledgerState.loadedFromFirebase;
+        ensureLedgerLoadedFromFirebase().then(function () {
+          if (state.mainTab === "closing" && state.closingSubTab === "attendance") {
+            if (!wasClosingLoaded) {
+              render();
+            } else if (closingAttendanceSheetEngine) {
+              closingAttendanceSheetEngine.refresh();
+            }
+          }
+        });
+        var closingMonthSelect = document.getElementById("closing-attendance-month");
+        if (closingMonthSelect) {
+          closingMonthSelect.value = closingState.attendanceMonth || defaultClosingMonthLabel();
+          closingMonthSelect.addEventListener("change", function () {
+            closingState.attendanceMonth = closingMonthSelect.value || defaultClosingMonthLabel();
+            ensureClosingAttendanceState();
+            if (closingAttendanceSheetEngine) closingAttendanceSheetEngine.refresh();
+            scheduleLedgerDraftSave();
+          });
+        }
+        attachClosingAttendanceGridWhenNeeded(document.getElementById("closing-attendance-grid-host"));
+      }
       return;
     }
 
