@@ -107,6 +107,7 @@
   };
   var closingState = {
     attendanceMonth: "",
+    attendanceView: "employee",
     employeeRowsByMonth: {},
     outsourceVendor: "leaders",
     outsourceRowsByKey: {},
@@ -385,8 +386,8 @@
   function buildClosingEmployeeTemplateRows() {
     var rows = [];
     closingEmployeeNames.forEach(function (name) {
-      closingEmployeeMarkers.forEach(function (type) {
-        rows.push(emptyClosingEmployeeRow(name, type));
+      closingEmployeeMarkers.forEach(function (type, markerIndex) {
+        rows.push(emptyClosingEmployeeRow(markerIndex === 0 ? name : "", type));
       });
     });
     return rows;
@@ -423,8 +424,8 @@
   function buildClosingOutsourceTemplateRows() {
     var rows = [];
     for (var employeeIndex = 0; employeeIndex < 18; employeeIndex++) {
-      closingOutsourceMarkers.forEach(function (type) {
-        rows.push(emptyClosingOutsourceRow("", type));
+      closingOutsourceMarkers.forEach(function (type, markerIndex) {
+        rows.push(emptyClosingOutsourceRow(markerIndex === 0 ? "" : "", type));
       });
     }
     return rows;
@@ -461,6 +462,9 @@
   function ensureClosingAttendanceState() {
     if (!closingState.attendanceMonth || !/^\d+월$/.test(closingState.attendanceMonth)) {
       closingState.attendanceMonth = defaultClosingMonthLabel();
+    }
+    if (closingState.attendanceView !== "outsource") {
+      closingState.attendanceView = "employee";
     }
     if (!closingState.employeeRowsByMonth || typeof closingState.employeeRowsByMonth !== "object") {
       closingState.employeeRowsByMonth = {};
@@ -2128,9 +2132,9 @@
     var createSheetEngine = window.createSheetEngine || createMiniSheetEngine;
     closingAttendanceSheetEngine = createSheetEngine({
       idPrefix: "closing-attendance-grid",
-      title: "정직원 표시 시트",
-      subtitle: "야근 / 특근 / 지각 / 조퇴 / 결근을 월별로 수기 표시",
-      maxHeight: 520,
+      title: "정직원 월 시트",
+      subtitle: "",
+      maxHeight: 620,
       minRows: closingEmployeeNames.length * closingEmployeeMarkers.length,
       columns: closingAttendanceColumns,
       emptyRow: function () { return emptyClosingEmployeeRow("", ""); },
@@ -2154,9 +2158,9 @@
     var createSheetEngine = window.createSheetEngine || createMiniSheetEngine;
     closingOutsourceSheetEngine = createSheetEngine({
       idPrefix: "closing-outsource-grid",
-      title: "아웃소싱 계산 시트",
-      subtitle: "업체별 월 시트를 먼저 잡아두고, 다음 단계에서 지문 원본 자동계산을 연결합니다.",
-      maxHeight: 520,
+      title: "아웃소싱 월 시트",
+      subtitle: "",
+      maxHeight: 620,
       minRows: 72,
       columns: closingOutsourceColumns,
       emptyRow: function () { return emptyClosingOutsourceRow("", ""); },
@@ -2240,6 +2244,7 @@
       },
       closing: {
         attendanceMonth: closingState.attendanceMonth || defaultClosingMonthLabel(),
+        attendanceView: closingState.attendanceView === "outsource" ? "outsource" : "employee",
         employeeRowsByMonth: cloneClosingRowsMap(closingState.employeeRowsByMonth),
         outsourceVendor: closingState.outsourceVendor || "leaders",
         outsourceRowsByKey: (function () {
@@ -2364,6 +2369,7 @@
       closingState.attendanceMonth = /^\d+월$/.test(String(closingData.attendanceMonth || ""))
         ? closingData.attendanceMonth
         : defaultClosingMonthLabel();
+      closingState.attendanceView = closingData.attendanceView === "outsource" ? "outsource" : "employee";
       closingState.employeeRowsByMonth = cloneClosingRowsMap(closingData.employeeRowsByMonth);
       closingState.outsourceVendor = String(closingData.outsourceVendor || "leaders");
       closingState.outsourceRowsByKey = {};
@@ -5998,69 +6004,44 @@
         ">" + escapeHtml(option.label) + "</option>"
       );
     }).join("");
+    var isEmployeeView = closingState.attendanceView !== "outsource";
     return (
       '<div class="closing-page">' +
-        '<div class="closing-grid">' +
-          '<div class="closing-card closing-card-wide">' +
-            '<div class="closing-title">' + icon("sheet") + ' 근무(급여)</div>' +
-            '<div class="closing-copy">지문 원본을 기준으로 아웃소싱 근무시간을 계산하고, 정직원은 수기 표시 시트를 함께 관리하는 자리입니다.</div>' +
-            '<div class="closing-kicker">현재 기준 정리</div>' +
-            '<div class="closing-rule-list">' +
-              '<div class="closing-rule-item"><strong>아웃소싱:</strong> 출근/퇴근/외출 시간을 30분 단위로 계산합니다. 5분 59초까지는 유지하고, 6분부터는 30분 차감 규칙을 씁니다.</div>' +
-              '<div class="closing-rule-item"><strong>반일 계산:</strong> 12:33 이전 퇴근은 오전 3.7시간, 12:40~13:40 출근은 오후 4.3시간으로 봅니다.</div>' +
-              '<div class="closing-rule-item"><strong>퇴근 인정:</strong> 17:55 이후 퇴근은 18:00 퇴근으로 인정합니다.</div>' +
-              '<div class="closing-rule-item"><strong>야근:</strong> 20:50 이후 퇴근은 2.5시간 야근으로 계산합니다.</div>' +
-              '<div class="closing-rule-item"><strong>주휴/만근:</strong> 지각·조퇴와 무관하게 결근이 없으면 주휴수당과 만근수당을 줍니다.</div>' +
-            '</div>' +
-          '</div>' +
-          '<div class="closing-card">' +
-            '<div class="closing-title">' + icon("building") + ' 아웃소싱 파일</div>' +
-            '<div class="closing-copy">회사별 월 시트로 나뉘어 있고, 나중에 자동 입력 대상으로 연결할 파일들입니다.</div>' +
-            '<div class="closing-file-list">' +
-              '<div class="closing-file-item">1. 공감인/우리인컴/엑스큐솔루션/인네트웍스</div>' +
-              '<div class="closing-file-item">2. 리더스솔루션 (전 라이즈, 제이앤비)</div>' +
-              '<div class="closing-file-item">3. 이음플러스</div>' +
-            '</div>' +
-          '</div>' +
-          '<div class="closing-card">' +
-            '<div class="closing-title">' + icon("clipboard") + ' 정직원 파일</div>' +
-            '<div class="closing-copy">정직원은 자동 계산보다 표시 시트를 우선 쓰고, 지문 미사용 인원도 함께 관리합니다.</div>' +
-            '<div class="closing-file-list">' +
-              '<div class="closing-file-item">정직원 월 시트</div>' +
-              '<div class="closing-file-item">야근 / 특근 / 지각 / 조퇴 / 결근 표시</div>' +
-              '<div class="closing-file-item">지문 미사용 인원 수기 반영</div>' +
-            '</div>' +
-          '</div>' +
-        '</div>' +
         '<div class="closing-card closing-sheet-card">' +
           '<div class="closing-sheet-toolbar">' +
             '<div>' +
-              '<div class="closing-title">' + icon("clipboard") + ' 정직원 수기 시트</div>' +
-              '<div class="closing-copy">월별로 야근, 특근, 지각, 조퇴, 결근만 바로 표시해두는 자리입니다.</div>' +
+              '<div class="closing-title">' + icon("sheet") + ' 근무(급여)</div>' +
+              '<div class="closing-copy">' + escapeHtml(isEmployeeView
+                ? "정직원 월 시트를 그대로 보고 수기 표시하는 화면입니다."
+                : "아웃소싱 업체별 월 시트를 먼저 관리하고, 다음 단계에서 지문 원본 자동계산을 연결합니다.") + '</div>' +
             '</div>' +
             '<div class="closing-inline-controls">' +
+              '<button type="button" class="soft-btn' + (isEmployeeView ? ' active-filter' : '') + '" data-closing-attendance-view="employee">정직원</button>' +
+              '<button type="button" class="soft-btn' + (!isEmployeeView ? ' active-filter' : '') + '" data-closing-attendance-view="outsource">아웃소싱</button>' +
               '<label class="closing-inline-label" for="closing-attendance-month">대상월</label>' +
               '<select id="closing-attendance-month" class="closing-inline-select">' +
                 monthOptions +
               '</select>' +
+              (!isEmployeeView
+                ? '<label class="closing-inline-label" for="closing-outsource-vendor">업체</label>' +
+                  '<select id="closing-outsource-vendor" class="closing-inline-select">' +
+                    outsourceVendorOptions +
+                  '</select>'
+                : '') +
             '</div>' +
           '</div>' +
-          '<div id="closing-attendance-grid-host"></div>' +
+          (!isEmployeeView
+            ? '<div class="closing-rule-list closing-rule-list-inline">' +
+                '<div class="closing-rule-item"><strong>30분 단위:</strong> 5분 59초까지는 유지, 6분부터 30분 차감</div>' +
+                '<div class="closing-rule-item"><strong>반일:</strong> 오전 3.7 / 오후 4.3 기준</div>' +
+                '<div class="closing-rule-item"><strong>퇴근 인정:</strong> 17:55 이후는 18:00 인정</div>' +
+                '<div class="closing-rule-item"><strong>야근:</strong> 20:50 이후 2.5시간</div>' +
+                '<div class="closing-rule-item"><strong>수당:</strong> 결근이 없으면 주휴/만근 유지</div>' +
+              '</div>'
+            : '') +
         '</div>' +
         '<div class="closing-card closing-sheet-card">' +
-          '<div class="closing-sheet-toolbar">' +
-            '<div>' +
-              '<div class="closing-title">' + icon("building") + ' 아웃소싱 월 시트</div>' +
-              '<div class="closing-copy">업체별로 정상/연장/심야/특근 줄을 먼저 관리하고, 다음 단계에서 지문 원본 자동계산을 연결할 자리입니다.</div>' +
-            '</div>' +
-            '<div class="closing-inline-controls">' +
-              '<label class="closing-inline-label" for="closing-outsource-vendor">업체</label>' +
-              '<select id="closing-outsource-vendor" class="closing-inline-select">' +
-                outsourceVendorOptions +
-              '</select>' +
-            '</div>' +
-          '</div>' +
-          '<div id="closing-outsource-grid-host"></div>' +
+          '<div id="' + (isEmployeeView ? 'closing-attendance-grid-host' : 'closing-outsource-grid-host') + '"></div>' +
         '</div>' +
       '</div>'
     );
@@ -6703,10 +6684,19 @@
           if (state.mainTab === "closing" && state.closingSubTab === "attendance") {
             if (!wasClosingLoaded) {
               render();
-            } else if (closingAttendanceSheetEngine) {
-              closingAttendanceSheetEngine.refresh();
+            } else {
+              if (closingAttendanceSheetEngine) closingAttendanceSheetEngine.refresh();
+              if (closingOutsourceSheetEngine) closingOutsourceSheetEngine.refresh();
             }
           }
+        });
+        app.querySelectorAll("[data-closing-attendance-view]").forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            var nextView = btn.getAttribute("data-closing-attendance-view") === "outsource" ? "outsource" : "employee";
+            if (closingState.attendanceView === nextView) return;
+            closingState.attendanceView = nextView;
+            render();
+          });
         });
         var closingMonthSelect = document.getElementById("closing-attendance-month");
         if (closingMonthSelect) {
@@ -6719,7 +6709,9 @@
             scheduleLedgerDraftSave();
           });
         }
-        attachClosingAttendanceGridWhenNeeded(document.getElementById("closing-attendance-grid-host"));
+        if (closingState.attendanceView !== "outsource") {
+          attachClosingAttendanceGridWhenNeeded(document.getElementById("closing-attendance-grid-host"));
+        }
         var closingOutsourceVendorSelect = document.getElementById("closing-outsource-vendor");
         if (closingOutsourceVendorSelect) {
           closingOutsourceVendorSelect.value = closingState.outsourceVendor || "leaders";
@@ -6730,7 +6722,9 @@
             scheduleLedgerDraftSave();
           });
         }
-        attachClosingOutsourceGridWhenNeeded(document.getElementById("closing-outsource-grid-host"));
+        if (closingState.attendanceView === "outsource") {
+          attachClosingOutsourceGridWhenNeeded(document.getElementById("closing-outsource-grid-host"));
+        }
       }
       return;
     }
