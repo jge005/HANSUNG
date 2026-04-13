@@ -22,6 +22,16 @@
       color: var(--text);
       color-scheme: light;
     }
+    #app.app-compact {
+      zoom: 0.9;
+      width: 111.1112%;
+    }
+    @supports not (zoom: 1) {
+      #app.app-compact {
+        transform: scale(0.9);
+        transform-origin: top left;
+      }
+    }
     .hidden { display: none !important; }
 
     .shell-bg {
@@ -92,6 +102,11 @@
       cursor: pointer;
       background: #fff;
       box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+    }
+    .soft-btn.active-filter {
+      background: #ead9ff;
+      color: var(--text-dark);
+      box-shadow: 0 1px 4px rgba(156, 126, 219, 0.14);
     }
     .icon-box {
       display: inline-flex;

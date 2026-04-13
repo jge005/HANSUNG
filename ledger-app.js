@@ -177,6 +177,7 @@
     filter: {
       colKey: "all",
       keyword: "",
+      clientType: "all",
     },
   };
 
@@ -197,6 +198,7 @@
     var targetCount = Math.max(normalized.length, minCount || MIN_ROW_COUNT);
     for (var i = 0; i < targetCount; i++) {
       normalized[i] = Object.assign(emptyRow(), normalized[i] || {});
+      normalized[i].client = getDisplayCompanyName(normalized[i].client);
       if (normalized[i].__order == null) normalized[i].__order = i;
       recalculateAmountForRow(normalized, i);
     }
@@ -274,6 +276,32 @@
     var month = String(now.getMonth() + 1).padStart(2, "0");
     var day = String(now.getDate()).padStart(2, "0");
     return year + "-" + month + "-" + day;
+  }
+
+  function plusDaysIsoString(days) {
+    var now = new Date();
+    now.setDate(now.getDate() + (days || 0));
+    var year = now.getFullYear();
+    var month = String(now.getMonth() + 1).padStart(2, "0");
+    var day = String(now.getDate()).padStart(2, "0");
+    return year + "-" + month + "-" + day;
+  }
+
+  function defaultWorkDateIsoString() {
+    return plusDaysIsoString(1);
+  }
+
+  function isoToMonthDayLabel(value) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))) return "";
+    var parts = String(value).split("-");
+    return Number(parts[1]) + "월 " + Number(parts[2]) + "일";
+  }
+
+  function monthDayMatchesIso(value, isoDate) {
+    var parsed = parseSalesMonthDay(value);
+    if (!parsed || !/^\d{4}-\d{2}-\d{2}$/.test(String(isoDate || ""))) return false;
+    var parts = String(isoDate).split("-");
+    return parsed.month === Number(parts[1]) && parsed.day === Number(parts[2]);
   }
 
   function emptySupplierInfo() {
@@ -358,6 +386,10 @@
 
     if (info.supplierMode !== "personal" && info.supplierMode !== "corporate") {
       info.supplierMode = "corporate";
+    }
+
+    if (!info.date || !/^\d{4}-\d{2}-\d{2}$/.test(String(info.date))) {
+      info.date = defaultWorkDateIsoString();
     }
 
     return info;
@@ -552,6 +584,7 @@
     var target = Math.max(minCount || 40, lastUsed + 21);
     for (var i = 0; i < target; i++) {
       normalized[i] = Object.assign(emptyPriceRow(), normalized[i] || {});
+      normalized[i].client = getDisplayCompanyName(normalized[i].client);
     }
     while (normalized.length < target) {
       normalized.push(emptyPriceRow());
@@ -2181,6 +2214,7 @@
 
   function normalizeCellValue(colIndex, value) {
     var text = value == null ? "" : String(value);
+    if (salesColumns[colIndex].key === "client") return getDisplayCompanyName(text);
     if (salesColumns[colIndex].key !== "date") return text;
 
     var slash = text.match(/^\s*(\d{1,2})\s*\/\s*(\d{1,2})\s*$/);
@@ -2584,6 +2618,13 @@
   }
 
   function rowMatchesFilter(row) {
+    var clientType = ST.filter.clientType || "all";
+    if (clientType !== "all") {
+      var matchedClientRow = findClientRowByCompany(row && row.client);
+      var supplierMode = getClientRowSupplierMode(matchedClientRow);
+      if (clientType === "corporate" && supplierMode !== "corporate") return false;
+      if (clientType === "personal" && supplierMode !== "personal") return false;
+    }
     var keyword = (ST.filter.keyword || "").trim().toLowerCase();
     if (!keyword) return true;
     var keys =
@@ -3512,14 +3553,16 @@
     ST.scrollEl.addEventListener("dragstart", function (e) {
       e.preventDefault();
     });
-    ST.scrollEl.addEventListener(
-      "wheel",
-      function (e) {
-        if (!ST.scrollEl) return;
-        e.stopPropagation();
-      },
-      { passive: true }
-    );
+    ST.scrollEl.addEventListener("wheel", function (e) {
+      if (!ST.scrollEl) return;
+      var deltaY = e.deltaY || 0;
+      var deltaX = e.deltaX || 0;
+      if (!deltaY && !deltaX) return;
+      e.preventDefault();
+      e.stopPropagation();
+      ST.scrollEl.scrollTop += deltaY;
+      ST.scrollEl.scrollLeft += deltaX;
+    }, { passive: false });
 
     tbody.addEventListener("mousedown", onTbodyMouseDown);
     tbody.addEventListener("dblclick", onTbodyDblClick);
@@ -3879,9 +3922,15 @@
     return !!target.closest('input, textarea, select, [contenteditable="true"]');
   }
 
+  function isSalesTextEditingTarget(target) {
+    if (!target || !target.closest) return false;
+    if (target === ST.inputEl) return true;
+    return !!target.closest('input:not([type="button"]):not([type="checkbox"]):not([type="radio"]), textarea, [contenteditable="true"]');
+  }
+
   function onGlobalSalesKeyDown(e) {
     if (!ST.tableBuilt || state.mainTab !== "sales" || state.subTab !== "status") return;
-    if (isEditableDomTarget(e.target)) return;
+    if (isSalesTextEditingTarget(e.target)) return;
     var key = e.key;
     var lowered = String(key || "").toLowerCase();
     var shouldHandle =
@@ -4308,6 +4357,23 @@
     workState.info.supplierMode = getClientRowSupplierMode(clientRow);
   }
 
+  function syncWorkItemDatesToDocumentDate() {
+    var docDate = getWorkInfoValue("date");
+    var itemDate = isoToMonthDayLabel(docDate);
+    if (!itemDate) return;
+    workState.items = (workState.items || []).map(function (item) {
+      var nextItem = Object.assign({}, item || {});
+      var hasAnyValue = ["date", "code", "name", "qty", "price", "supply", "tax", "note"].some(function (key) {
+        return nextItem[key] != null && String(nextItem[key]).trim() !== "";
+      });
+      if (hasAnyValue) nextItem.date = itemDate;
+      return nextItem;
+    });
+    if (workSheetEngine && typeof workSheetEngine.setRows === "function") {
+      workSheetEngine.setRows(workState.items);
+    }
+  }
+
   function normalizeLookupText(value) {
     return String(value || "")
       .trim()
@@ -4316,17 +4382,26 @@
       .replace(/[-_/().]/g, "");
   }
 
+  function getDisplayCompanyName(value) {
+    var text = String(value || "").trim();
+    if (!text) return "";
+    text = text
+      .replace(/㈜/g, "")
+      .replace(/\(주\)/gi, "")
+      .replace(/주식회사/gi, "")
+      .replace(/유한회사/gi, "")
+      .replace(/유한책임회사/gi, "")
+      .replace(/합자회사/gi, "")
+      .replace(/합명회사/gi, "")
+      .replace(/\([^)]*\)/g, " ")
+      .replace(/\s+[^\s]+지점$/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    return text;
+  }
+
   function normalizeCompanyMatchText(value) {
-    return normalizeLookupText(
-      String(value || "")
-        .replace(/㈜/g, "")
-        .replace(/\(주\)/gi, "")
-        .replace(/주식회사/gi, "")
-        .replace(/유한회사/gi, "")
-        .replace(/유한책임회사/gi, "")
-        .replace(/합자회사/gi, "")
-        .replace(/합명회사/gi, "")
-    );
+    return normalizeLookupText(getDisplayCompanyName(value));
   }
 
   function getPriceRowsWithValues() {
@@ -4339,7 +4414,7 @@
     var seen = {};
     var items = [];
     getPriceRowsWithValues().forEach(function (row) {
-      var company = String(row.client || "").trim();
+      var company = getDisplayCompanyName(row.client);
       var normalized = normalizeCompanyMatchText(company);
       if (!company || !normalized || seen[normalized]) return;
       seen[normalized] = true;
@@ -4353,7 +4428,7 @@
     var items = [];
 
     function pushClient(name) {
-      var label = String(name || "").trim();
+      var label = getDisplayCompanyName(name);
       var normalized = normalizeCompanyMatchText(label);
       if (!label || !normalized || seen[normalized]) return;
       seen[normalized] = true;
@@ -4513,7 +4588,7 @@
     var matched = findResolvedPriceRow(client, code);
     if (!matched) return;
     rows[rowIndex] = Object.assign({}, row, {
-      client: matched.client || row.client || "",
+      client: getDisplayCompanyName(row.client || matched.client || ""),
       code: matched.code || row.code || "",
       name: matched.name || row.name || "",
       price: matched.price || row.price || "",
@@ -5019,14 +5094,46 @@
     return months.length ? months : [new Date().getMonth() + 1];
   }
 
+  function normalizeManageMonthValue(value, fallback) {
+    if (String(value || "") === "all") return "all";
+    var num = Number(value);
+    if (!num || num < 1 || num > 12) return fallback || "all";
+    return String(num);
+  }
+
+  function shiftManageRangeFromStart(nextStartValue) {
+    var nextStart = normalizeManageMonthValue(nextStartValue, "all");
+    var currentStart = normalizeManageMonthValue(manageState.startMonth, "all");
+    var currentEnd = normalizeManageMonthValue(manageState.endMonth, "all");
+
+    manageState.startMonth = nextStart;
+
+    if (nextStart === "all") {
+      manageState.endMonth = "all";
+      return;
+    }
+
+    if (currentStart === "all" || currentEnd === "all") {
+      manageState.endMonth = nextStart;
+      return;
+    }
+
+    var span = Number(currentEnd) - Number(currentStart);
+    var shiftedEnd = Number(nextStart) + span;
+    if (shiftedEnd < 1) shiftedEnd = 1;
+    if (shiftedEnd > 12) shiftedEnd = 12;
+    manageState.endMonth = String(shiftedEnd);
+  }
+
   function getManageClientOptions(rows) {
     var seen = {};
     var clients = [];
     rows.forEach(function (row) {
-      var client = String(row.client || "").trim();
+      var client = getDisplayCompanyName(row.client);
       if (!client) return;
-      if (seen[client]) return;
-      seen[client] = true;
+      var normalized = normalizeCompanyMatchText(client);
+      if (seen[normalized]) return;
+      seen[normalized] = true;
       clients.push(client);
     });
     return clients.sort(function (a, b) {
@@ -5038,10 +5145,10 @@
     var rows = getManageSourceRows();
     var months = getManageAvailableMonths(rows);
     var clients = getManageClientOptions(rows);
-    if (!manageState.startMonth || months.indexOf(Number(manageState.startMonth)) < 0) {
+    if (!manageState.startMonth || (manageState.startMonth !== "all" && months.indexOf(Number(manageState.startMonth)) < 0)) {
       manageState.startMonth = String(months[0]);
     }
-    if (!manageState.endMonth || months.indexOf(Number(manageState.endMonth)) < 0) {
+    if (!manageState.endMonth || (manageState.endMonth !== "all" && months.indexOf(Number(manageState.endMonth)) < 0)) {
       manageState.endMonth = String(months[months.length - 1]);
     }
     if (!manageState.client) {
@@ -5053,17 +5160,19 @@
 
   function getManageFilteredRows() {
     ensureManageStateDefaults();
-    var startMonth = Number(manageState.startMonth || 1);
-    var endMonth = Number(manageState.endMonth || 12);
-    var monthMin = Math.min(startMonth, endMonth);
-    var monthMax = Math.max(startMonth, endMonth);
+    var startMonth = normalizeManageMonthValue(manageState.startMonth, "all");
+    var endMonth = normalizeManageMonthValue(manageState.endMonth, "all");
     var selectedClient = String(manageState.client || "").trim();
     return getManageSourceRows().filter(function (row) {
       var parsed = parseSalesMonthDay(row.date);
-      if (parsed && (parsed.month < monthMin || parsed.month > monthMax)) {
-        return false;
+      if (startMonth !== "all" && endMonth !== "all") {
+        var monthMin = Math.min(Number(startMonth), Number(endMonth));
+        var monthMax = Math.max(Number(startMonth), Number(endMonth));
+        if (parsed && (parsed.month < monthMin || parsed.month > monthMax)) {
+          return false;
+        }
       }
-      if (selectedClient && String(row.client || "").trim() !== selectedClient) {
+      if (selectedClient && normalizeCompanyMatchText(row.client) !== normalizeCompanyMatchText(selectedClient)) {
         return false;
       }
       return true;
@@ -5106,7 +5215,8 @@
     var productSummary = buildManageProductSummary(filteredRows);
 
     function renderMonthOptions(selectedValue) {
-      return months.map(function (month) {
+      return '<option value="all"' + (String(selectedValue) === "all" ? " selected" : "") + '>전체</option>' +
+      months.map(function (month) {
         return '<option value="' + month + '"' + (String(selectedValue) === String(month) ? " selected" : "") + '>' + month + '월</option>';
       }).join("");
     }
@@ -5146,7 +5256,7 @@
                   (filteredRows.length ? filteredRows.map(function (row) {
                     return '<tr>' +
                       '<td>' + escapeHtml(String(row.date || "")) + '</td>' +
-                      '<td>' + escapeHtml(String(row.client || "")) + '</td>' +
+                      '<td>' + escapeHtml(getDisplayCompanyName(row.client || "")) + '</td>' +
                       '<td>' + escapeHtml(String(row.code || "")) + '</td>' +
                       '<td>' + escapeHtml(String(row.name || "")) + '</td>' +
                       '<td class="right">' + escapeHtml(formatDisplayNumber(row.qty || "")) + '</td>' +
@@ -5203,14 +5313,23 @@
       return;
     }
 
+    ensureWorkInfoShape();
+    var targetDocDate = defaultWorkDateIsoString();
+    workState.info.date = targetDocDate;
+    var targetItemDate = isoToMonthDayLabel(targetDocDate);
+    var hasDateMismatch = false;
+
     // 4) 선택 row들의 전체 데이터 복사(원본 ST.rows 수정 X)
     //    -> 거래작업 품목표 컬럼에 매핑
     var items = rows.map(function (r) {
       var row = ST.rows[r] || emptyRow();
       var matchedClientRow = findClientRowByCompany(row.client || "");
       var isPersonalClient = getClientRowSupplierMode(matchedClientRow) === "personal";
+      if (!monthDayMatchesIso(row.date, targetDocDate)) {
+        hasDateMismatch = true;
+      }
       return {
-        date: row.date,
+        date: targetItemDate,
         code: isPersonalClient ? "" : row.code,
         name: isPersonalClient ? (row.code || row.name) : row.name,
         qty: row.qty,
@@ -5242,6 +5361,10 @@
           company: firstClientName,
         });
       }
+    }
+
+    if (hasDateMismatch) {
+      alert("선택한 매출현황 일자 중 일부가 거래작업 작성일자(오늘+1일)와 다릅니다.");
     }
 
     // 5) 거래작업 탭으로 이동 + 복사본 렌더링
@@ -5336,7 +5459,10 @@
       " 이전</button>" +
       '<button type="button" class="soft-btn" id="btn-out">로그아웃</button></div>';
 
-    app.className = "";
+    var shouldCompactApp =
+      state.entered &&
+      !(state.mainTab === "sales" && state.subTab === "statement");
+    app.className = shouldCompactApp ? "app-compact" : "";
 
     if (!state.mainTab) {
       app.innerHTML =
@@ -5382,6 +5508,7 @@
       if (state.subTab === "manage") {
         body = renderManageTab();
       } else if (state.subTab === "status") {
+        var activeClientType = ST.filter.clientType || "all";
         body =
           '<div class="toolbar-card" style="margin-bottom:12px">' +
           '<label>필터:</label>' +
@@ -5389,6 +5516,11 @@
           salesColumns.map(function (col) { return '<option value="' + col.key + '">' + col.label + '</option>'; }).join("") +
           '</select>' +
           '<input type="text" class="field" id="status-filter-keyword" style="width:180px;height:36px" placeholder="검색어" />' +
+          '<div class="toolbar-segment" style="display:inline-flex;gap:6px;margin-left:4px">' +
+          '<button type="button" class="soft-btn' + (activeClientType === "all" ? ' active-filter' : '') + '" id="btn-filter-client-all">전체</button>' +
+          '<button type="button" class="soft-btn' + (activeClientType === "corporate" ? ' active-filter' : '') + '" id="btn-filter-client-corporate">법인</button>' +
+          '<button type="button" class="soft-btn' + (activeClientType === "personal" ? ' active-filter' : '') + '" id="btn-filter-client-personal">개인</button>' +
+          '</div>' +
           '<button type="button" class="soft-btn" id="btn-filter-apply">적용</button>' +
           '<button type="button" class="soft-btn" id="btn-filter-clear">해제</button>' +
           '<label style="margin-left:12px">정렬:</label>' +
@@ -5451,6 +5583,21 @@
             render();
           });
         }
+        if (manageStartMonth) {
+          manageStartMonth.addEventListener("change", function () {
+            shiftManageRangeFromStart(manageStartMonth.value);
+            render();
+          });
+        }
+        if (manageEndMonth) {
+          manageEndMonth.addEventListener("change", function () {
+            manageState.endMonth = normalizeManageMonthValue(manageEndMonth.value, manageState.endMonth || "all");
+            if (manageState.endMonth === "all") {
+              manageState.startMonth = "all";
+            }
+            render();
+          });
+        }
         if (manageResetBtn) {
           manageResetBtn.addEventListener("click", function () {
             manageState.startMonth = "";
@@ -5482,9 +5629,31 @@
         });
         var applyBtn = document.getElementById("btn-filter-apply");
         var clearBtn = document.getElementById("btn-filter-clear");
+        var filterAllBtn = document.getElementById("btn-filter-client-all");
+        var filterCorporateBtn = document.getElementById("btn-filter-client-corporate");
+        var filterPersonalBtn = document.getElementById("btn-filter-client-personal");
         var sortAscBtn = document.getElementById("btn-sort-asc");
         var sortDescBtn = document.getElementById("btn-sort-desc");
         var sortResetBtn = document.getElementById("btn-sort-reset");
+        function setStatusClientTypeFilter(type) {
+          ST.filter.clientType = type;
+          render();
+        }
+        if (filterAllBtn) {
+          filterAllBtn.addEventListener("click", function () {
+            setStatusClientTypeFilter("all");
+          });
+        }
+        if (filterCorporateBtn) {
+          filterCorporateBtn.addEventListener("click", function () {
+            setStatusClientTypeFilter("corporate");
+          });
+        }
+        if (filterPersonalBtn) {
+          filterPersonalBtn.addEventListener("click", function () {
+            setStatusClientTypeFilter("personal");
+          });
+        }
         if (applyBtn) {
           applyBtn.addEventListener("click", function () {
             ST.filter.colKey = filterCol ? filterCol.value : "all";
@@ -5496,9 +5665,10 @@
           clearBtn.addEventListener("click", function () {
             ST.filter.colKey = "all";
             ST.filter.keyword = "";
+            ST.filter.clientType = "all";
             if (filterCol) filterCol.value = "all";
             if (filterKeyword) filterKeyword.value = "";
-            applyFilterUI();
+            render();
           });
         }
         if (sortAscBtn) {
@@ -5578,6 +5748,9 @@
             var path = inp.getAttribute("data-work-info");
             if (!path) return;
             setWorkInfoValue(path, inp.value);
+            if (path === "date") {
+              syncWorkItemDatesToDocumentDate();
+            }
             if (path === "receiver.company") {
               var matchedClient = findClientRowByCompany(inp.value);
               if (matchedClient) {
