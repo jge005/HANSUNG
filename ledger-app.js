@@ -87,6 +87,11 @@
     activeClient: "",
     sidebarScrollTop: 0,
   };
+  var manageState = {
+    startMonth: "",
+    endMonth: "",
+    client: "",
+  };
   var workGridFields = ["date", "code", "name", "qty", "price", "supply", "tax", "note"];
   var clientGridFields = ["supplierMode", "company", "businessNo", "ceoName", "address", "businessType", "businessItem"];
   var clientDataFields = ["supplierMode", "company", "businessNo", "ceoName", "address", "businessType", "businessItem"];
@@ -4984,6 +4989,197 @@
     listEl.scrollTop = priceState.sidebarScrollTop || 0;
   }
 
+  function parseSalesMonthDay(value) {
+    var text = String(value || "").trim();
+    if (!text) return null;
+    var match =
+      text.match(/^(\d{1,2})\s*월\s*(\d{1,2})\s*일$/) ||
+      text.match(/^(\d{1,2})\s*\/\s*(\d{1,2})$/);
+    if (!match) return null;
+    var month = Number(match[1]);
+    var day = Number(match[2]);
+    if (!month || !day) return null;
+    return { month: month, day: day };
+  }
+
+  function getManageSourceRows() {
+    var keys = salesColumns.map(function (col) { return col.key; });
+    return ST.rows.filter(function (row) {
+      return rowHasAnyValue(row, keys);
+    });
+  }
+
+  function getManageAvailableMonths(rows) {
+    var seen = {};
+    rows.forEach(function (row) {
+      var parsed = parseSalesMonthDay(row.date);
+      if (parsed) seen[parsed.month] = true;
+    });
+    var months = Object.keys(seen).map(function (value) { return Number(value); }).sort(function (a, b) { return a - b; });
+    return months.length ? months : [new Date().getMonth() + 1];
+  }
+
+  function getManageClientOptions(rows) {
+    var seen = {};
+    var clients = [];
+    rows.forEach(function (row) {
+      var client = String(row.client || "").trim();
+      if (!client) return;
+      if (seen[client]) return;
+      seen[client] = true;
+      clients.push(client);
+    });
+    return clients.sort(function (a, b) {
+      return a.localeCompare(b, "ko");
+    });
+  }
+
+  function ensureManageStateDefaults() {
+    var rows = getManageSourceRows();
+    var months = getManageAvailableMonths(rows);
+    var clients = getManageClientOptions(rows);
+    if (!manageState.startMonth || months.indexOf(Number(manageState.startMonth)) < 0) {
+      manageState.startMonth = String(months[0]);
+    }
+    if (!manageState.endMonth || months.indexOf(Number(manageState.endMonth)) < 0) {
+      manageState.endMonth = String(months[months.length - 1]);
+    }
+    if (!manageState.client) {
+      manageState.client = "";
+    } else if (manageState.client && clients.indexOf(manageState.client) < 0) {
+      manageState.client = "";
+    }
+  }
+
+  function getManageFilteredRows() {
+    ensureManageStateDefaults();
+    var startMonth = Number(manageState.startMonth || 1);
+    var endMonth = Number(manageState.endMonth || 12);
+    var monthMin = Math.min(startMonth, endMonth);
+    var monthMax = Math.max(startMonth, endMonth);
+    var selectedClient = String(manageState.client || "").trim();
+    return getManageSourceRows().filter(function (row) {
+      var parsed = parseSalesMonthDay(row.date);
+      if (parsed && (parsed.month < monthMin || parsed.month > monthMax)) {
+        return false;
+      }
+      if (selectedClient && String(row.client || "").trim() !== selectedClient) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  function buildManageProductSummary(rows) {
+    var map = {};
+    rows.forEach(function (row) {
+      var key = String(row.name || row.code || "").trim();
+      if (!key) return;
+      if (!map[key]) {
+        map[key] = {
+          name: String(row.name || "").trim() || key,
+          qty: 0,
+          amount: 0,
+        };
+      }
+      map[key].qty += parseCalcNumber(row.qty) || 0;
+      map[key].amount += parseCalcNumber(row.amount) || 0;
+    });
+    return Object.keys(map)
+      .map(function (key) { return map[key]; })
+      .sort(function (a, b) { return b.amount - a.amount; })
+      .slice(0, 6);
+  }
+
+  function renderManageTab() {
+    ensureManageStateDefaults();
+    var sourceRows = getManageSourceRows();
+    var months = getManageAvailableMonths(sourceRows);
+    var clients = getManageClientOptions(sourceRows);
+    var filteredRows = getManageFilteredRows();
+    var totalQty = filteredRows.reduce(function (sum, row) {
+      return sum + (parseCalcNumber(row.qty) || 0);
+    }, 0);
+    var totalAmount = filteredRows.reduce(function (sum, row) {
+      return sum + (parseCalcNumber(row.amount) || 0);
+    }, 0);
+    var productSummary = buildManageProductSummary(filteredRows);
+
+    function renderMonthOptions(selectedValue) {
+      return months.map(function (month) {
+        return '<option value="' + month + '"' + (String(selectedValue) === String(month) ? " selected" : "") + '>' + month + '월</option>';
+      }).join("");
+    }
+
+    function renderClientOptions(selectedValue) {
+      return '<option value="">전체 업체</option>' + clients.map(function (client) {
+        return '<option value="' + escapeAttr(client) + '"' + (selectedValue === client ? " selected" : "") + '>' + escapeHtml(client) + '</option>';
+      }).join("");
+    }
+
+    return (
+      '<div class="manage-page">' +
+        '<div class="manage-toolbar-card">' +
+          '<div class="manage-toolbar-grid">' +
+            '<div class="manage-toolbar-item"><label>시작월</label><select id="manage-start-month">' + renderMonthOptions(manageState.startMonth) + '</select></div>' +
+            '<div class="manage-toolbar-item"><label>종료월</label><select id="manage-end-month">' + renderMonthOptions(manageState.endMonth) + '</select></div>' +
+            '<div class="manage-toolbar-item manage-toolbar-client"><label>업체</label><select id="manage-client">' + renderClientOptions(manageState.client) + '</select></div>' +
+            '<div class="manage-toolbar-actions">' +
+              '<button type="button" class="soft-btn" id="btn-manage-search">조회</button>' +
+              '<button type="button" class="soft-btn" id="btn-manage-reset">초기화</button>' +
+            '</div>' +
+          '</div>' +
+          '<div class="manage-toolbar-help">조건 선택 후 <strong>조회</strong>를 누르면 집계가 갱신됩니다.</div>' +
+        '</div>' +
+        '<div class="manage-summary-grid">' +
+          '<div class="manage-summary-card"><div class="manage-summary-label">조회건수</div><div class="manage-summary-value">' + escapeHtml(formatDisplayNumber(filteredRows.length)) + '</div></div>' +
+          '<div class="manage-summary-card"><div class="manage-summary-label">수량합계</div><div class="manage-summary-value">' + escapeHtml(formatDisplayNumber(totalQty)) + '</div></div>' +
+          '<div class="manage-summary-card"><div class="manage-summary-label">매출합계</div><div class="manage-summary-value">' + escapeHtml(formatDisplayNumber(totalAmount)) + '</div></div>' +
+        '</div>' +
+        '<div class="manage-layout">' +
+          '<div class="manage-table-card">' +
+            '<div class="manage-card-title">조회 결과</div>' +
+            '<div class="manage-table-wrap">' +
+              '<table class="manage-table">' +
+                '<thead><tr><th>월일</th><th>업체명</th><th>코드</th><th>품명</th><th class="right">수량</th><th class="right">단가</th><th class="right">매출금액</th></tr></thead>' +
+                '<tbody>' +
+                  (filteredRows.length ? filteredRows.map(function (row) {
+                    return '<tr>' +
+                      '<td>' + escapeHtml(String(row.date || "")) + '</td>' +
+                      '<td>' + escapeHtml(String(row.client || "")) + '</td>' +
+                      '<td>' + escapeHtml(String(row.code || "")) + '</td>' +
+                      '<td>' + escapeHtml(String(row.name || "")) + '</td>' +
+                      '<td class="right">' + escapeHtml(formatDisplayNumber(row.qty || "")) + '</td>' +
+                      '<td class="right">' + escapeHtml(formatDisplayNumber(row.price || "")) + '</td>' +
+                      '<td class="right">' + escapeHtml(formatDisplayNumber(row.amount || "")) + '</td>' +
+                    '</tr>';
+                  }).join("") : '<tr><td colspan="7" class="center muted">조건에 맞는 데이터가 없습니다.</td></tr>') +
+                '</tbody>' +
+              '</table>' +
+            '</div>' +
+          '</div>' +
+          '<div class="manage-side-card">' +
+            '<div class="manage-card-title">품목 집계</div>' +
+            '<div class="manage-mini-table-wrap">' +
+              '<table class="manage-mini-table">' +
+                '<thead><tr><th>품명</th><th class="right">수량</th><th class="right">금액</th></tr></thead>' +
+                '<tbody>' +
+                  (productSummary.length ? productSummary.map(function (item) {
+                    return '<tr>' +
+                      '<td>' + escapeHtml(item.name) + '</td>' +
+                      '<td class="right">' + escapeHtml(formatDisplayNumber(item.qty)) + '</td>' +
+                      '<td class="right">' + escapeHtml(formatDisplayNumber(item.amount)) + '</td>' +
+                    '</tr>';
+                  }).join("") : '<tr><td colspan="3" class="center muted">집계할 품목이 없습니다.</td></tr>') +
+                '</tbody>' +
+              '</table>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
   function sendSelectedStatusRowsToWork() {
     // 1) 매출현황(ST)에서 선택된 셀들 -> row index 추출
     var keys = ST.selectedKeys || [];
@@ -5183,7 +5379,9 @@
       tabs += "</div>";
 
       var body;
-      if (state.subTab === "status") {
+      if (state.subTab === "manage") {
+        body = renderManageTab();
+      } else if (state.subTab === "status") {
         body =
           '<div class="toolbar-card" style="margin-bottom:12px">' +
           '<label>필터:</label>' +
@@ -5235,7 +5433,33 @@
         });
       });
 
-      if (state.subTab === "status") {
+      if (state.subTab === "manage") {
+        var wasManageLoaded = ledgerState.loadedFromFirebase;
+        ensureLedgerLoadedFromFirebase().then(function () {
+          if (!wasManageLoaded && state.subTab === "manage") render();
+        });
+        var manageStartMonth = document.getElementById("manage-start-month");
+        var manageEndMonth = document.getElementById("manage-end-month");
+        var manageClient = document.getElementById("manage-client");
+        var manageSearchBtn = document.getElementById("btn-manage-search");
+        var manageResetBtn = document.getElementById("btn-manage-reset");
+        if (manageSearchBtn) {
+          manageSearchBtn.addEventListener("click", function () {
+            manageState.startMonth = manageStartMonth ? manageStartMonth.value : manageState.startMonth;
+            manageState.endMonth = manageEndMonth ? manageEndMonth.value : manageState.endMonth;
+            manageState.client = manageClient ? manageClient.value : manageState.client;
+            render();
+          });
+        }
+        if (manageResetBtn) {
+          manageResetBtn.addEventListener("click", function () {
+            manageState.startMonth = "";
+            manageState.endMonth = "";
+            manageState.client = "";
+            render();
+          });
+        }
+      } else if (state.subTab === "status") {
         var filterCol = document.getElementById("status-filter-col");
         var filterKeyword = document.getElementById("status-filter-keyword");
         var sortCol = document.getElementById("status-sort-col");
