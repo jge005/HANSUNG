@@ -972,10 +972,65 @@
       table-layout: fixed;
       font-size: 12px;
     }
+    .closing-page {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .closing-grid {
+      display: grid;
+      grid-template-columns: 1.5fr 1fr 1fr;
+      gap: 16px;
+    }
+    .closing-card {
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.95);
+      box-shadow: 0 1px 6px rgba(0, 0, 0, 0.06);
+      padding: 18px;
+    }
+    .closing-title {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      color: var(--text-dark);
+      margin-bottom: 10px;
+    }
+    .closing-copy {
+      color: var(--muted2);
+      line-height: 1.6;
+      margin-bottom: 12px;
+    }
+    .closing-kicker {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      color: #7a6699;
+      margin-bottom: 10px;
+    }
+    .closing-rule-list,
+    .closing-file-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .closing-rule-item,
+    .closing-file-item {
+      border-radius: 12px;
+      background: #fbf8ff;
+      border: 1px solid #efe5f8;
+      padding: 12px 14px;
+      line-height: 1.55;
+      color: #5f5677;
+    }
+    .closing-rule-item strong {
+      color: var(--text-dark);
+    }
     @media (max-width: 920px) {
       .manage-toolbar-grid,
       .manage-summary-grid,
-      .manage-layout {
+      .manage-layout,
+      .closing-grid {
         grid-template-columns: 1fr;
       }
       .manage-toolbar-actions {

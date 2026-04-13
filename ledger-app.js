@@ -32,6 +32,12 @@
     { key: "price", label: "매입단가", icon: "tags" },
     { key: "client", label: "업체리스트", icon: "building" },
   ];
+  var closingTabs = [
+    { key: "attendance", label: "근무(급여)", icon: "sheet" },
+    { key: "meal", label: "식대", icon: "clipboard" },
+    { key: "salesclose", label: "매출마감", icon: "scroll" },
+    { key: "purchaseclose", label: "매입마감", icon: "folder" },
+  ];
 
   var icons = {
     lock: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
@@ -55,6 +61,7 @@
     role: null,
     mainTab: null,
     subTab: "manage",
+    closingSubTab: "attendance",
   };
 
   var DRAFT_ID_KEY = "ledgerDraftId";
@@ -5656,6 +5663,56 @@
     );
   }
 
+  function renderClosingAttendanceTab() {
+    return (
+      '<div class="closing-page">' +
+        '<div class="closing-grid">' +
+          '<div class="closing-card closing-card-wide">' +
+            '<div class="closing-title">' + icon("sheet") + ' 근무(급여)</div>' +
+            '<div class="closing-copy">지문 원본을 기준으로 아웃소싱 근무시간을 계산하고, 정직원은 수기 표시 시트를 함께 관리하는 자리입니다.</div>' +
+            '<div class="closing-kicker">현재 기준 정리</div>' +
+            '<div class="closing-rule-list">' +
+              '<div class="closing-rule-item"><strong>아웃소싱:</strong> 출근/퇴근/외출 시간을 30분 단위로 계산합니다. 5분 59초까지는 유지하고, 6분부터는 30분 차감 규칙을 씁니다.</div>' +
+              '<div class="closing-rule-item"><strong>반일 계산:</strong> 12:33 이전 퇴근은 오전 3.7시간, 12:40~13:40 출근은 오후 4.3시간으로 봅니다.</div>' +
+              '<div class="closing-rule-item"><strong>퇴근 인정:</strong> 17:55 이후 퇴근은 18:00 퇴근으로 인정합니다.</div>' +
+              '<div class="closing-rule-item"><strong>야근:</strong> 20:50 이후 퇴근은 2.5시간 야근으로 계산합니다.</div>' +
+              '<div class="closing-rule-item"><strong>주휴/만근:</strong> 지각·조퇴와 무관하게 결근이 없으면 주휴수당과 만근수당을 줍니다.</div>' +
+            '</div>' +
+          '</div>' +
+          '<div class="closing-card">' +
+            '<div class="closing-title">' + icon("building") + ' 아웃소싱 파일</div>' +
+            '<div class="closing-copy">회사별 월 시트로 나뉘어 있고, 나중에 자동 입력 대상으로 연결할 파일들입니다.</div>' +
+            '<div class="closing-file-list">' +
+              '<div class="closing-file-item">1. 공감인/우리인컴/엑스큐솔루션/인네트웍스</div>' +
+              '<div class="closing-file-item">2. 리더스솔루션 (전 라이즈, 제이앤비)</div>' +
+              '<div class="closing-file-item">3. 이음플러스</div>' +
+            '</div>' +
+          '</div>' +
+          '<div class="closing-card">' +
+            '<div class="closing-title">' + icon("clipboard") + ' 정직원 파일</div>' +
+            '<div class="closing-copy">정직원은 자동 계산보다 표시 시트를 우선 쓰고, 지문 미사용 인원도 함께 관리합니다.</div>' +
+            '<div class="closing-file-list">' +
+              '<div class="closing-file-item">정직원 월 시트</div>' +
+              '<div class="closing-file-item">야근 / 특근 / 지각 / 조퇴 / 결근 표시</div>' +
+              '<div class="closing-file-item">지문 미사용 인원 수기 반영</div>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function renderClosingPlaceholderTab(title, description) {
+    return (
+      '<div class="closing-page">' +
+        '<div class="closing-card closing-card-wide">' +
+          '<div class="closing-title">' + icon("sheet") + ' ' + escapeHtml(title) + '</div>' +
+          '<div class="closing-copy">' + escapeHtml(description) + '</div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
   function sendSelectedStatusRowsToWork() {
     // 1) 매출현황(ST)에서 선택된 셀들 -> row index 추출
     var keys = ST.selectedKeys || [];
@@ -6236,6 +6293,46 @@
         });
         attachClientGridWhenNeeded(document.getElementById("client-grid-host"));
       }
+      return;
+    }
+
+    if (state.mainTab === "closing") {
+      if (!closingTabs.some(function (tab) { return tab.key === state.closingSubTab; })) {
+        state.closingSubTab = "attendance";
+      }
+      var closingTabsHtml = '<div class="tabs">';
+      closingTabs.forEach(function (t) {
+        closingTabsHtml +=
+          '<button type="button" class="sub-tab' +
+          (state.closingSubTab === t.key ? " active" : "") +
+          '" data-closing-sub="' +
+          t.key +
+          '">' +
+          icon(t.icon) +
+          t.label +
+          "</button>";
+      });
+      closingTabsHtml += "</div>";
+
+      var closingBody = "";
+      if (state.closingSubTab === "attendance") {
+        closingBody = renderClosingAttendanceTab();
+      } else if (state.closingSubTab === "meal") {
+        closingBody = renderClosingPlaceholderTab("식대", "식대 원본과 월별 정산 시트를 연결할 자리입니다.");
+      } else if (state.closingSubTab === "salesclose") {
+        closingBody = renderClosingPlaceholderTab("매출마감", "업체별 매출 마감 확인과 메일/세금계산서 체크 흐름을 넣을 자리입니다.");
+      } else if (state.closingSubTab === "purchaseclose") {
+        closingBody = renderClosingPlaceholderTab("매입마감", "업체별 매입 마감 확인과 세금계산서 수취 확인 흐름을 넣을 자리입니다.");
+      }
+
+      app.innerHTML = top + '<div class="content">' + closingTabsHtml + closingBody + "</div>";
+      wireTopBar();
+      app.querySelectorAll("[data-closing-sub]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          state.closingSubTab = btn.getAttribute("data-closing-sub");
+          render();
+        });
+      });
       return;
     }
 
