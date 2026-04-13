@@ -226,6 +226,7 @@
     var scrollLeft = ST.scrollEl ? ST.scrollEl.scrollLeft : 0;
 
     ST.rows = normalizeSalesRows(ST.rows, targetCount);
+    syncActiveLedgerBundle();
     ST.visibleRowsDirty = true;
     initGridSizing();
 
@@ -725,6 +726,17 @@
     var bundle = getLedgerBundle(nextKind);
     activeLedgerKind = nextKind;
     bindLedgerBundle(bundle);
+  }
+
+  function syncActiveLedgerBundle() {
+    var bundle = getLedgerBundle(activeLedgerKind);
+    bundle.rows = ST.rows;
+    bundle.clientState = clientState;
+    bundle.priceState = priceState;
+    bundle.manageState = manageState;
+    bundle.filter = ST.filter;
+    bundle.colWidths = ST.colWidths;
+    bundle.rowHeights = ST.rowHeights;
   }
 
   function refreshWorkSummaryUi() {
@@ -2968,6 +2980,7 @@
       ST.redoStack = [];
     }
     ST.rows = nextRows;
+    syncActiveLedgerBundle();
     if (ST.filter && ST.filter.keyword) {
       ST.visibleRowsDirty = true;
       renderVirtualRows(true);
@@ -2990,6 +3003,7 @@
       ST.redoStack = [];
     }
     ST.rows = after;
+    syncActiveLedgerBundle();
     ST.visibleRowsDirty = true;
     refreshGridValues();
     scheduleLedgerDraftSave();
@@ -3354,6 +3368,7 @@
     if (!prev) return;
     ST.redoStack.push(cloneRows(ST.rows));
     ST.rows = cloneRows(prev);
+    syncActiveLedgerBundle();
     ST.editMode = false;
     ST.isComposing = false;
     refreshGridValues();
@@ -3369,6 +3384,7 @@
     if (!next) return;
     ST.undoStack.push(cloneRows(ST.rows));
     ST.rows = cloneRows(next);
+    syncActiveLedgerBundle();
     ST.editMode = false;
     ST.isComposing = false;
     refreshGridValues();
