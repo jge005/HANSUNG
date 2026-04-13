@@ -689,6 +689,7 @@
     }
     if (!purchaseLedgerBundle) {
       purchaseLedgerBundle = createLedgerBundle();
+      purchaseLedgerBundle.clientState = salesLedgerBundle.clientState;
     }
   }
 
@@ -697,12 +698,7 @@
     return kind === "purchase" ? purchaseLedgerBundle : salesLedgerBundle;
   }
 
-  function switchLedgerModule(kind) {
-    var nextKind = kind === "purchase" ? "purchase" : "sales";
-    ensureLedgerBundles();
-    if (activeLedgerKind === nextKind) return;
-    var bundle = getLedgerBundle(nextKind);
-    activeLedgerKind = nextKind;
+  function bindLedgerBundle(bundle) {
     ST.rows = bundle.rows;
     clientState = bundle.clientState;
     priceState = bundle.priceState;
@@ -721,6 +717,15 @@
     ST.selectedKeys = ["0:0"];
     ST.editMode = false;
     ST.isComposing = false;
+  }
+
+  function switchLedgerModule(kind, force) {
+    var nextKind = kind === "purchase" ? "purchase" : "sales";
+    ensureLedgerBundles();
+    if (!force && activeLedgerKind === nextKind) return;
+    var bundle = getLedgerBundle(nextKind);
+    activeLedgerKind = nextKind;
+    bindLedgerBundle(bundle);
   }
 
   function refreshWorkSummaryUi() {
@@ -1899,29 +1904,33 @@
     var trimmedWorkItems = trimTrailingRows(workState.items, workGridFields, 12, function () { return {}; });
     var trimmedClientRows = normalizeClientGridRows(salesLedgerBundle.clientState.rows, 20);
     var trimmedPriceRows = trimTrailingRows(salesLedgerBundle.priceState.rows, priceGridFields, 30, emptyPriceRow);
-    var trimmedPurchaseClientRows = normalizeClientGridRows(purchaseLedgerBundle.clientState.rows, 20);
     var trimmedPurchasePriceRows = trimTrailingRows(purchaseLedgerBundle.priceState.rows, priceGridFields, 30, emptyPriceRow);
     return {
-      statusRows: normalizeSalesRows(salesLedgerBundle.rows, salesStoredRowCount).slice(0, salesStoredRowCount),
-      workItems: cloneItems(trimmedWorkItems),
-      workInfo: cloneWorkInfo(workState.info),
-      clientRows: cloneClientRows(trimmedClientRows),
-      priceRows: trimmedPriceRows.map(function (row) { return Object.assign({}, row); }),
-      priceActiveClient: salesLedgerBundle.priceState.activeClient || "",
-      sheetLayout: {
-        colWidths: salesLedgerBundle.colWidths.slice(),
-        rowHeights: salesLedgerBundle.rowHeights.slice(0, salesStoredRowCount),
+      sales: {
+        statusRows: normalizeSalesRows(salesLedgerBundle.rows, salesStoredRowCount).slice(0, salesStoredRowCount),
+        priceRows: trimmedPriceRows.map(function (row) { return Object.assign({}, row); }),
+        priceActiveClient: salesLedgerBundle.priceState.activeClient || "",
+        sheetLayout: {
+          colWidths: salesLedgerBundle.colWidths.slice(),
+          rowHeights: salesLedgerBundle.rowHeights.slice(0, salesStoredRowCount),
+        },
+        manageState: Object.assign({}, salesLedgerBundle.manageState),
       },
-      purchaseStatusRows: normalizeSalesRows(purchaseLedgerBundle.rows, purchaseStoredRowCount).slice(0, purchaseStoredRowCount),
-      purchaseClientRows: cloneClientRows(trimmedPurchaseClientRows),
-      purchasePriceRows: trimmedPurchasePriceRows.map(function (row) { return Object.assign({}, row); }),
-      purchasePriceActiveClient: purchaseLedgerBundle.priceState.activeClient || "",
-      purchaseSheetLayout: {
-        colWidths: purchaseLedgerBundle.colWidths.slice(),
-        rowHeights: purchaseLedgerBundle.rowHeights.slice(0, purchaseStoredRowCount),
+      purchase: {
+        statusRows: normalizeSalesRows(purchaseLedgerBundle.rows, purchaseStoredRowCount).slice(0, purchaseStoredRowCount),
+        priceRows: trimmedPurchasePriceRows.map(function (row) { return Object.assign({}, row); }),
+        priceActiveClient: purchaseLedgerBundle.priceState.activeClient || "",
+        sheetLayout: {
+          colWidths: purchaseLedgerBundle.colWidths.slice(),
+          rowHeights: purchaseLedgerBundle.rowHeights.slice(0, purchaseStoredRowCount),
+        },
+        manageState: Object.assign({}, purchaseLedgerBundle.manageState),
       },
-      purchaseManageState: Object.assign({}, purchaseLedgerBundle.manageState),
-      items: cloneItems(trimmedWorkItems),
+      shared: {
+        workItems: cloneItems(trimmedWorkItems),
+        workInfo: cloneWorkInfo(workState.info),
+        clientRows: cloneClientRows(trimmedClientRows),
+      },
       updatedAt: new Date().toISOString(),
     };
   }
@@ -1930,53 +1939,76 @@
     if (!data) return;
     ensureLedgerBundles();
 
-    if (Array.isArray(data.statusRows)) {
-      salesLedgerBundle.rows = normalizeSalesRows(data.statusRows);
+    var salesData = data.sales && typeof data.sales === "object" ? data.sales : data;
+    var purchaseData = data.purchase && typeof data.purchase === "object" ? data.purchase : null;
+    var sharedData = data.shared && typeof data.shared === "object" ? data.shared : data;
+
+    if (Array.isArray(salesData.statusRows)) {
+      salesLedgerBundle.rows = normalizeSalesRows(salesData.statusRows);
     }
 
-    if (Array.isArray(data.workItems)) {
-      workState.items = trimTrailingRows(data.workItems, workGridFields, 12, function () { return {}; });
-    } else if (Array.isArray(data.items)) {
-      workState.items = trimTrailingRows(data.items, workGridFields, 12, function () { return {}; });
+    if (Array.isArray(sharedData.workItems)) {
+      workState.items = trimTrailingRows(sharedData.workItems, workGridFields, 12, function () { return {}; });
+    } else if (Array.isArray(sharedData.items)) {
+      workState.items = trimTrailingRows(sharedData.items, workGridFields, 12, function () { return {}; });
     }
 
-    if (data.workInfo && typeof data.workInfo === "object") {
-      workState.info = cloneWorkInfo(data.workInfo);
+    if (sharedData.workInfo && typeof sharedData.workInfo === "object") {
+      workState.info = cloneWorkInfo(sharedData.workInfo);
     }
 
-    if (Array.isArray(data.clientRows)) {
-      salesLedgerBundle.clientState.rows = normalizeClientGridRows(data.clientRows, 20);
+    if (Array.isArray(sharedData.clientRows)) {
+      var normalizedClientRows = normalizeClientGridRows(sharedData.clientRows, 20);
+      salesLedgerBundle.clientState.rows = normalizedClientRows;
+      purchaseLedgerBundle.clientState = salesLedgerBundle.clientState;
     }
 
-    if (Array.isArray(data.priceRows)) {
-      salesLedgerBundle.priceState.rows = normalizePriceGridRows(data.priceRows, 30);
+    if (Array.isArray(salesData.priceRows)) {
+      salesLedgerBundle.priceState.rows = normalizePriceGridRows(salesData.priceRows, 30);
     }
-    if (typeof data.priceActiveClient === "string") {
-      salesLedgerBundle.priceState.activeClient = data.priceActiveClient;
+    if (typeof salesData.priceActiveClient === "string") {
+      salesLedgerBundle.priceState.activeClient = salesData.priceActiveClient;
     }
 
-    if (data.sheetLayout && typeof data.sheetLayout === "object") {
-      if (Array.isArray(data.sheetLayout.colWidths)) {
-        salesLedgerBundle.colWidths = data.sheetLayout.colWidths.slice(0, COL_COUNT);
+    if (salesData.sheetLayout && typeof salesData.sheetLayout === "object") {
+      if (Array.isArray(salesData.sheetLayout.colWidths)) {
+        salesLedgerBundle.colWidths = salesData.sheetLayout.colWidths.slice(0, COL_COUNT);
       }
-      if (Array.isArray(data.sheetLayout.rowHeights)) {
-        salesLedgerBundle.rowHeights = data.sheetLayout.rowHeights.slice();
+      if (Array.isArray(salesData.sheetLayout.rowHeights)) {
+        salesLedgerBundle.rowHeights = salesData.sheetLayout.rowHeights.slice();
       }
     }
+    if (salesData.manageState && typeof salesData.manageState === "object") {
+      salesLedgerBundle.manageState = {
+        startMonth: salesData.manageState.startMonth || "",
+        endMonth: salesData.manageState.endMonth || "",
+        client: salesData.manageState.client || "",
+      };
+    }
 
-    if (Array.isArray(data.purchaseStatusRows)) {
+    if (purchaseData && Array.isArray(purchaseData.statusRows)) {
+      purchaseLedgerBundle.rows = normalizeSalesRows(purchaseData.statusRows);
+    } else if (Array.isArray(data.purchaseStatusRows)) {
       purchaseLedgerBundle.rows = normalizeSalesRows(data.purchaseStatusRows);
     }
-    if (Array.isArray(data.purchaseClientRows)) {
-      purchaseLedgerBundle.clientState.rows = normalizeClientGridRows(data.purchaseClientRows, 20);
-    }
-    if (Array.isArray(data.purchasePriceRows)) {
+    if (purchaseData && Array.isArray(purchaseData.priceRows)) {
+      purchaseLedgerBundle.priceState.rows = normalizePriceGridRows(purchaseData.priceRows, 30);
+    } else if (Array.isArray(data.purchasePriceRows)) {
       purchaseLedgerBundle.priceState.rows = normalizePriceGridRows(data.purchasePriceRows, 30);
     }
-    if (typeof data.purchasePriceActiveClient === "string") {
+    if (purchaseData && typeof purchaseData.priceActiveClient === "string") {
+      purchaseLedgerBundle.priceState.activeClient = purchaseData.priceActiveClient;
+    } else if (typeof data.purchasePriceActiveClient === "string") {
       purchaseLedgerBundle.priceState.activeClient = data.purchasePriceActiveClient;
     }
-    if (data.purchaseSheetLayout && typeof data.purchaseSheetLayout === "object") {
+    if (purchaseData && purchaseData.sheetLayout && typeof purchaseData.sheetLayout === "object") {
+      if (Array.isArray(purchaseData.sheetLayout.colWidths)) {
+        purchaseLedgerBundle.colWidths = purchaseData.sheetLayout.colWidths.slice(0, COL_COUNT);
+      }
+      if (Array.isArray(purchaseData.sheetLayout.rowHeights)) {
+        purchaseLedgerBundle.rowHeights = purchaseData.sheetLayout.rowHeights.slice();
+      }
+    } else if (data.purchaseSheetLayout && typeof data.purchaseSheetLayout === "object") {
       if (Array.isArray(data.purchaseSheetLayout.colWidths)) {
         purchaseLedgerBundle.colWidths = data.purchaseSheetLayout.colWidths.slice(0, COL_COUNT);
       }
@@ -1984,7 +2016,13 @@
         purchaseLedgerBundle.rowHeights = data.purchaseSheetLayout.rowHeights.slice();
       }
     }
-    if (data.purchaseManageState && typeof data.purchaseManageState === "object") {
+    if (purchaseData && purchaseData.manageState && typeof purchaseData.manageState === "object") {
+      purchaseLedgerBundle.manageState = {
+        startMonth: purchaseData.manageState.startMonth || "",
+        endMonth: purchaseData.manageState.endMonth || "",
+        client: purchaseData.manageState.client || "",
+      };
+    } else if (data.purchaseManageState && typeof data.purchaseManageState === "object") {
       purchaseLedgerBundle.manageState = {
         startMonth: data.purchaseManageState.startMonth || "",
         endMonth: data.purchaseManageState.endMonth || "",
@@ -1992,7 +2030,7 @@
       };
     }
 
-    switchLedgerModule(activeLedgerKind);
+    switchLedgerModule(activeLedgerKind, true);
     ST.visibleRowsDirty = true;
     initGridSizing();
 
