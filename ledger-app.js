@@ -108,6 +108,8 @@
   var closingState = {
     attendanceMonth: "",
     employeeRowsByMonth: {},
+    outsourceVendor: "leaders",
+    outsourceRowsByKey: {},
   };
   var activeLedgerKind = "sales";
   var salesLedgerBundle = null;
@@ -144,6 +146,12 @@
     "김애정 사원"
   ];
   var closingEmployeeMarkers = ["야근", "특근", "지각", "조퇴", "결근"];
+  var closingOutsourceVendors = [
+    { value: "gonggam", label: "공감인/우리인컴/엑스큐솔루션/인네트웍스" },
+    { value: "leaders", label: "리더스솔루션" },
+    { value: "ieum", label: "이음플러스" }
+  ];
+  var closingOutsourceMarkers = ["정상", "연장", "심야", "특근"];
   var closingAttendanceColumns = [
     { key: "employee", label: "이름", width: 118 },
     { key: "type", label: "구분", width: 76 }
@@ -155,6 +163,23 @@
       width: 48
     });
   });
+  var closingOutsourceColumns = [
+    { key: "employee", label: "이름", width: 118 },
+    { key: "type", label: "구분", width: 76 }
+  ];
+  closingAttendanceDayFields.forEach(function (field, index) {
+    closingOutsourceColumns.push({
+      key: field,
+      label: String(index + 1),
+      width: 52
+    });
+  });
+  closingOutsourceColumns.push(
+    { key: "weeklyAllowance", label: "주휴", width: 64 },
+    { key: "perfectAllowance", label: "만근", width: 64 },
+    { key: "retirementShare", label: "퇴직금", width: 72 },
+    { key: "agencyFee", label: "수수료", width: 72 }
+  );
   var workSheetColumns = [
     { key: "date", label: "일자", width: 88 },
     { key: "code", label: "코드", width: 104 },
@@ -183,6 +208,7 @@
   var clientSheetEngine = null;
   var priceSheetEngine = null;
   var closingAttendanceSheetEngine = null;
+  var closingOutsourceSheetEngine = null;
 
   var app = document.getElementById("app");
 
@@ -379,6 +405,50 @@
     });
   }
 
+  function emptyClosingOutsourceRow(name, type) {
+    var row = {
+      employee: name || "",
+      type: type || "",
+      weeklyAllowance: "",
+      perfectAllowance: "",
+      retirementShare: "",
+      agencyFee: "",
+    };
+    closingAttendanceDayFields.forEach(function (field) {
+      row[field] = "";
+    });
+    return row;
+  }
+
+  function buildClosingOutsourceTemplateRows() {
+    var rows = [];
+    for (var employeeIndex = 0; employeeIndex < 18; employeeIndex++) {
+      closingOutsourceMarkers.forEach(function (type) {
+        rows.push(emptyClosingOutsourceRow("", type));
+      });
+    }
+    return rows;
+  }
+
+  function normalizeClosingOutsourceRows(rows) {
+    var template = buildClosingOutsourceTemplateRows();
+    if (!Array.isArray(rows) || !rows.length) return template;
+    return template.map(function (baseRow, index) {
+      var source = rows[index] || {};
+      var next = Object.assign({}, baseRow);
+      next.employee = source.employee != null ? String(source.employee) : next.employee;
+      next.type = source.type != null ? String(source.type) : next.type;
+      closingAttendanceDayFields.forEach(function (field) {
+        next[field] = source[field] != null ? String(source[field]) : "";
+      });
+      next.weeklyAllowance = source.weeklyAllowance != null ? String(source.weeklyAllowance) : "";
+      next.perfectAllowance = source.perfectAllowance != null ? String(source.perfectAllowance) : "";
+      next.retirementShare = source.retirementShare != null ? String(source.retirementShare) : "";
+      next.agencyFee = source.agencyFee != null ? String(source.agencyFee) : "";
+      return next;
+    });
+  }
+
   function cloneClosingRowsMap(rowsByMonth) {
     var source = rowsByMonth && typeof rowsByMonth === "object" ? rowsByMonth : {};
     var cloned = {};
@@ -394,6 +464,12 @@
     }
     if (!closingState.employeeRowsByMonth || typeof closingState.employeeRowsByMonth !== "object") {
       closingState.employeeRowsByMonth = {};
+    }
+    if (!closingState.outsourceVendor) {
+      closingState.outsourceVendor = "leaders";
+    }
+    if (!closingState.outsourceRowsByKey || typeof closingState.outsourceRowsByKey !== "object") {
+      closingState.outsourceRowsByKey = {};
     }
     if (!closingState.employeeRowsByMonth[closingState.attendanceMonth]) {
       closingState.employeeRowsByMonth[closingState.attendanceMonth] = buildClosingEmployeeTemplateRows();
@@ -420,6 +496,30 @@
     ensureClosingAttendanceState();
     closingState.employeeRowsByMonth[monthLabel || closingState.attendanceMonth] =
       normalizeClosingEmployeeRows(rows);
+  }
+
+  function getClosingOutsourceKey(monthLabel, vendor) {
+    var month = monthLabel || ensureClosingAttendanceState().attendanceMonth;
+    var nextVendor = vendor || closingState.outsourceVendor || "leaders";
+    return nextVendor + "::" + month;
+  }
+
+  function getClosingOutsourceRows(monthLabel, vendor) {
+    ensureClosingAttendanceState();
+    var key = getClosingOutsourceKey(monthLabel, vendor);
+    if (!closingState.outsourceRowsByKey[key]) {
+      closingState.outsourceRowsByKey[key] = buildClosingOutsourceTemplateRows();
+    } else {
+      closingState.outsourceRowsByKey[key] =
+        normalizeClosingOutsourceRows(closingState.outsourceRowsByKey[key]);
+    }
+    return closingState.outsourceRowsByKey[key];
+  }
+
+  function setClosingOutsourceRows(monthLabel, vendor, rows) {
+    ensureClosingAttendanceState();
+    closingState.outsourceRowsByKey[getClosingOutsourceKey(monthLabel, vendor)] =
+      normalizeClosingOutsourceRows(rows);
   }
 
   function todayIsoString() {
@@ -2049,6 +2149,36 @@
     getClosingAttendanceSheetEngine().attach(container);
   }
 
+  function getClosingOutsourceSheetEngine() {
+    if (closingOutsourceSheetEngine) return closingOutsourceSheetEngine;
+    var createSheetEngine = window.createSheetEngine || createMiniSheetEngine;
+    closingOutsourceSheetEngine = createSheetEngine({
+      idPrefix: "closing-outsource-grid",
+      title: "아웃소싱 계산 시트",
+      subtitle: "업체별 월 시트를 먼저 잡아두고, 다음 단계에서 지문 원본 자동계산을 연결합니다.",
+      maxHeight: 520,
+      minRows: 72,
+      columns: closingOutsourceColumns,
+      emptyRow: function () { return emptyClosingOutsourceRow("", ""); },
+      getRows: function () {
+        return getClosingOutsourceRows(closingState.attendanceMonth, closingState.outsourceVendor);
+      },
+      setRows: function (rows) {
+        setClosingOutsourceRows(closingState.attendanceMonth, closingState.outsourceVendor, rows);
+      },
+      normalizeRows: function (rows) { return normalizeClosingOutsourceRows(rows); },
+      onRowsChange: function () {
+        scheduleLedgerDraftSave();
+      },
+    });
+    return closingOutsourceSheetEngine;
+  }
+
+  function attachClosingOutsourceGridWhenNeeded(container) {
+    if (!container) return;
+    getClosingOutsourceSheetEngine().attach(container);
+  }
+
   function ensureDraftId() {
     if (ledgerState.draftId) return ledgerState.draftId;
 
@@ -2111,6 +2241,17 @@
       closing: {
         attendanceMonth: closingState.attendanceMonth || defaultClosingMonthLabel(),
         employeeRowsByMonth: cloneClosingRowsMap(closingState.employeeRowsByMonth),
+        outsourceVendor: closingState.outsourceVendor || "leaders",
+        outsourceRowsByKey: (function () {
+          var source = closingState.outsourceRowsByKey && typeof closingState.outsourceRowsByKey === "object"
+            ? closingState.outsourceRowsByKey
+            : {};
+          var cloned = {};
+          Object.keys(source).forEach(function (key) {
+            cloned[key] = normalizeClosingOutsourceRows(source[key]);
+          });
+          return cloned;
+        })(),
       },
       updatedAt: new Date().toISOString(),
     };
@@ -2224,6 +2365,14 @@
         ? closingData.attendanceMonth
         : defaultClosingMonthLabel();
       closingState.employeeRowsByMonth = cloneClosingRowsMap(closingData.employeeRowsByMonth);
+      closingState.outsourceVendor = String(closingData.outsourceVendor || "leaders");
+      closingState.outsourceRowsByKey = {};
+      if (closingData.outsourceRowsByKey && typeof closingData.outsourceRowsByKey === "object") {
+        Object.keys(closingData.outsourceRowsByKey).forEach(function (key) {
+          closingState.outsourceRowsByKey[key] =
+            normalizeClosingOutsourceRows(closingData.outsourceRowsByKey[key]);
+        });
+      }
     }
     ensureClosingAttendanceState();
 
@@ -5842,6 +5991,13 @@
         ">" + escapeHtml(option.label) + "</option>"
       );
     }).join("");
+    var outsourceVendorOptions = closingOutsourceVendors.map(function (option) {
+      return (
+        '<option value="' + escapeHtml(option.value) + '"' +
+        (option.value === closingState.outsourceVendor ? " selected" : "") +
+        ">" + escapeHtml(option.label) + "</option>"
+      );
+    }).join("");
     return (
       '<div class="closing-page">' +
         '<div class="closing-grid">' +
@@ -5890,6 +6046,21 @@
             '</div>' +
           '</div>' +
           '<div id="closing-attendance-grid-host"></div>' +
+        '</div>' +
+        '<div class="closing-card closing-sheet-card">' +
+          '<div class="closing-sheet-toolbar">' +
+            '<div>' +
+              '<div class="closing-title">' + icon("building") + ' 아웃소싱 월 시트</div>' +
+              '<div class="closing-copy">업체별로 정상/연장/심야/특근 줄을 먼저 관리하고, 다음 단계에서 지문 원본 자동계산을 연결할 자리입니다.</div>' +
+            '</div>' +
+            '<div class="closing-inline-controls">' +
+              '<label class="closing-inline-label" for="closing-outsource-vendor">업체</label>' +
+              '<select id="closing-outsource-vendor" class="closing-inline-select">' +
+                outsourceVendorOptions +
+              '</select>' +
+            '</div>' +
+          '</div>' +
+          '<div id="closing-outsource-grid-host"></div>' +
         '</div>' +
       '</div>'
     );
@@ -6544,10 +6715,22 @@
             closingState.attendanceMonth = closingMonthSelect.value || defaultClosingMonthLabel();
             ensureClosingAttendanceState();
             if (closingAttendanceSheetEngine) closingAttendanceSheetEngine.refresh();
+            if (closingOutsourceSheetEngine) closingOutsourceSheetEngine.refresh();
             scheduleLedgerDraftSave();
           });
         }
         attachClosingAttendanceGridWhenNeeded(document.getElementById("closing-attendance-grid-host"));
+        var closingOutsourceVendorSelect = document.getElementById("closing-outsource-vendor");
+        if (closingOutsourceVendorSelect) {
+          closingOutsourceVendorSelect.value = closingState.outsourceVendor || "leaders";
+          closingOutsourceVendorSelect.addEventListener("change", function () {
+            closingState.outsourceVendor = closingOutsourceVendorSelect.value || "leaders";
+            ensureClosingAttendanceState();
+            if (closingOutsourceSheetEngine) closingOutsourceSheetEngine.refresh();
+            scheduleLedgerDraftSave();
+          });
+        }
+        attachClosingOutsourceGridWhenNeeded(document.getElementById("closing-outsource-grid-host"));
       }
       return;
     }
