@@ -734,107 +734,12 @@
       gap: 8px;
       flex-wrap: wrap;
     }
-    .shippingdoc {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-    .shippingdoc-grid,
-    .shippingdoc-bottom {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 12px;
-      align-items: start;
-    }
-    .shippingdoc-bottom {
-      grid-template-columns: 1.5fr 1fr;
-    }
-    .shippingdoc-card {
-      border-radius: 12px;
-      background: rgba(255, 255, 255, 0.96);
-      box-shadow: 0 1px 6px rgba(0, 0, 0, 0.06);
-      padding: 12px;
-    }
-    .shippingdoc-pills {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-bottom: 8px;
-    }
-    .shippingdoc-receiver {
-      display: grid;
-      gap: 6px;
-      font-size: 12px;
-      color: #5f5677;
-    }
-    .shippingdoc-table-wrap {
-      overflow: auto;
-      border: 1px solid #e9def5;
-      border-radius: 12px;
-      background: #fff;
-    }
-    .shippingdoc-table {
-      width: 100%;
-      border-collapse: collapse;
-      table-layout: fixed;
-      font-size: 12px;
-    }
-    .shippingdoc-table th,
-    .shippingdoc-table td {
-      border: 1px solid #efe5f8;
-      padding: 6px 8px;
-      vertical-align: middle;
-    }
-    .shippingdoc-table th {
-      background: linear-gradient(90deg, #fff8ea 0%, #f8f1ff 52%, #eef6ff 100%);
-      color: #6d6387;
-      font-weight: 700;
-      text-align: left;
-    }
-    .shippingdoc-table .right {
-      text-align: right;
-    }
-    .shippingdoc-table .center,
-    .shippingdoc-table td.center {
-      text-align: center;
-    }
-    .shippingdoc-table .muted {
-      color: #8b82a3;
-    }
-    .shipping-cell {
-      width: 100%;
-      min-width: 0;
-      height: 32px;
-      border: none;
-      background: transparent;
-      padding: 0;
-      border-radius: 0;
-      box-shadow: none;
-    }
-    .shippingdoc-steps {
-      margin: 0 0 12px;
-      padding-left: 18px;
-      color: #5f5677;
-      font-size: 13px;
-    }
-    .shippingdoc-steps li + li {
-      margin-top: 6px;
-    }
-    .shippingdoc-notes {
-      min-height: 120px;
-      padding: 10px 12px;
-      resize: vertical;
-    }
     @media (max-width: 920px) {
       .price-layout {
         grid-template-columns: 1fr;
       }
       .price-client-list {
         max-height: 220px;
-      }
-      .shippingdoc-grid,
-      .shippingdoc-bottom {
-        grid-template-columns: 1fr;
       }
     }
 

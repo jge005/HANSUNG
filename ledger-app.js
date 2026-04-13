@@ -23,7 +23,6 @@
     { key: "status", label: "매출현황", icon: "clipboard" },
     { key: "work", label: "거래작업", icon: "scroll" },
     { key: "statement", label: "거래명세서", icon: "folder" },
-    { key: "shipping", label: "출하작업", icon: "folder" },
     { key: "price", label: "매출단가", icon: "tags" },
     { key: "client", label: "업체리스트", icon: "building" },
   ];
@@ -87,22 +86,6 @@
     rows: [],
     activeClient: "",
     sidebarScrollTop: 0,
-  };
-  var shippingState = {
-    profile: "vina",
-    transport: "AIR",
-    shipDate: "",
-    invoiceNo: "",
-    packingNo: "",
-    remarkCode: "",
-    saveFolder: "",
-    clientName: "",
-    matchedClientName: "",
-    items: [],
-    boxes: [],
-    notes: "",
-    fillStatus: "",
-    fillOutputPath: "",
   };
   var workGridFields = ["date", "code", "name", "qty", "price", "supply", "tax", "note"];
   var clientGridFields = ["supplierMode", "company", "businessNo", "ceoName", "address", "businessType", "businessItem"];
@@ -280,121 +263,12 @@
     };
   }
 
-  function emptyShippingBox() {
-    return {
-      boxNo: "",
-      itemCode: "",
-      itemName: "",
-      qty: "",
-      shippingMark: "",
-      note: "",
-    };
-  }
-
   function todayIsoString() {
     var now = new Date();
     var year = now.getFullYear();
     var month = String(now.getMonth() + 1).padStart(2, "0");
     var day = String(now.getDate()).padStart(2, "0");
     return year + "-" + month + "-" + day;
-  }
-
-  function normalizeShippingProfile(value, fallbackClientName) {
-    var text = String(value || "").trim().toLowerCase();
-    if (text === "vina" || text === "대영vina" || text === "대영비나") return "vina";
-    if (text === "dgt" || text === "디지티") return "dgt";
-    var clientText = normalizeCompanyMatchText(fallbackClientName || "");
-    if (clientText.indexOf("VINA") >= 0) return "vina";
-    if (clientText.indexOf("DGT") >= 0 || clientText.indexOf("디지티") >= 0) return "dgt";
-    return "vina";
-  }
-
-  function normalizeShippingTransport(value) {
-    var text = String(value || "").trim().toUpperCase();
-    return text === "VSL" ? "VSL" : "AIR";
-  }
-
-  function normalizeShippingItems(items) {
-    if (!Array.isArray(items)) return [];
-    return items.map(function (item) {
-      return {
-        date: item && item.date != null ? String(item.date) : "",
-        client: item && item.client != null ? String(item.client) : "",
-        code: item && item.code != null ? String(item.code) : "",
-        name: item && item.name != null ? String(item.name) : "",
-        qty: item && item.qty != null ? String(item.qty) : "",
-        price: item && item.price != null ? String(item.price) : "",
-        amount: item && item.amount != null ? String(item.amount) : "",
-      };
-    });
-  }
-
-  function normalizeShippingBoxes(boxes, items) {
-    var normalized = Array.isArray(boxes)
-      ? boxes.map(function (box) { return Object.assign(emptyShippingBox(), box || {}); })
-      : [];
-    var target = Math.max(4, normalized.length, Array.isArray(items) ? items.length : 0);
-    for (var i = 0; i < target; i++) {
-      var sourceItem = items && items[i] ? items[i] : null;
-      normalized[i] = Object.assign(emptyShippingBox(), normalized[i] || {});
-      if (!normalized[i].boxNo) normalized[i].boxNo = i < target - 1 ? String(i + 1) : "";
-      if (sourceItem) {
-        if (!normalized[i].itemCode) normalized[i].itemCode = sourceItem.code || "";
-        if (!normalized[i].itemName) normalized[i].itemName = sourceItem.name || "";
-        if (!normalized[i].qty) normalized[i].qty = sourceItem.qty || "";
-      }
-    }
-    while (normalized.length < target) normalized.push(emptyShippingBox());
-    return normalized;
-  }
-
-  function ensureShippingStateShape() {
-    if (!shippingState || typeof shippingState !== "object") {
-      shippingState = {};
-    }
-    shippingState.profile = normalizeShippingProfile(shippingState.profile, shippingState.clientName);
-    shippingState.transport = normalizeShippingTransport(shippingState.transport);
-    shippingState.shipDate = shippingState.shipDate || todayIsoString();
-    shippingState.invoiceNo = shippingState.invoiceNo || "";
-    shippingState.packingNo = shippingState.packingNo || "";
-    shippingState.remarkCode = shippingState.remarkCode || "";
-    shippingState.saveFolder = shippingState.saveFolder || "";
-    shippingState.clientName = shippingState.clientName || "";
-    shippingState.matchedClientName = shippingState.matchedClientName || "";
-    shippingState.notes = shippingState.notes || "";
-    shippingState.fillStatus = shippingState.fillStatus || "";
-    shippingState.fillOutputPath = shippingState.fillOutputPath || "";
-    shippingState.items = normalizeShippingItems(shippingState.items);
-    shippingState.boxes = normalizeShippingBoxes(shippingState.boxes, shippingState.items);
-    return shippingState;
-  }
-
-  function buildShippingTemplates(profile, transport) {
-    var normalizedProfile = normalizeShippingProfile(profile);
-    var normalizedTransport = normalizeShippingTransport(transport);
-    if (normalizedProfile === "dgt") {
-      return [
-        "DGT 오퍼시트.xlsx -> PDF 저장",
-        "DGT 라벨양식.xls -> 박스 수만큼 생성",
-        "DGT 패킹 양식.xlsx -> 박스별 구성 입력",
-      ];
-    }
-    var list = [
-      "출하정보.xlsx -> 출하 시트 입력 / 무게 계산",
-      normalizedTransport === "VSL"
-        ? "(HANSUNG) Invoice+Packing ...(VSL)...xlsx -> INVOICE / PACKING LIST"
-        : "(HANSUNG) Invoice+Packing ...(AIR)...xlsx -> INVOICE / PACKING LIST",
-      "쉬핑마크 시트 작성",
-    ];
-    if (normalizedTransport === "VSL") {
-      list.push("DETAIL LIST / DETAIL PACKING LIST / CNTR 날짜 변경 후 엑셀 저장");
-    }
-    return list;
-  }
-
-  function getShippingMatchedClientRow() {
-    ensureShippingStateShape();
-    return findClientRowByCompany(shippingState.clientName || shippingState.matchedClientName || "");
   }
 
   function emptySupplierInfo() {
@@ -1885,10 +1759,6 @@
       statusRows: normalizeSalesRows(ST.rows, storedRowCount).slice(0, storedRowCount),
       workItems: cloneItems(trimmedWorkItems),
       workInfo: cloneWorkInfo(workState.info),
-      shippingJob: Object.assign({}, ensureShippingStateShape(), {
-        items: normalizeShippingItems(shippingState.items),
-        boxes: normalizeShippingBoxes(shippingState.boxes, shippingState.items),
-      }),
       clientRows: cloneClientRows(trimmedClientRows),
       priceRows: trimmedPriceRows.map(function (row) { return Object.assign({}, row); }),
       priceActiveClient: priceState.activeClient || "",
@@ -1913,11 +1783,6 @@
       workState.items = trimTrailingRows(data.workItems, workGridFields, 12, function () { return {}; });
     } else if (Array.isArray(data.items)) {
       workState.items = trimTrailingRows(data.items, workGridFields, 12, function () { return {}; });
-    }
-
-    if (data.shippingJob && typeof data.shippingJob === "object") {
-      shippingState = Object.assign({}, ensureShippingStateShape(), data.shippingJob || {});
-      ensureShippingStateShape();
     }
 
     if (data.workInfo && typeof data.workInfo === "object") {
@@ -3437,12 +3302,15 @@
     focusInput();
   }
 
-  function syncInputOverlay() {
+  function syncInputOverlay(options) {
     if (!ST.tableBuilt || !ST.inputEl || !ST.host) return;
+    options = options || {};
     var r = ST.selectedCell.row;
     var c = ST.selectedCell.col;
-    ensureRowVisible(r);
-    renderVirtualRows();
+    if (options.ensureVisible) {
+      ensureRowVisible(r);
+      renderVirtualRows();
+    }
     var td = ST.host.querySelector('.st-table td[data-r="' + r + '"][data-c="' + c + '"]');
     if (!td) return;
     var inner = td.querySelector(".st-cell-inner");
@@ -3576,7 +3444,7 @@
     if (firstInner) firstInner.appendChild(ST.inputEl);
     ST.inputEl.value = getRawValue(ST.selectedCell.row, ST.selectedCell.col);
     ST.autocompleteEl = host.querySelector("#sales-grid-datalist");
-    syncInputOverlay();
+    syncInputOverlay({ ensureVisible: true });
 
     ST.scrollEl.addEventListener("keydown", onTableKeyDown);
     ST.scrollEl.addEventListener("copy", onCopy);
@@ -3584,12 +3452,14 @@
     ST.scrollEl.addEventListener("dragstart", function (e) {
       e.preventDefault();
     });
-    ST.scrollEl.addEventListener("wheel", function (e) {
-      if (!ST.scrollEl) return;
-      e.preventDefault();
-      ST.scrollEl.scrollTop += e.deltaY;
-      if (e.deltaX) ST.scrollEl.scrollLeft += e.deltaX;
-    }, { passive: false });
+    ST.scrollEl.addEventListener(
+      "wheel",
+      function (e) {
+        if (!ST.scrollEl) return;
+        e.stopPropagation();
+      },
+      { passive: true }
+    );
 
     tbody.addEventListener("mousedown", onTbodyMouseDown);
     tbody.addEventListener("dblclick", onTbodyDblClick);
@@ -4619,7 +4489,7 @@
       snapshotEditOrigin();
       ST.editMode = true;
     }
-    syncInputOverlay();
+    syncInputOverlay({ ensureVisible: true });
     updateSalesAutocomplete();
     if (!hasSalesAutocompleteOptions()) {
       focusInput();
@@ -5042,258 +4912,6 @@
     listEl.scrollTop = priceState.sidebarScrollTop || 0;
   }
 
-  function renderShippingItemsRows(items) {
-    if (!items.length) {
-      return '<tr><td colspan="6" class="center muted">매출현황에서 품목을 선택해 출하작업으로 보내면 여기에 채워집니다.</td></tr>';
-    }
-    return items.map(function (item, index) {
-      return (
-        "<tr>" +
-          "<td>" + escapeHtml(item.date || "") + "</td>" +
-          "<td>" + escapeHtml(item.code || "") + "</td>" +
-          "<td>" + escapeHtml(item.name || "") + "</td>" +
-          "<td class=\"right\">" + escapeHtml(formatDisplayNumber(item.qty || "")) + "</td>" +
-          "<td class=\"right\">" + escapeHtml(formatDisplayNumber(item.price || "")) + "</td>" +
-          "<td class=\"right\">" + escapeHtml(formatDisplayNumber(item.amount || "")) + "</td>" +
-        "</tr>"
-      );
-    }).join("");
-  }
-
-  function renderShippingBoxesRows(boxes) {
-    return boxes.map(function (box, index) {
-      return (
-        "<tr>" +
-          '<td><input class="workdoc-input shipping-cell" data-ship-box-row="' + index + '" data-ship-box-field="boxNo" value="' + escapeAttr(box.boxNo || "") + '" /></td>' +
-          '<td><input class="workdoc-input shipping-cell" data-ship-box-row="' + index + '" data-ship-box-field="itemCode" value="' + escapeAttr(box.itemCode || "") + '" /></td>' +
-          '<td><input class="workdoc-input shipping-cell" data-ship-box-row="' + index + '" data-ship-box-field="itemName" value="' + escapeAttr(box.itemName || "") + '" /></td>' +
-          '<td><input class="workdoc-input shipping-cell" data-ship-box-row="' + index + '" data-ship-box-field="qty" value="' + escapeAttr(box.qty || "") + '" /></td>' +
-          '<td><input class="workdoc-input shipping-cell" data-ship-box-row="' + index + '" data-ship-box-field="shippingMark" value="' + escapeAttr(box.shippingMark || "") + '" /></td>' +
-          '<td><input class="workdoc-input shipping-cell" data-ship-box-row="' + index + '" data-ship-box-field="note" value="' + escapeAttr(box.note || "") + '" /></td>' +
-        "</tr>"
-      );
-    }).join("");
-  }
-
-  function buildVinaPayloadFromShipping() {
-    var shipping = ensureShippingStateShape();
-    var itemRows = normalizeShippingItems(shipping.items).filter(function (item) {
-      return String(item.code || "").trim() !== "";
-    }).map(function (item) {
-      return {
-        code: String(item.code || "").trim(),
-        name: String(item.name || "").trim(),
-        qty: parseCalcNumber(item.qty) || 0,
-        price: parseCalcNumber(item.price) || 0,
-      };
-    });
-
-    var boxGroups = {};
-    normalizeShippingBoxes(shipping.boxes, shipping.items).forEach(function (row) {
-      var boxNo = String(row.boxNo || "").trim();
-      var itemCode = String(row.itemCode || "").trim();
-      if (!boxNo || !itemCode) return;
-      if (!boxGroups[boxNo]) {
-        boxGroups[boxNo] = { boxNo: boxNo, items: [] };
-      }
-      boxGroups[boxNo].items.push({
-        code: itemCode,
-        qty: parseCalcNumber(row.qty) || 0,
-      });
-    });
-
-    var boxes = Object.keys(boxGroups).sort(function (a, b) {
-      return Number(a) - Number(b);
-    }).map(function (key) {
-      return boxGroups[key];
-    });
-
-    if (!boxes.length) {
-      boxes = [{
-        boxNo: 1,
-        items: itemRows.map(function (item) {
-          return { code: item.code, qty: item.qty };
-        }),
-      }];
-    }
-
-    var payload = {
-      shipDate: shipping.shipDate || todayIsoString(),
-      transport: normalizeShippingTransport(shipping.transport),
-      remarkCode: String(shipping.remarkCode || ""),
-      clientName: String(shipping.clientName || ""),
-      items: itemRows,
-      boxes: boxes,
-    };
-
-    if (shipping.saveFolder) {
-      var token = String(payload.shipDate || todayIsoString()).replace(/-/g, "").slice(2);
-      payload.outputPath = String(shipping.saveFolder).replace(/[\\\/]+$/, "") +
-        "\\" + "[HANSUNG] " + token + " VINA (" + payload.transport + ") filled detail.xlsx";
-    }
-
-    return payload;
-  }
-
-  function setShippingFillStatus(message, outputPath) {
-    ensureShippingStateShape();
-    shippingState.fillStatus = message || "";
-    shippingState.fillOutputPath = outputPath || "";
-    var statusEl = document.getElementById("shipping-fill-status");
-    if (statusEl) {
-      statusEl.textContent = shippingState.fillStatus || "";
-    }
-    var pathEl = document.getElementById("shipping-fill-path");
-    if (pathEl) {
-      pathEl.textContent = shippingState.fillOutputPath || "";
-    }
-  }
-
-  function checkVinaBridgeHealth() {
-    return fetch("http://127.0.0.1:18765/health", {
-      method: "GET",
-    }).then(function (res) {
-      if (!res.ok) throw new Error("브리지 응답이 없습니다.");
-      return res.json();
-    });
-  }
-
-  function runVinaFillFromShipping() {
-    var payload = buildVinaPayloadFromShipping();
-    if (!payload.items.length) {
-      setShippingFillStatus("보낼 품목이 없습니다. 매출현황에서 먼저 선택해 주세요.", "");
-      return Promise.resolve(false);
-    }
-    setShippingFillStatus("VINA 엑셀 자동 채우는 중...", "");
-    return fetch("http://127.0.0.1:18765/vina/fill", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    })
-      .then(function (res) {
-        return res.json().then(function (data) {
-          if (!res.ok || !data.ok) {
-            throw new Error((data && data.error) || "브리지 실행 실패");
-          }
-          setShippingFillStatus("완료: 엑셀 채워넣기 성공", data.outputPath || "");
-          return true;
-        });
-      })
-      .catch(function (err) {
-        setShippingFillStatus("실패: " + err.message + " / start-vina-bridge.cmd를 먼저 실행해 주세요.", "");
-        return false;
-      });
-  }
-
-  function renderShippingTab() {
-    var shipping = ensureShippingStateShape();
-    var matchedClient = getShippingMatchedClientRow();
-    var templateSteps = buildShippingTemplates(shipping.profile, shipping.transport);
-    var totalQty = shipping.items.reduce(function (acc, item) {
-      return acc + (parseCalcNumber(item.qty) || 0);
-    }, 0);
-    var totalAmount = shipping.items.reduce(function (acc, item) {
-      return acc + (parseCalcNumber(item.amount) || 0);
-    }, 0);
-    return (
-      '<div class="shippingdoc">' +
-        '<div class="shippingdoc-grid">' +
-          '<div class="shippingdoc-card">' +
-            '<div class="clientdoc-head">' +
-              '<div class="clientdoc-title">' + icon("folder") + ' 출하 헤더</div>' +
-              '<div class="sub">매출현황 선택행 기준</div>' +
-            '</div>' +
-            '<div class="workdoc-form">' +
-              '<div class="workdoc-label">작업유형</div>' +
-              '<select class="workdoc-input workdoc-select" id="shipping-profile">' +
-                '<option value="vina"' + (shipping.profile === "vina" ? " selected" : "") + '>대영VINA</option>' +
-                '<option value="dgt"' + (shipping.profile === "dgt" ? " selected" : "") + '>디지티</option>' +
-              '</select>' +
-              '<div class="workdoc-label">거래처</div><input class="workdoc-input" id="shipping-client-name" value="' + escapeAttr(shipping.clientName || "") + '" />' +
-              '<div class="workdoc-label">출하일</div><input type="date" class="workdoc-input" id="shipping-ship-date" value="' + escapeAttr(shipping.shipDate || "") + '" />' +
-              '<div class="workdoc-label">운송방식</div>' +
-              '<select class="workdoc-input workdoc-select" id="shipping-transport">' +
-                '<option value="AIR"' + (shipping.transport === "AIR" ? " selected" : "") + '>AIR</option>' +
-                '<option value="VSL"' + (shipping.transport === "VSL" ? " selected" : "") + '>VSL</option>' +
-              '</select>' +
-            '</div>' +
-          '</div>' +
-          '<div class="shippingdoc-card">' +
-            '<div class="clientdoc-head">' +
-              '<div class="clientdoc-title">' + icon("sheet") + ' 문서 헤더</div>' +
-              '<div class="sub">자동저장용 메모</div>' +
-            '</div>' +
-            '<div class="workdoc-form">' +
-              '<div class="workdoc-label">Invoice No</div><input class="workdoc-input" id="shipping-invoice-no" value="' + escapeAttr(shipping.invoiceNo || "") + '" />' +
-              '<div class="workdoc-label">Packing No</div><input class="workdoc-input" id="shipping-packing-no" value="' + escapeAttr(shipping.packingNo || "") + '" />' +
-              '<div class="workdoc-label">Remark/Code</div><input class="workdoc-input" id="shipping-remark-code" value="' + escapeAttr(shipping.remarkCode || "") + '" ' + (shipping.transport === "VSL" ? "" : 'placeholder="VSL일 때 사용"') + ' />' +
-              '<div class="workdoc-label">저장폴더</div><input class="workdoc-input" id="shipping-save-folder" placeholder="예: C:\\문서\\VINA\\2026-04-10" value="' + escapeAttr(shipping.saveFolder || "") + '" />' +
-            '</div>' +
-          '</div>' +
-          '<div class="shippingdoc-card">' +
-            '<div class="clientdoc-head">' +
-              '<div class="clientdoc-title">' + icon("building") + ' 거래처 연결</div>' +
-            '</div>' +
-            '<div class="shippingdoc-pills">' +
-              '<span class="st-status-pill">매출현황 <strong>' + escapeHtml(shipping.clientName || "-") + '</strong></span>' +
-              '<span class="st-status-pill">업체리스트 <strong>' + escapeHtml(matchedClient ? matchedClient.company : (shipping.matchedClientName || "-")) + '</strong></span>' +
-              '<span class="st-status-pill">건수 <strong>' + escapeHtml(String(shipping.items.length)) + '</strong></span>' +
-            '</div>' +
-            '<div class="shippingdoc-receiver">' +
-              '<div><strong>대표자</strong> ' + escapeHtml(matchedClient ? matchedClient.ceoName : "") + '</div>' +
-              '<div><strong>사업자등록번호</strong> ' + escapeHtml(matchedClient ? matchedClient.businessNo : "") + '</div>' +
-              '<div><strong>주소</strong> ' + escapeHtml(matchedClient ? matchedClient.address : "") + '</div>' +
-            '</div>' +
-          '</div>' +
-        '</div>' +
-        '<div class="shippingdoc-card">' +
-          '<div class="clientdoc-head">' +
-            '<div class="clientdoc-title">' + icon("scroll") + ' VINA 품목 원본</div>' +
-            '<div class="shippingdoc-pills">' +
-              '<span class="st-status-pill">수량합계 <strong>' + escapeHtml(formatDisplayNumber(totalQty)) + '</strong></span>' +
-              '<span class="st-status-pill">금액합계 <strong>' + escapeHtml(formatDisplayNumber(totalAmount)) + '</strong></span>' +
-            '</div>' +
-          '</div>' +
-          '<div class="shippingdoc-table-wrap">' +
-            '<table class="shippingdoc-table"><thead><tr><th>일자</th><th>코드</th><th>품명</th><th>수량</th><th>단가</th><th>금액</th></tr></thead><tbody>' +
-            renderShippingItemsRows(shipping.items) +
-            '</tbody></table>' +
-          '</div>' +
-        '</div>' +
-        '<div class="shippingdoc-bottom">' +
-          '<div class="shippingdoc-card">' +
-            '<div class="clientdoc-head">' +
-              '<div class="clientdoc-title">' + icon("clipboard") + ' 박스 배분표</div>' +
-              '<button type="button" class="soft-btn" id="btn-shipping-add-box">박스행 추가</button>' +
-            '</div>' +
-            '<div class="shippingdoc-table-wrap">' +
-              '<table class="shippingdoc-table"><thead><tr><th>BOX</th><th>코드</th><th>품명</th><th>수량</th><th>쉬핑마크</th><th>비고</th></tr></thead><tbody>' +
-              renderShippingBoxesRows(shipping.boxes) +
-              '</tbody></table>' +
-            '</div>' +
-          '</div>' +
-          '<div class="shippingdoc-card">' +
-            '<div class="clientdoc-head">' +
-              '<div class="clientdoc-title">' + icon("tags") + ' 생성 대상 파일</div>' +
-            '</div>' +
-            '<ol class="shippingdoc-steps">' +
-              templateSteps.map(function (step) { return '<li>' + escapeHtml(step) + '</li>'; }).join("") +
-            '</ol>' +
-            '<div class="price-main-actions" style="margin-top:12px">' +
-              '<button type="button" class="soft-btn" id="btn-shipping-bridge-check">브리지 확인</button>' +
-              '<button type="button" class="soft-btn" id="btn-shipping-fill-vina">VINA 엑셀 채우기</button>' +
-            '</div>' +
-            '<div class="sub" id="shipping-fill-status" style="margin-top:10px; min-height:20px">' + escapeHtml(shipping.fillStatus || "") + '</div>' +
-            '<div class="sub" id="shipping-fill-path" style="word-break:break-all">' + escapeHtml(shipping.fillOutputPath || "") + '</div>' +
-            '<textarea class="workdoc-input shippingdoc-notes" id="shipping-notes" placeholder="출하 메모 / 사람이 마지막으로 확인할 포인트">' + escapeHtml(shipping.notes || "") + '</textarea>' +
-          '</div>' +
-        '</div>' +
-      '</div>'
-    );
-  }
-
   function sendSelectedStatusRowsToWork() {
     // 1) 매출현황(ST)에서 선택된 셀들 -> row index 추출
     var keys = ST.selectedKeys || [];
@@ -5368,57 +4986,6 @@
 
     render();
   }
-
-  function sendSelectedStatusRowsToShipping() {
-    var keys = ST.selectedKeys || [];
-    if (!keys.length) return;
-
-    var rowSet = new Set();
-    keys.forEach(function (key) {
-      var p = String(key).split(":");
-      if (p.length >= 2) rowSet.add(Number(p[0]));
-    });
-
-    var rows = Array.from(rowSet).sort(function (a, b) { return a - b; });
-    if (!rows.length) return;
-
-    var shippingItems = rows.map(function (r) {
-      var row = ST.rows[r] || emptyRow();
-      return {
-        date: row.date || "",
-        client: row.client || "",
-        code: row.code || "",
-        name: row.name || "",
-        qty: row.qty || "",
-        price: row.price || "",
-        amount: row.amount || "",
-      };
-    });
-
-    var firstClientName = "";
-    for (var i = 0; i < shippingItems.length; i++) {
-      if (shippingItems[i].client && String(shippingItems[i].client).trim() !== "") {
-        firstClientName = String(shippingItems[i].client).trim();
-        break;
-      }
-    }
-
-    var matchedClient = findClientRowByCompany(firstClientName);
-    shippingState.clientName = firstClientName;
-    shippingState.matchedClientName = matchedClient ? matchedClient.company : "";
-    shippingState.profile = normalizeShippingProfile(shippingState.profile, firstClientName);
-    shippingState.transport = normalizeShippingTransport(shippingState.transport);
-    shippingState.shipDate = shippingState.shipDate || todayIsoString();
-    shippingState.items = normalizeShippingItems(shippingItems);
-    shippingState.boxes = normalizeShippingBoxes([], shippingState.items);
-    ensureShippingStateShape();
-
-    state.subTab = "shipping";
-    ensureDraftId();
-    scheduleLedgerDraftSave();
-    render();
-  }
-
   function ensureWorkLoadedFromFirebase() {
     return ensureLedgerLoadedFromFirebase().then(function () {
       workState.loadedFromFirebase = true;
@@ -5561,10 +5128,6 @@
           '<button type="button" class="soft-btn" id="btn-sort-asc">오름차순</button>' +
           '<button type="button" class="soft-btn" id="btn-sort-desc">내림차순</button>' +
           '<button type="button" class="soft-btn" id="btn-sort-reset">입력순</button>' +
-          '<button type="button" class="soft-btn" id="btn-send-to-shipping">' +
-          icon("folder") +
-          "출하작업으로 보내기" +
-          "</button>" +
           '<button type="button" class="soft-btn" id="btn-send-to-work" style="margin-left:auto">' +
           icon("arrowRight") +
           "거래작업으로 보내기" +
@@ -5575,8 +5138,6 @@
         body = renderWorkTab();
       } else if (state.subTab === "statement") {
         body = renderStatementTab();
-      } else if (state.subTab === "shipping") {
-        body = renderShippingTab();
       } else if (state.subTab === "price") {
         body = renderPriceTab();
       } else if (state.subTab === "client") {
@@ -5671,12 +5232,6 @@
             }
           });
         }
-        var sendShippingBtn = document.getElementById("btn-send-to-shipping");
-        if (sendShippingBtn) {
-          sendShippingBtn.addEventListener("click", function () {
-            sendSelectedStatusRowsToShipping();
-          });
-        }
         var sendBtn = document.getElementById("btn-send-to-work");
         if (sendBtn) {
           sendBtn.addEventListener("click", function () {
@@ -5749,94 +5304,7 @@
           printBtn.addEventListener("click", function () {
             window.print();
           });
-        }
-      } else if (state.subTab === "shipping") {
-        var wasShippingLoaded = ledgerState.loadedFromFirebase;
-        ensureLedgerLoadedFromFirebase().then(function () {
-          if (!wasShippingLoaded && state.subTab === "shipping") render();
-        });
-        ensureShippingStateShape();
-        var shippingProfile = document.getElementById("shipping-profile");
-        var shippingTransport = document.getElementById("shipping-transport");
-        var shippingShipDate = document.getElementById("shipping-ship-date");
-        var shippingClientName = document.getElementById("shipping-client-name");
-        var shippingInvoiceNo = document.getElementById("shipping-invoice-no");
-        var shippingPackingNo = document.getElementById("shipping-packing-no");
-        var shippingRemarkCode = document.getElementById("shipping-remark-code");
-        var shippingSaveFolder = document.getElementById("shipping-save-folder");
-        var shippingNotes = document.getElementById("shipping-notes");
-        var shippingBridgeCheckBtn = document.getElementById("btn-shipping-bridge-check");
-        var shippingFillVinaBtn = document.getElementById("btn-shipping-fill-vina");
-
-        function bindShippingValue(el, setter, rerender) {
-          if (!el) return;
-          el.addEventListener("input", function () {
-            setter(el.value);
-            scheduleLedgerDraftSave();
-          });
-          el.addEventListener("change", function () {
-            setter(el.value);
-            scheduleLedgerDraftSave();
-            if (rerender) render();
-          });
-        }
-
-        bindShippingValue(shippingProfile, function (value) {
-          shippingState.profile = normalizeShippingProfile(value, shippingState.clientName);
-        }, true);
-        bindShippingValue(shippingTransport, function (value) {
-          shippingState.transport = normalizeShippingTransport(value);
-        }, true);
-        bindShippingValue(shippingShipDate, function (value) { shippingState.shipDate = value; });
-        bindShippingValue(shippingClientName, function (value) {
-          shippingState.clientName = String(value || "").trim();
-          var matched = findClientRowByCompany(shippingState.clientName);
-          shippingState.matchedClientName = matched ? matched.company : "";
-        }, true);
-        bindShippingValue(shippingInvoiceNo, function (value) { shippingState.invoiceNo = value; });
-        bindShippingValue(shippingPackingNo, function (value) { shippingState.packingNo = value; });
-        bindShippingValue(shippingRemarkCode, function (value) { shippingState.remarkCode = value; });
-        bindShippingValue(shippingSaveFolder, function (value) { shippingState.saveFolder = value; });
-        bindShippingValue(shippingNotes, function (value) { shippingState.notes = value; });
-
-        if (shippingBridgeCheckBtn) {
-          shippingBridgeCheckBtn.addEventListener("click", function () {
-            setShippingFillStatus("브리지 확인 중...", "");
-            checkVinaBridgeHealth()
-              .then(function () {
-                setShippingFillStatus("브리지 연결됨", "");
-              })
-              .catch(function (err) {
-                setShippingFillStatus("브리지 연결 실패: start-vina-bridge.cmd를 먼저 실행해 주세요.", "");
-              });
-          });
-        }
-        if (shippingFillVinaBtn) {
-          shippingFillVinaBtn.addEventListener("click", function () {
-            runVinaFillFromShipping();
-          });
-        }
-
-        var addBoxBtn = document.getElementById("btn-shipping-add-box");
-        if (addBoxBtn) {
-          addBoxBtn.addEventListener("click", function () {
-            shippingState.boxes = normalizeShippingBoxes((shippingState.boxes || []).concat([emptyShippingBox()]), shippingState.items);
-            scheduleLedgerDraftSave();
-            render();
-          });
-        }
-        app.querySelectorAll("[data-ship-box-row]").forEach(function (inp) {
-          inp.addEventListener("input", function () {
-            var rowIndex = Number(inp.getAttribute("data-ship-box-row"));
-            var field = inp.getAttribute("data-ship-box-field");
-            if (isNaN(rowIndex) || !field) return;
-            ensureShippingStateShape();
-            if (!shippingState.boxes[rowIndex]) shippingState.boxes[rowIndex] = emptyShippingBox();
-            shippingState.boxes[rowIndex][field] = inp.value;
-            scheduleLedgerDraftSave();
-          });
-        });
-      } else if (state.subTab === "price") {
+        }      } else if (state.subTab === "price") {
         var wasPriceLoaded = ledgerState.loadedFromFirebase;
         ensureLedgerLoadedFromFirebase().then(function () {
           if (!wasPriceLoaded && state.subTab === "price") render();
@@ -5965,3 +5433,4 @@
   loadLocalLedgerBackup();
   render();
 })();
+
