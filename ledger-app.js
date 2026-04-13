@@ -5459,10 +5459,7 @@
       " 이전</button>" +
       '<button type="button" class="soft-btn" id="btn-out">로그아웃</button></div>';
 
-    var shouldCompactApp =
-      state.entered &&
-      !(state.mainTab === "sales" && state.subTab === "statement");
-    app.className = shouldCompactApp ? "app-compact" : "";
+    app.className = "";
 
     if (!state.mainTab) {
       app.innerHTML =
