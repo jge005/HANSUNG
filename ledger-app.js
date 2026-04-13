@@ -26,6 +26,12 @@
     { key: "price", label: "매출단가", icon: "tags" },
     { key: "client", label: "업체리스트", icon: "building" },
   ];
+  var purchaseTabs = [
+    { key: "manage", label: "매입관리", icon: "sheet" },
+    { key: "status", label: "매입현황", icon: "clipboard" },
+    { key: "price", label: "매입단가", icon: "tags" },
+    { key: "client", label: "업체리스트", icon: "building" },
+  ];
 
   var icons = {
     lock: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
@@ -92,6 +98,9 @@
     endMonth: "",
     client: "",
   };
+  var activeLedgerKind = "sales";
+  var salesLedgerBundle = null;
+  var purchaseLedgerBundle = null;
   var appToastTimer = null;
   var workGridFields = ["date", "code", "name", "qty", "price", "supply", "tax", "note"];
   var clientGridFields = ["supplierMode", "company", "businessNo", "ceoName", "address", "businessType", "businessItem"];
@@ -159,6 +168,7 @@
     autocompleteEl: null,
     autocompleteItems: [],
     autocompleteActiveIndex: -1,
+    autocompleteForcedOpen: false,
     cellMap: {},
     rowHeadEls: [],
     colHeadEls: [],
@@ -635,6 +645,82 @@
       normalized.push({ code: "", price: "", name: "" });
     }
     return normalized;
+  }
+
+  function createLedgerBundle() {
+    return {
+      rows: normalizeSalesRows([], MIN_ROW_COUNT),
+      clientState: {
+        rows: normalizeClientGridRows([], 20),
+      },
+      priceState: {
+        rows: normalizePriceGridRows([], 40),
+        activeClient: "",
+        sidebarScrollTop: 0,
+      },
+      manageState: {
+        startMonth: "",
+        endMonth: "",
+        client: "",
+      },
+      filter: {
+        colKey: "all",
+        keyword: "",
+        clientType: "all",
+      },
+      colWidths: salesColumns.map(function (col) {
+        return col.width || 100;
+      }),
+      rowHeights: [],
+    };
+  }
+
+  function ensureLedgerBundles() {
+    if (!salesLedgerBundle) {
+      salesLedgerBundle = {
+        rows: ST.rows,
+        clientState: clientState,
+        priceState: priceState,
+        manageState: manageState,
+        filter: ST.filter,
+        colWidths: ST.colWidths,
+        rowHeights: ST.rowHeights,
+      };
+    }
+    if (!purchaseLedgerBundle) {
+      purchaseLedgerBundle = createLedgerBundle();
+    }
+  }
+
+  function getLedgerBundle(kind) {
+    ensureLedgerBundles();
+    return kind === "purchase" ? purchaseLedgerBundle : salesLedgerBundle;
+  }
+
+  function switchLedgerModule(kind) {
+    var nextKind = kind === "purchase" ? "purchase" : "sales";
+    ensureLedgerBundles();
+    if (activeLedgerKind === nextKind) return;
+    var bundle = getLedgerBundle(nextKind);
+    activeLedgerKind = nextKind;
+    ST.rows = bundle.rows;
+    clientState = bundle.clientState;
+    priceState = bundle.priceState;
+    manageState = bundle.manageState;
+    ST.filter = bundle.filter;
+    ST.colWidths = bundle.colWidths;
+    ST.rowHeights = bundle.rowHeights;
+    ST.tableBuilt = false;
+    ST.host = null;
+    ST.scrollEl = null;
+    ST.inputEl = null;
+    ST.autocompleteEl = null;
+    ST.visibleRowsDirty = true;
+    ST.renderRange = { start: -1, end: -1 };
+    ST.selectedCell = { row: 0, col: 0 };
+    ST.selectedKeys = ["0:0"];
+    ST.editMode = false;
+    ST.isComposing = false;
   }
 
   function refreshWorkSummaryUi() {
@@ -1807,21 +1893,34 @@
   }
 
   function getLedgerPayload() {
-    var storedRowCount = getStoredRowCount();
+    ensureLedgerBundles();
+    var salesStoredRowCount = Math.max(MIN_ROW_COUNT, getLastUsedRowIndex(salesLedgerBundle.rows) + 20);
+    var purchaseStoredRowCount = Math.max(MIN_ROW_COUNT, getLastUsedRowIndex(purchaseLedgerBundle.rows) + 20);
     var trimmedWorkItems = trimTrailingRows(workState.items, workGridFields, 12, function () { return {}; });
-    var trimmedClientRows = normalizeClientGridRows(clientState.rows, 20);
-    var trimmedPriceRows = trimTrailingRows(priceState.rows, priceGridFields, 30, emptyPriceRow);
+    var trimmedClientRows = normalizeClientGridRows(salesLedgerBundle.clientState.rows, 20);
+    var trimmedPriceRows = trimTrailingRows(salesLedgerBundle.priceState.rows, priceGridFields, 30, emptyPriceRow);
+    var trimmedPurchaseClientRows = normalizeClientGridRows(purchaseLedgerBundle.clientState.rows, 20);
+    var trimmedPurchasePriceRows = trimTrailingRows(purchaseLedgerBundle.priceState.rows, priceGridFields, 30, emptyPriceRow);
     return {
-      statusRows: normalizeSalesRows(ST.rows, storedRowCount).slice(0, storedRowCount),
+      statusRows: normalizeSalesRows(salesLedgerBundle.rows, salesStoredRowCount).slice(0, salesStoredRowCount),
       workItems: cloneItems(trimmedWorkItems),
       workInfo: cloneWorkInfo(workState.info),
       clientRows: cloneClientRows(trimmedClientRows),
       priceRows: trimmedPriceRows.map(function (row) { return Object.assign({}, row); }),
-      priceActiveClient: priceState.activeClient || "",
+      priceActiveClient: salesLedgerBundle.priceState.activeClient || "",
       sheetLayout: {
-        colWidths: ST.colWidths.slice(),
-        rowHeights: ST.rowHeights.slice(0, storedRowCount),
+        colWidths: salesLedgerBundle.colWidths.slice(),
+        rowHeights: salesLedgerBundle.rowHeights.slice(0, salesStoredRowCount),
       },
+      purchaseStatusRows: normalizeSalesRows(purchaseLedgerBundle.rows, purchaseStoredRowCount).slice(0, purchaseStoredRowCount),
+      purchaseClientRows: cloneClientRows(trimmedPurchaseClientRows),
+      purchasePriceRows: trimmedPurchasePriceRows.map(function (row) { return Object.assign({}, row); }),
+      purchasePriceActiveClient: purchaseLedgerBundle.priceState.activeClient || "",
+      purchaseSheetLayout: {
+        colWidths: purchaseLedgerBundle.colWidths.slice(),
+        rowHeights: purchaseLedgerBundle.rowHeights.slice(0, purchaseStoredRowCount),
+      },
+      purchaseManageState: Object.assign({}, purchaseLedgerBundle.manageState),
       items: cloneItems(trimmedWorkItems),
       updatedAt: new Date().toISOString(),
     };
@@ -1829,10 +1928,10 @@
 
   function applyLedgerData(data) {
     if (!data) return;
+    ensureLedgerBundles();
 
     if (Array.isArray(data.statusRows)) {
-      ST.rows = normalizeSalesRows(data.statusRows);
-      ST.visibleRowsDirty = true;
+      salesLedgerBundle.rows = normalizeSalesRows(data.statusRows);
     }
 
     if (Array.isArray(data.workItems)) {
@@ -1846,26 +1945,56 @@
     }
 
     if (Array.isArray(data.clientRows)) {
-      clientState.rows = normalizeClientGridRows(data.clientRows, 20);
+      salesLedgerBundle.clientState.rows = normalizeClientGridRows(data.clientRows, 20);
     }
 
     if (Array.isArray(data.priceRows)) {
-      priceState.rows = normalizePriceGridRows(data.priceRows, 30);
+      salesLedgerBundle.priceState.rows = normalizePriceGridRows(data.priceRows, 30);
     }
     if (typeof data.priceActiveClient === "string") {
-      priceState.activeClient = data.priceActiveClient;
+      salesLedgerBundle.priceState.activeClient = data.priceActiveClient;
     }
 
     if (data.sheetLayout && typeof data.sheetLayout === "object") {
       if (Array.isArray(data.sheetLayout.colWidths)) {
-        ST.colWidths = data.sheetLayout.colWidths.slice(0, COL_COUNT);
+        salesLedgerBundle.colWidths = data.sheetLayout.colWidths.slice(0, COL_COUNT);
       }
       if (Array.isArray(data.sheetLayout.rowHeights)) {
-        ST.rowHeights = data.sheetLayout.rowHeights.slice();
-        ST.visibleRowsDirty = true;
+        salesLedgerBundle.rowHeights = data.sheetLayout.rowHeights.slice();
       }
-      initGridSizing();
     }
+
+    if (Array.isArray(data.purchaseStatusRows)) {
+      purchaseLedgerBundle.rows = normalizeSalesRows(data.purchaseStatusRows);
+    }
+    if (Array.isArray(data.purchaseClientRows)) {
+      purchaseLedgerBundle.clientState.rows = normalizeClientGridRows(data.purchaseClientRows, 20);
+    }
+    if (Array.isArray(data.purchasePriceRows)) {
+      purchaseLedgerBundle.priceState.rows = normalizePriceGridRows(data.purchasePriceRows, 30);
+    }
+    if (typeof data.purchasePriceActiveClient === "string") {
+      purchaseLedgerBundle.priceState.activeClient = data.purchasePriceActiveClient;
+    }
+    if (data.purchaseSheetLayout && typeof data.purchaseSheetLayout === "object") {
+      if (Array.isArray(data.purchaseSheetLayout.colWidths)) {
+        purchaseLedgerBundle.colWidths = data.purchaseSheetLayout.colWidths.slice(0, COL_COUNT);
+      }
+      if (Array.isArray(data.purchaseSheetLayout.rowHeights)) {
+        purchaseLedgerBundle.rowHeights = data.purchaseSheetLayout.rowHeights.slice();
+      }
+    }
+    if (data.purchaseManageState && typeof data.purchaseManageState === "object") {
+      purchaseLedgerBundle.manageState = {
+        startMonth: data.purchaseManageState.startMonth || "",
+        endMonth: data.purchaseManageState.endMonth || "",
+        client: data.purchaseManageState.client || "",
+      };
+    }
+
+    switchLedgerModule(activeLedgerKind);
+    ST.visibleRowsDirty = true;
+    initGridSizing();
 
     if (ST.tableBuilt) {
       refreshGridValues();
@@ -3023,6 +3152,7 @@
 
   function moveSelection(row, col) {
     commitActiveCellValue();
+    hideSalesAutocomplete();
     if (row >= getRowCount() - 5) ensureRowCapacity(row + ROW_GROWTH_CHUNK);
     var nr = Math.max(0, Math.min(getRowCount() - 1, row));
     var nc = Math.max(0, Math.min(COL_COUNT - 1, col));
@@ -3668,7 +3798,6 @@
       var len = e.target.value.length;
       if (ST.editMode) e.target.setSelectionRange(len, len);
       else e.target.setSelectionRange(0, len);
-      updateSalesAutocomplete();
     });
     ST.inputEl.addEventListener("blur", function () {
       commitActiveCellValue();
@@ -3692,7 +3821,7 @@
     syncEditOrigin();
     applyGridSizingUI();
     updateStatusBar();
-    updateSalesAutocomplete();
+    hideSalesAutocomplete();
     focusInput();
   }
 
@@ -3731,6 +3860,7 @@
     var td = e.target.closest("td[data-r]");
     if (!td || !ST.host || !ST.host.contains(td)) return;
     commitActiveCellValue();
+    hideSalesAutocomplete();
     var rowIndex = Number(td.getAttribute("data-r"));
     var colIndex = Number(td.getAttribute("data-c"));
     ST.selectedCell = { row: rowIndex, col: colIndex };
@@ -3839,6 +3969,7 @@
     }
 
     commitActiveCellValue();
+    hideSalesAutocomplete();
     e.preventDefault();
     var rowIndex = Number(td.getAttribute("data-r"));
     var colIndex = Number(td.getAttribute("data-c"));
@@ -4675,6 +4806,14 @@
     var row = ST.rows[ST.selectedCell.row] || emptyRow();
     var key = salesColumns[ST.selectedCell.col].key;
     var raw = ST.inputEl.value || "";
+    if (key !== "client" && key !== "code") {
+      hideSalesAutocomplete();
+      return;
+    }
+    if (!ST.autocompleteForcedOpen && !String(raw).trim()) {
+      hideSalesAutocomplete();
+      return;
+    }
     var suggestions = [];
     if (key === "client") {
       suggestions = getClientSuggestionOptions(raw);
@@ -4726,6 +4865,7 @@
     if (!ST.autocompleteEl) return;
     ST.autocompleteItems = [];
     ST.autocompleteActiveIndex = -1;
+    ST.autocompleteForcedOpen = false;
     ST.autocompleteEl.innerHTML = "";
     ST.autocompleteEl.classList.add("hidden");
   }
@@ -4735,6 +4875,7 @@
     var item = ST.autocompleteItems[index];
     if (!item || !ST.inputEl) return false;
     ST.inputEl.value = item.value || "";
+    ST.autocompleteForcedOpen = false;
     setValue(ST.selectedCell.row, ST.selectedCell.col, ST.inputEl.value);
     applyPriceLookupForActiveSalesCell();
     hideSalesAutocomplete();
@@ -4761,6 +4902,7 @@
       snapshotEditOrigin();
       ST.editMode = true;
     }
+    ST.autocompleteForcedOpen = true;
     syncInputOverlay({ ensureVisible: true });
     updateSalesAutocomplete();
     if (!hasSalesAutocompleteOptions()) {
@@ -5129,6 +5271,7 @@
     priceState.rows = normalizePriceGridRows(priceState.rows, 40);
     var activeClient = ensureActivePriceClient();
     var clientOptions = getAllPriceClientOptions();
+    var priceTitle = activeLedgerKind === "purchase" ? "매입단가 리스트" : "매출단가 리스트";
     return (
       '<div class="clientdoc">' +
         '<div class="price-layout">' +
@@ -5151,7 +5294,7 @@
           '</div>' +
           '<div class="clientdoc-card">' +
             '<div class="clientdoc-head">' +
-              '<div class="clientdoc-title">' + icon("tags") + ' 매출단가 리스트</div>' +
+              '<div class="clientdoc-title">' + icon("tags") + " " + priceTitle + '</div>' +
               '<div class="price-main-actions">' +
                 '<button type="button" class="soft-btn" id="btn-price-rename">업체명 수정</button>' +
                 '<button type="button" class="soft-btn" id="btn-price-delete">업체 삭제</button>' +
@@ -5373,6 +5516,7 @@
       return sum + (parseCalcNumber(row.amount) || 0);
     }, 0);
     var productSummary = buildManageProductSummary(filteredRows);
+    var manageLabel = activeLedgerKind === "purchase" ? "매입" : "매출";
 
     function renderMonthOptions(selectedValue) {
       return '<option value="all"' + (String(selectedValue) === "all" ? " selected" : "") + '>전체</option>' +
@@ -5404,7 +5548,7 @@
         '<div class="manage-summary-grid">' +
           '<div class="manage-summary-card"><div class="manage-summary-label">조회건수</div><div class="manage-summary-value">' + escapeHtml(formatDisplayNumber(filteredRows.length)) + '</div></div>' +
           '<div class="manage-summary-card"><div class="manage-summary-label">수량합계</div><div class="manage-summary-value">' + escapeHtml(formatDisplayNumber(totalQty)) + '</div></div>' +
-          '<div class="manage-summary-card"><div class="manage-summary-label">매출합계</div><div class="manage-summary-value">' + escapeHtml(formatDisplayNumber(totalAmount)) + '</div></div>' +
+          '<div class="manage-summary-card"><div class="manage-summary-label">' + manageLabel + '합계</div><div class="manage-summary-value">' + escapeHtml(formatDisplayNumber(totalAmount)) + '</div></div>' +
         '</div>' +
         '<div class="manage-layout">' +
           '<div class="manage-table-card">' +
@@ -5646,9 +5790,15 @@
       return;
     }
 
-    if (state.mainTab === "sales") {
+    if (state.mainTab === "sales" || state.mainTab === "purchase") {
+      var isPurchaseTab = state.mainTab === "purchase";
+      var currentTabs = isPurchaseTab ? purchaseTabs : salesTabs;
+      switchLedgerModule(isPurchaseTab ? "purchase" : "sales");
+      if (!currentTabs.some(function (tab) { return tab.key === state.subTab; })) {
+        state.subTab = "manage";
+      }
       var tabs = '<div class="tabs">';
-      salesTabs.forEach(function (t) {
+      currentTabs.forEach(function (t) {
         tabs +=
           '<button type="button" class="sub-tab' +
           (state.subTab === t.key ? " active" : "") +
@@ -5687,22 +5837,23 @@
           '<button type="button" class="soft-btn" id="btn-sort-asc">오름차순</button>' +
           '<button type="button" class="soft-btn" id="btn-sort-desc">내림차순</button>' +
           '<button type="button" class="soft-btn" id="btn-sort-reset">입력순</button>' +
+          (isPurchaseTab ? "" :
           '<button type="button" class="soft-btn" id="btn-send-to-work" style="margin-left:auto">' +
           icon("arrowRight") +
           "거래작업으로 보내기" +
-          "</button>" +
+          "</button>") +
           '</div>' +
           '<div id="sales-table-host"></div>';
-      } else if (state.subTab === "work") {
+      } else if (!isPurchaseTab && state.subTab === "work") {
         body = renderWorkTab();
-      } else if (state.subTab === "statement") {
+      } else if (!isPurchaseTab && state.subTab === "statement") {
         body = renderStatementTab();
       } else if (state.subTab === "price") {
         body = renderPriceTab();
       } else if (state.subTab === "client") {
         body = renderClientTab();
       } else {
-        var lab = salesTabs.find(function (x) {
+        var lab = currentTabs.find(function (x) {
           return x.key === state.subTab;
         });
         body =
@@ -5856,12 +6007,12 @@
           });
         }
         var sendBtn = document.getElementById("btn-send-to-work");
-        if (sendBtn) {
+        if (sendBtn && !isPurchaseTab) {
           sendBtn.addEventListener("click", function () {
             sendSelectedStatusRowsToWork();
           });
         }
-      } else if (state.subTab === "work") {
+      } else if (!isPurchaseTab && state.subTab === "work") {
         // Firestore에서 복사본을 자동 불러오기
         var wasLoaded = workState.loadedFromFirebase;
         ensureWorkLoadedFromFirebase().then(function () {
@@ -5920,7 +6071,7 @@
             scheduleLedgerDraftSave();
           });
         });
-      } else if (state.subTab === "statement") {
+      } else if (!isPurchaseTab && state.subTab === "statement") {
         var wasStatementLoaded = workState.loadedFromFirebase;
         ensureWorkLoadedFromFirebase().then(function () {
           if (!wasStatementLoaded && state.subTab === "statement") render();
@@ -5992,9 +6143,6 @@
         }
         if (priceClientInput) {
           priceClientInput.addEventListener("change", applyActivePriceClient);
-          priceClientInput.addEventListener("focus", function () {
-            updatePriceClientAutocomplete(priceClientInput);
-          });
           priceClientInput.addEventListener("input", function () {
             updatePriceClientAutocomplete(priceClientInput);
           });
