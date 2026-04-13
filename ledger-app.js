@@ -92,6 +92,7 @@
     endMonth: "",
     client: "",
   };
+  var appToastTimer = null;
   var workGridFields = ["date", "code", "name", "qty", "price", "supply", "tax", "note"];
   var clientGridFields = ["supplierMode", "company", "businessNo", "ceoName", "address", "businessType", "businessItem"];
   var clientDataFields = ["supplierMode", "company", "businessNo", "ceoName", "address", "businessType", "businessItem"];
@@ -156,6 +157,8 @@
     scrollEl: null,
     inputEl: null,
     autocompleteEl: null,
+    autocompleteItems: [],
+    autocompleteActiveIndex: -1,
     cellMap: {},
     rowHeadEls: [],
     colHeadEls: [],
@@ -302,6 +305,21 @@
     if (!parsed || !/^\d{4}-\d{2}-\d{2}$/.test(String(isoDate || ""))) return false;
     var parts = String(isoDate).split("-");
     return parsed.month === Number(parts[1]) && parsed.day === Number(parts[2]);
+  }
+
+  function showAppToast(message, type) {
+    var layer = document.getElementById("app-toast-layer");
+    if (!layer) {
+      layer = document.createElement("div");
+      layer.id = "app-toast-layer";
+      layer.className = "app-toast-layer";
+      document.body.appendChild(layer);
+    }
+    layer.innerHTML = '<div class="app-toast' + (type ? " " + type : "") + '">' + escapeHtml(message || "") + "</div>";
+    if (appToastTimer) clearTimeout(appToastTimer);
+    appToastTimer = setTimeout(function () {
+      if (layer) layer.innerHTML = "";
+    }, 2600);
   }
 
   function emptySupplierInfo() {
@@ -3518,7 +3536,7 @@
       '<span class="st-status-pill">평균 <strong data-st-status="avg">-</strong></span>' +
       '</div>' +
       '</div>' +
-      '<datalist id="sales-grid-datalist"></datalist>' +
+      '<div id="sales-grid-datalist" class="autocomplete-popover hidden"></div>' +
       '</div>';
 
     host.innerHTML = html;
@@ -3578,6 +3596,7 @@
       }
       renderVirtualRows();
       updateSelectionUI();
+      positionSalesAutocomplete();
     });
     ST.colHeadEls.forEach(function (el) {
       el.addEventListener("mousedown", function (e) {
@@ -3649,9 +3668,11 @@
       var len = e.target.value.length;
       if (ST.editMode) e.target.setSelectionRange(len, len);
       else e.target.setSelectionRange(0, len);
+      updateSalesAutocomplete();
     });
     ST.inputEl.addEventListener("blur", function () {
       commitActiveCellValue();
+      setTimeout(hideSalesAutocomplete, 120);
     });
     ST.inputEl.addEventListener("mouseup", function (e) {
       if (!ST.editMode) {
@@ -3958,6 +3979,28 @@
       openSalesAutocompletePicker();
       return;
     }
+    if (hasSalesAutocompleteOptions()) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        moveSalesAutocomplete(1);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        moveSalesAutocomplete(-1);
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (chooseSalesAutocomplete(ST.autocompleteActiveIndex >= 0 ? ST.autocompleteActiveIndex : 0)) return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        hideSalesAutocomplete();
+        focusInput();
+        return;
+      }
+    }
 
     if ((e.ctrlKey || e.metaKey) && /^Arrow(Up|Down|Left|Right)$/.test(e.key)) {
       e.preventDefault();
@@ -4112,6 +4155,27 @@
       e.preventDefault();
       openSalesAutocompletePicker();
       return;
+    }
+    if (hasSalesAutocompleteOptions()) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        moveSalesAutocomplete(1);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        moveSalesAutocomplete(-1);
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (chooseSalesAutocomplete(ST.autocompleteActiveIndex >= 0 ? ST.autocompleteActiveIndex : 0)) return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        hideSalesAutocomplete();
+        return;
+      }
     }
 
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
@@ -4617,20 +4681,76 @@
     } else if (key === "code") {
       suggestions = getCodeSuggestionOptions(row.client, raw);
     }
+    var prevActive = ST.autocompleteActiveIndex;
+    ST.autocompleteItems = suggestions.slice();
+    ST.autocompleteActiveIndex = suggestions.length ? Math.max(0, Math.min(prevActive, suggestions.length - 1)) : -1;
     if (!suggestions.length) {
       ST.autocompleteEl.innerHTML = "";
-      ST.inputEl.removeAttribute("list");
+      ST.autocompleteEl.classList.add("hidden");
       return;
     }
-    ST.autocompleteEl.innerHTML = suggestions.map(function (item) {
-      var labelAttr = item.label && item.label !== item.value ? ' label="' + escapeAttr(item.label) + '"' : "";
-      return '<option value="' + escapeAttr(item.value) + '"' + labelAttr + '></option>';
+    ST.autocompleteEl.innerHTML = suggestions.map(function (item, index) {
+      return (
+        '<button type="button" class="autocomplete-item' + (index === ST.autocompleteActiveIndex ? ' active' : '') + '" data-sales-autocomplete="' + index + '">' +
+          '<span class="autocomplete-item-main">' + escapeHtml(item.value || "") + '</span>' +
+          (item.label ? '<span class="autocomplete-item-sub">' + escapeHtml(item.label) + '</span>' : "") +
+        '</button>'
+      );
     }).join("");
-    ST.inputEl.setAttribute("list", "sales-grid-datalist");
+    ST.autocompleteEl.classList.remove("hidden");
+    positionSalesAutocomplete();
+    ST.autocompleteEl.querySelectorAll("[data-sales-autocomplete]").forEach(function (btn) {
+      btn.addEventListener("mousedown", function (e) {
+        e.preventDefault();
+      });
+      btn.addEventListener("click", function () {
+        chooseSalesAutocomplete(Number(btn.getAttribute("data-sales-autocomplete")));
+      });
+    });
   }
 
   function hasSalesAutocompleteOptions() {
-    return !!(ST.autocompleteEl && ST.autocompleteEl.querySelector("option"));
+    return !!(ST.autocompleteEl && ST.autocompleteItems && ST.autocompleteItems.length);
+  }
+
+  function positionSalesAutocomplete() {
+    if (!ST.autocompleteEl || !ST.inputEl || !ST.host) return;
+    var inputRect = ST.inputEl.getBoundingClientRect();
+    var hostRect = ST.host.getBoundingClientRect();
+    ST.autocompleteEl.style.left = inputRect.left - hostRect.left + "px";
+    ST.autocompleteEl.style.top = inputRect.bottom - hostRect.top + 4 + "px";
+    ST.autocompleteEl.style.width = Math.max(220, inputRect.width) + "px";
+  }
+
+  function hideSalesAutocomplete() {
+    if (!ST.autocompleteEl) return;
+    ST.autocompleteItems = [];
+    ST.autocompleteActiveIndex = -1;
+    ST.autocompleteEl.innerHTML = "";
+    ST.autocompleteEl.classList.add("hidden");
+  }
+
+  function chooseSalesAutocomplete(index) {
+    if (!ST.autocompleteItems || index < 0 || index >= ST.autocompleteItems.length) return false;
+    var item = ST.autocompleteItems[index];
+    if (!item || !ST.inputEl) return false;
+    ST.inputEl.value = item.value || "";
+    setValue(ST.selectedCell.row, ST.selectedCell.col, ST.inputEl.value);
+    applyPriceLookupForActiveSalesCell();
+    hideSalesAutocomplete();
+    syncInputOverlay();
+    focusInput();
+    return true;
+  }
+
+  function moveSalesAutocomplete(delta) {
+    if (!hasSalesAutocompleteOptions()) return false;
+    var next = ST.autocompleteActiveIndex + delta;
+    if (next < 0) next = ST.autocompleteItems.length - 1;
+    if (next >= ST.autocompleteItems.length) next = 0;
+    ST.autocompleteActiveIndex = next;
+    updateSalesAutocomplete();
+    return true;
   }
 
   function openSalesAutocompletePicker() {
@@ -4650,11 +4770,6 @@
     requestAnimationFrame(function () {
       if (!ST.inputEl) return;
       ST.inputEl.focus();
-      if (typeof ST.inputEl.showPicker === "function") {
-        try {
-          ST.inputEl.showPicker();
-        } catch (err) {}
-      }
     });
     return true;
   }
@@ -5019,12 +5134,10 @@
         '<div class="price-layout">' +
           '<div class="price-sidebar">' +
             '<div class="clientdoc-title">' + icon("building") + ' 업체 목록</div>' +
-            '<input type="text" class="field" id="price-active-client" list="price-client-list" style="height:36px" placeholder="업체명 입력 또는 선택" value="' + escapeAttr(activeClient) + '" />' +
-            '<datalist id="price-client-list">' +
-              clientOptions.map(function (company) {
-                return '<option value="' + escapeAttr(company) + '"></option>';
-              }).join("") +
-            '</datalist>' +
+            '<div style="position:relative">' +
+            '<input type="text" class="field" id="price-active-client" style="height:36px" placeholder="업체명 입력 또는 선택" value="' + escapeAttr(activeClient) + '" />' +
+            '<div id="price-client-list" class="autocomplete-popover hidden"></div>' +
+            '</div>' +
             '<div class="price-main-actions">' +
               '<button type="button" class="soft-btn" id="btn-price-open">불러오기</button>' +
               '<button type="button" class="soft-btn" id="btn-price-new">새 업체</button>' +
@@ -5062,6 +5175,53 @@
     var listEl = document.querySelector(".price-client-list");
     if (!listEl) return;
     listEl.scrollTop = priceState.sidebarScrollTop || 0;
+  }
+
+  function getPriceClientSuggestionOptions(keyword) {
+    var token = normalizeCompanyMatchText(keyword);
+    return getAllPriceClientOptions()
+      .filter(function (company) {
+        var normalized = normalizeCompanyMatchText(company);
+        return !token || normalized.indexOf(token) >= 0 || token.indexOf(normalized) >= 0;
+      })
+      .slice(0, 30)
+      .map(function (company) {
+        return { value: company, label: company };
+      });
+  }
+
+  function updatePriceClientAutocomplete(inputEl) {
+    var popover = document.getElementById("price-client-list");
+    if (!inputEl || !popover) return;
+    var suggestions = getPriceClientSuggestionOptions(inputEl.value || "");
+    if (!suggestions.length) {
+      popover.innerHTML = "";
+      popover.classList.add("hidden");
+      return;
+    }
+    popover.innerHTML = suggestions.map(function (item) {
+      return '<button type="button" class="autocomplete-item" data-price-suggestion="' + escapeAttr(item.value) + '"><span class="autocomplete-item-main">' + escapeHtml(item.value) + '</span></button>';
+    }).join("");
+    popover.classList.remove("hidden");
+    popover.style.left = "0";
+    popover.style.top = "40px";
+    popover.style.width = "100%";
+    popover.querySelectorAll("[data-price-suggestion]").forEach(function (btn) {
+      btn.addEventListener("mousedown", function (e) {
+        e.preventDefault();
+      });
+      btn.addEventListener("click", function () {
+        inputEl.value = btn.getAttribute("data-price-suggestion") || "";
+        popover.classList.add("hidden");
+      });
+    });
+  }
+
+  function hidePriceClientAutocomplete() {
+    var popover = document.getElementById("price-client-list");
+    if (!popover) return;
+    popover.innerHTML = "";
+    popover.classList.add("hidden");
   }
 
   function parseSalesMonthDay(value) {
@@ -5309,7 +5469,7 @@
 
     // 3) 최대 10줄 제한
     if (rows.length > 10) {
-      alert("선택 행은 최대 10줄까지만 가능합니다.");
+      showAppToast("선택 행은 최대 10줄까지만 가능합니다.", "warning");
       return;
     }
 
@@ -5364,7 +5524,7 @@
     }
 
     if (hasDateMismatch) {
-      alert("선택한 매출현황 일자 중 일부가 거래작업 작성일자(오늘+1일)와 다릅니다.");
+      showAppToast("선택한 매출현황 일자 중 일부가 거래작업 작성일자(오늘+1일)와 다릅니다.", "warning");
     }
 
     // 5) 거래작업 탭으로 이동 + 복사본 렌더링
@@ -5513,13 +5673,13 @@
           salesColumns.map(function (col) { return '<option value="' + col.key + '">' + col.label + '</option>'; }).join("") +
           '</select>' +
           '<input type="text" class="field" id="status-filter-keyword" style="width:180px;height:36px" placeholder="검색어" />' +
+          '<button type="button" class="soft-btn filter-apply-btn" id="btn-filter-apply">적용</button>' +
+          '<button type="button" class="soft-btn filter-clear-btn" id="btn-filter-clear">해제</button>' +
           '<div class="toolbar-segment" style="display:inline-flex;gap:6px;margin-left:4px">' +
           '<button type="button" class="soft-btn' + (activeClientType === "all" ? ' active-filter' : '') + '" id="btn-filter-client-all">전체</button>' +
           '<button type="button" class="soft-btn' + (activeClientType === "corporate" ? ' active-filter' : '') + '" id="btn-filter-client-corporate">법인</button>' +
           '<button type="button" class="soft-btn' + (activeClientType === "personal" ? ' active-filter' : '') + '" id="btn-filter-client-personal">개인</button>' +
           '</div>' +
-          '<button type="button" class="soft-btn" id="btn-filter-apply">적용</button>' +
-          '<button type="button" class="soft-btn" id="btn-filter-clear">해제</button>' +
           '<label style="margin-left:12px">정렬:</label>' +
           '<select id="status-sort-col">' +
           salesColumns.map(function (col) { return '<option value="' + col.key + '">' + col.label + '</option>'; }).join("") +
@@ -5832,11 +5992,23 @@
         }
         if (priceClientInput) {
           priceClientInput.addEventListener("change", applyActivePriceClient);
+          priceClientInput.addEventListener("focus", function () {
+            updatePriceClientAutocomplete(priceClientInput);
+          });
+          priceClientInput.addEventListener("input", function () {
+            updatePriceClientAutocomplete(priceClientInput);
+          });
           priceClientInput.addEventListener("keydown", function (e) {
             if (e.key === "Enter") {
               e.preventDefault();
+              hidePriceClientAutocomplete();
               applyActivePriceClient();
+            } else if (e.key === "Escape") {
+              hidePriceClientAutocomplete();
             }
+          });
+          priceClientInput.addEventListener("blur", function () {
+            setTimeout(hidePriceClientAutocomplete, 120);
           });
         }
         app.querySelectorAll("[data-price-client]").forEach(function (btn) {

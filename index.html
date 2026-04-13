@@ -98,6 +98,19 @@
       color: var(--text-dark);
       box-shadow: 0 1px 4px rgba(156, 126, 219, 0.14);
     }
+    .soft-btn.filter-apply-btn {
+      background: linear-gradient(135deg, #e9dcff, #d8ecff);
+      color: var(--text-dark);
+      box-shadow: 0 4px 12px rgba(156, 126, 219, 0.12);
+      font-weight: 700;
+    }
+    .soft-btn.filter-clear-btn {
+      background: #fff;
+      color: #8b82a3;
+      border: 1px solid #eadff6;
+      box-shadow: none;
+      font-weight: 600;
+    }
     .icon-box {
       display: inline-flex;
       width: 48px;
@@ -236,6 +249,7 @@
 
     /* Sales table */
     .st-wrap {
+      position: relative;
       border-radius: 16px;
       background: #fff;
       padding: 16px;
@@ -444,6 +458,86 @@
     .st-status-pill strong {
       color: var(--text-dark);
       font-weight: 700;
+    }
+    .autocomplete-popover {
+      position: absolute;
+      z-index: 40;
+      min-width: 220px;
+      max-width: 420px;
+      max-height: 240px;
+      overflow: auto;
+      padding: 6px;
+      border: 1px solid #eadff6;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.98);
+      box-shadow: 0 16px 36px rgba(96, 76, 138, 0.16);
+      backdrop-filter: blur(6px);
+    }
+    .autocomplete-popover.hidden {
+      display: none !important;
+    }
+    .autocomplete-item {
+      display: flex;
+      width: 100%;
+      flex-direction: column;
+      gap: 2px;
+      padding: 8px 10px;
+      border: none;
+      border-radius: 8px;
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+      color: var(--text);
+      font: inherit;
+    }
+    .autocomplete-item:hover,
+    .autocomplete-item.active {
+      background: #f4ecff;
+    }
+    .autocomplete-item-main {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-dark);
+    }
+    .autocomplete-item-sub {
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .app-toast-layer {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      z-index: 1200;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      transform: translateX(-50%);
+      pointer-events: none;
+    }
+    .app-toast {
+      min-width: 280px;
+      max-width: min(520px, calc(100vw - 32px));
+      padding: 12px 16px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.98);
+      border: 1px solid #eadff6;
+      box-shadow: 0 18px 42px rgba(96, 76, 138, 0.18);
+      color: var(--text-dark);
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .app-toast.warning {
+      background: #fff8ef;
+      border-color: #f3ddbd;
+      color: #7f5a2e;
+    }
+    .app-toast.success {
+      background: #f2fbf5;
+      border-color: #cfead6;
+      color: #2e6a3d;
     }
     .w-72 { width: 72px; }
     .w-120 { width: 120px; }
