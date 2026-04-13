@@ -2509,6 +2509,65 @@
     moveSelection(row, col);
   }
 
+  function cellHasData(r, c) {
+    return String(getRawValue(r, c) || "").trim() !== "";
+  }
+
+  function findCtrlJumpTarget(row, col, direction) {
+    var maxRow = Math.max(0, getRowCount() - 1);
+    var maxCol = Math.max(0, COL_COUNT - 1);
+    var step = (direction === "up" || direction === "left") ? -1 : 1;
+    var currentHasData = cellHasData(row, col);
+    var cursor;
+    var limit;
+
+    if (direction === "up" || direction === "down") {
+      cursor = row + step;
+      if (cursor < 0) return { row: 0, col: col };
+      if (cursor > maxRow) return { row: maxRow, col: col };
+
+      if (currentHasData && cellHasData(cursor, col)) {
+        while (cursor + step >= 0 && cursor + step <= maxRow && cellHasData(cursor + step, col)) {
+          cursor += step;
+        }
+        return { row: cursor, col: col };
+      }
+
+      while (cursor >= 0 && cursor <= maxRow) {
+        if (cellHasData(cursor, col)) {
+          return { row: cursor, col: col };
+        }
+        cursor += step;
+      }
+
+      if (direction === "down") {
+        limit = getLastUsedRowIndex(ST.rows);
+        return { row: limit >= 0 ? limit : maxRow, col: col };
+      }
+      return { row: 0, col: col };
+    }
+
+    cursor = col + step;
+    if (cursor < 0) return { row: row, col: 0 };
+    if (cursor > maxCol) return { row: row, col: maxCol };
+
+    if (currentHasData && cellHasData(row, cursor)) {
+      while (cursor + step >= 0 && cursor + step <= maxCol && cellHasData(row, cursor + step)) {
+        cursor += step;
+      }
+      return { row: row, col: cursor };
+    }
+
+    while (cursor >= 0 && cursor <= maxCol) {
+      if (cellHasData(row, cursor)) {
+        return { row: row, col: cursor };
+      }
+      cursor += step;
+    }
+
+    return { row: row, col: direction === "right" ? maxCol : 0 };
+  }
+
   function startResize(kind, index, clientX, clientY) {
     ST.resizing = {
       kind: kind,
@@ -3850,6 +3909,14 @@
       return;
     }
 
+    if ((e.ctrlKey || e.metaKey) && /^Arrow(Up|Down|Left|Right)$/.test(e.key)) {
+      e.preventDefault();
+      var ctrlDirection = e.key.replace("Arrow", "").toLowerCase();
+      var ctrlTarget = findCtrlJumpTarget(ST.selectedCell.row, ST.selectedCell.col, ctrlDirection);
+      moveSelection(ctrlTarget.row, ctrlTarget.col);
+      return;
+    }
+
     if (e.ctrlKey || e.metaKey) {
       var k = e.key.toLowerCase();
       if (k === "f") {
@@ -3955,6 +4022,26 @@
         return current;
       });
       moveSelection(o.row, o.col);
+      return;
+    }
+
+    if (
+      !e.altKey &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      e.key &&
+      e.key.length === 1
+    ) {
+      e.preventDefault();
+      snapshotEditOrigin();
+      ST.editMode = true;
+      moveInputToCell(ST.selectedCell.row, ST.selectedCell.col);
+      if (ST.inputEl) {
+        ST.inputEl.value = e.key;
+        setValue(ST.selectedCell.row, ST.selectedCell.col, e.key);
+        syncInputOverlay();
+        focusInput();
+      }
     }
   }
 
@@ -4051,6 +4138,13 @@
     var len = input.value.length;
 
     if (!ST.editMode) {
+      if ((e.ctrlKey || e.metaKey) && /^Arrow(Up|Down|Left|Right)$/.test(e.key)) {
+        e.preventDefault();
+        var ctrlJumpDirection = e.key.replace("Arrow", "").toLowerCase();
+        var ctrlJumpTarget = findCtrlJumpTarget(rowIndex, colIndex, ctrlJumpDirection);
+        moveSelection(ctrlJumpTarget.row, ctrlJumpTarget.col);
+        return;
+      }
       if (e.key === "Delete") {
         e.preventDefault();
         clearSelectionCells();
