@@ -689,7 +689,6 @@
     }
     if (!purchaseLedgerBundle) {
       purchaseLedgerBundle = createLedgerBundle();
-      purchaseLedgerBundle.clientState = salesLedgerBundle.clientState;
     }
   }
 
@@ -1904,10 +1903,12 @@
     var trimmedWorkItems = trimTrailingRows(workState.items, workGridFields, 12, function () { return {}; });
     var trimmedClientRows = normalizeClientGridRows(salesLedgerBundle.clientState.rows, 20);
     var trimmedPriceRows = trimTrailingRows(salesLedgerBundle.priceState.rows, priceGridFields, 30, emptyPriceRow);
+    var trimmedPurchaseClientRows = normalizeClientGridRows(purchaseLedgerBundle.clientState.rows, 20);
     var trimmedPurchasePriceRows = trimTrailingRows(purchaseLedgerBundle.priceState.rows, priceGridFields, 30, emptyPriceRow);
     return {
       sales: {
         statusRows: normalizeSalesRows(salesLedgerBundle.rows, salesStoredRowCount).slice(0, salesStoredRowCount),
+        clientRows: cloneClientRows(trimmedClientRows),
         priceRows: trimmedPriceRows.map(function (row) { return Object.assign({}, row); }),
         priceActiveClient: salesLedgerBundle.priceState.activeClient || "",
         sheetLayout: {
@@ -1918,6 +1919,7 @@
       },
       purchase: {
         statusRows: normalizeSalesRows(purchaseLedgerBundle.rows, purchaseStoredRowCount).slice(0, purchaseStoredRowCount),
+        clientRows: cloneClientRows(trimmedPurchaseClientRows),
         priceRows: trimmedPurchasePriceRows.map(function (row) { return Object.assign({}, row); }),
         priceActiveClient: purchaseLedgerBundle.priceState.activeClient || "",
         sheetLayout: {
@@ -1929,7 +1931,6 @@
       shared: {
         workItems: cloneItems(trimmedWorkItems),
         workInfo: cloneWorkInfo(workState.info),
-        clientRows: cloneClientRows(trimmedClientRows),
       },
       updatedAt: new Date().toISOString(),
     };
@@ -1957,10 +1958,10 @@
       workState.info = cloneWorkInfo(sharedData.workInfo);
     }
 
-    if (Array.isArray(sharedData.clientRows)) {
-      var normalizedClientRows = normalizeClientGridRows(sharedData.clientRows, 20);
-      salesLedgerBundle.clientState.rows = normalizedClientRows;
-      purchaseLedgerBundle.clientState = salesLedgerBundle.clientState;
+    if (salesData && Array.isArray(salesData.clientRows)) {
+      salesLedgerBundle.clientState.rows = normalizeClientGridRows(salesData.clientRows, 20);
+    } else if (Array.isArray(sharedData.clientRows)) {
+      salesLedgerBundle.clientState.rows = normalizeClientGridRows(sharedData.clientRows, 20);
     }
 
     if (Array.isArray(salesData.priceRows)) {
@@ -1990,6 +1991,13 @@
       purchaseLedgerBundle.rows = normalizeSalesRows(purchaseData.statusRows);
     } else if (Array.isArray(data.purchaseStatusRows)) {
       purchaseLedgerBundle.rows = normalizeSalesRows(data.purchaseStatusRows);
+    }
+    if (purchaseData && Array.isArray(purchaseData.clientRows)) {
+      purchaseLedgerBundle.clientState.rows = normalizeClientGridRows(purchaseData.clientRows, 20);
+    } else if (Array.isArray(data.purchaseClientRows)) {
+      purchaseLedgerBundle.clientState.rows = normalizeClientGridRows(data.purchaseClientRows, 20);
+    } else if (Array.isArray(sharedData.clientRows)) {
+      purchaseLedgerBundle.clientState.rows = normalizeClientGridRows(sharedData.clientRows, 20);
     }
     if (purchaseData && Array.isArray(purchaseData.priceRows)) {
       purchaseLedgerBundle.priceState.rows = normalizePriceGridRows(purchaseData.priceRows, 30);
