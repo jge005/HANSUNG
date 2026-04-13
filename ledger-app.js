@@ -3403,16 +3403,12 @@
   }
 
   function focusInput() {
-    if (ST.scrollEl) ST.scrollEl.focus();
     requestAnimationFrame(function () {
       if (!ST.inputEl) return;
-      if (!ST.editMode) return;
-      if (ST.inputEl) {
-        ST.inputEl.focus();
-        var len = ST.inputEl.value.length;
-        if (ST.editMode) ST.inputEl.setSelectionRange(len, len);
-        else ST.inputEl.setSelectionRange(0, len);
-      }
+      ST.inputEl.focus();
+      var len = ST.inputEl.value.length;
+      if (ST.editMode) ST.inputEl.setSelectionRange(len, len);
+      else ST.inputEl.setSelectionRange(0, len);
     });
   }
 
@@ -4025,24 +4021,6 @@
       return;
     }
 
-    if (
-      !e.altKey &&
-      !e.ctrlKey &&
-      !e.metaKey &&
-      e.key &&
-      e.key.length === 1
-    ) {
-      e.preventDefault();
-      snapshotEditOrigin();
-      ST.editMode = true;
-      moveInputToCell(ST.selectedCell.row, ST.selectedCell.col);
-      if (ST.inputEl) {
-        ST.inputEl.value = e.key;
-        setValue(ST.selectedCell.row, ST.selectedCell.col, e.key);
-        syncInputOverlay();
-        focusInput();
-      }
-    }
   }
 
   function copySelectionAsync() {
