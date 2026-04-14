@@ -1201,6 +1201,190 @@
     });
   }
 
+  function readFileAsTextWithEncoding(file, encoding) {
+    return new Promise(function (resolve, reject) {
+      if (!file) {
+        reject(new Error("파일을 먼저 선택해주세요."));
+        return;
+      }
+      var reader = new FileReader();
+      reader.onload = function () {
+        resolve(String(reader.result || ""));
+      };
+      reader.onerror = function () {
+        reject(new Error("파일을 읽는 중 문제가 생겼습니다."));
+      };
+      reader.readAsText(file, encoding || "utf-8");
+    });
+  }
+
+  function parseSpreadsheetXmlToGrid(text) {
+    var parser = new DOMParser();
+    var xml = parser.parseFromString(String(text || ""), "application/xml");
+    if (xml.getElementsByTagName("parsererror").length) return [];
+    var table = xml.getElementsByTagNameNS("urn:schemas-microsoft-com:office:spreadsheet", "Table")[0];
+    if (!table) return [];
+    var xmlRows = parseSpreadsheetXmlRows(
+      table.getElementsByTagNameNS("urn:schemas-microsoft-com:office:spreadsheet", "Row")
+    );
+    return xmlRows.map(function (rowObj) {
+      var maxCol = 0;
+      Object.keys(rowObj || {}).forEach(function (key) {
+        var colNum = Number(key);
+        if (colNum > maxCol) maxCol = colNum;
+      });
+      var row = [];
+      for (var col = 1; col <= maxCol; col++) {
+        row.push(String(rowObj[col] || "").trim());
+      }
+      return row;
+    });
+  }
+
+  function parseHtmlTableToGrid(text) {
+    var parser = new DOMParser();
+    var doc = parser.parseFromString(String(text || ""), "text/html");
+    var table = doc.querySelector("table");
+    if (!table) return [];
+    return Array.prototype.map.call(table.querySelectorAll("tr"), function (tr) {
+      return Array.prototype.map.call(tr.querySelectorAll("th,td"), function (cell) {
+        return String(cell.textContent || "").replace(/\s+/g, " ").trim();
+      });
+    });
+  }
+
+  function normalizeImportHeaderToken(value) {
+    return String(value || "")
+      .replace(/\s+/g, "")
+      .replace(/[()\-_/]/g, "")
+      .toLowerCase();
+  }
+
+  function detectStatusHeaderMap(headerRow) {
+    var aliases = {
+      date: ["월일", "일자", "날짜", "일"],
+      client: ["업체", "거래처", "상호", "업체명", "거래처명"],
+      code: ["코드", "code", "품번"],
+      name: ["품명", "품목", "품명규격", "제품명"],
+      qty: ["수량", "수량ea", "ea"],
+      price: ["단가", "판매단가", "매입단가"],
+      amount: ["금액", "공급가액", "매출금액", "매입금액", "합계"],
+      note1: ["비고", "비고1", "적요"],
+      note2: ["비고2"],
+    };
+    var normalizedHeaders = (headerRow || []).map(normalizeImportHeaderToken);
+    var map = {};
+    Object.keys(aliases).forEach(function (key) {
+      var idx = normalizedHeaders.findIndex(function (head) {
+        return aliases[key].some(function (alias) {
+          return head === normalizeImportHeaderToken(alias) || head.indexOf(normalizeImportHeaderToken(alias)) >= 0;
+        });
+      });
+      if (idx >= 0) map[key] = idx;
+    });
+    return map;
+  }
+
+  function scoreStatusHeaderMap(map) {
+    var requiredKeys = ["date", "client", "code", "name", "qty", "price", "amount"];
+    var score = 0;
+    requiredKeys.forEach(function (key) {
+      if (map[key] != null) score++;
+    });
+    return score;
+  }
+
+  function parseStatusRowsFromFileText(text) {
+    var content = String(text || "");
+    if (content.indexOf("\u0000") >= 0) {
+      throw new Error("바이너리 .xls 형식은 직접 읽기 어려워요. 엑셀에서 .xml(스프레드시트 2003) 또는 .csv로 저장 후 가져와주세요.");
+    }
+    var grid = [];
+    if (
+      /<\?xml/i.test(content) &&
+      /schemas-microsoft-com:office:spreadsheet/i.test(content)
+    ) {
+      grid = parseSpreadsheetXmlToGrid(content);
+    } else if (/<table/i.test(content)) {
+      grid = parseHtmlTableToGrid(content);
+    } else {
+      grid = parseClipboardGrid(content);
+    }
+    if (!grid.length) return [];
+
+    var bestHeaderIndex = -1;
+    var bestHeaderMap = {};
+    var bestScore = 0;
+    for (var i = 0; i < Math.min(grid.length, 40); i++) {
+      var candidateMap = detectStatusHeaderMap(grid[i]);
+      var score = scoreStatusHeaderMap(candidateMap);
+      if (score > bestScore) {
+        bestScore = score;
+        bestHeaderIndex = i;
+        bestHeaderMap = candidateMap;
+      }
+    }
+    var startRow = bestHeaderIndex >= 0 && bestScore >= 3 ? bestHeaderIndex + 1 : 0;
+    var colMap = bestHeaderIndex >= 0 && bestScore >= 3
+      ? bestHeaderMap
+      : { date: 0, client: 1, code: 2, name: 3, qty: 4, price: 5, amount: 6, note1: 7, note2: 8 };
+
+    var rows = [];
+    var emptyStreak = 0;
+    for (var rowIndex = startRow; rowIndex < grid.length; rowIndex++) {
+      var row = grid[rowIndex] || [];
+      var item = {
+        date: String(row[colMap.date] || "").trim(),
+        client: String(row[colMap.client] || "").trim(),
+        code: String(row[colMap.code] || "").trim(),
+        name: String(row[colMap.name] || "").trim(),
+        qty: String(row[colMap.qty] || "").trim(),
+        price: String(row[colMap.price] || "").trim(),
+        amount: String(row[colMap.amount] || "").trim(),
+        note1: String(row[colMap.note1] || "").trim(),
+        note2: String(row[colMap.note2] || "").trim(),
+      };
+      var hasAny = ["date", "client", "code", "name", "qty", "price", "amount", "note1", "note2"].some(function (key) {
+        return !!item[key];
+      });
+      if (!hasAny) {
+        emptyStreak++;
+        if (emptyStreak >= 30 && rows.length) break;
+        continue;
+      }
+      emptyStreak = 0;
+      if (normalizeImportHeaderToken(item.date) === "월일" && normalizeImportHeaderToken(item.client) === "업체") {
+        continue;
+      }
+      rows.push(item);
+    }
+    return rows;
+  }
+
+  function appendImportedStatusRows(rows) {
+    var incoming = Array.isArray(rows) ? rows : [];
+    if (!incoming.length) return 0;
+    var start = Math.max(0, getLastUsedRowIndex(ST.rows) + 1);
+    var needed = start + incoming.length + 20;
+    var nextRows = normalizeSalesRows(ST.rows, Math.max(MIN_ROW_COUNT, needed));
+    incoming.forEach(function (row, index) {
+      nextRows[start + index] = Object.assign({}, nextRows[start + index] || {}, {
+        date: row.date || "",
+        client: row.client || "",
+        code: row.code || "",
+        name: row.name || "",
+        qty: row.qty || "",
+        price: row.price || "",
+        amount: row.amount || "",
+        note1: row.note1 || "",
+        note2: row.note2 || "",
+      });
+    });
+    ST.rows = nextRows;
+    ST.visibleRowsDirty = true;
+    return incoming.length;
+  }
+
   function applyFingerprintDataToOutsourceRows(parsedEmployees) {
     var rows = normalizeClosingOutsourceRows(getClosingOutsourceRows(closingState.attendanceMonth, closingState.outsourceVendor));
     var warnings = {};
@@ -7410,6 +7594,8 @@
           '<input type="text" class="field" id="status-filter-keyword" style="width:180px;height:36px" placeholder="검색어" />' +
           '<button type="button" class="soft-btn filter-apply-btn" id="btn-filter-apply">적용</button>' +
           '<button type="button" class="soft-btn filter-clear-btn" id="btn-filter-clear">해제</button>' +
+          '<input type="file" id="status-import-file" accept=".xls,.xml,.csv,.txt,.htm,.html" style="display:none" />' +
+          '<button type="button" class="soft-btn" id="btn-status-import">' + (isPurchaseTab ? "매입대장 가져오기" : "매출대장 가져오기") + '</button>' +
           '<div class="toolbar-segment" style="display:inline-flex;gap:6px;margin-left:4px">' +
           '<button type="button" class="soft-btn' + (activeClientType === "all" ? ' active-filter' : '') + '" id="btn-filter-client-all">전체</button>' +
           '<button type="button" class="soft-btn' + (activeClientType === "corporate" ? ' active-filter' : '') + '" id="btn-filter-client-corporate">법인</button>' +
@@ -7528,6 +7714,8 @@
         var sortAscBtn = document.getElementById("btn-sort-asc");
         var sortDescBtn = document.getElementById("btn-sort-desc");
         var sortResetBtn = document.getElementById("btn-sort-reset");
+        var importBtn = document.getElementById("btn-status-import");
+        var importFileInput = document.getElementById("status-import-file");
         function setStatusClientTypeFilter(type) {
           ST.filter.clientType = type;
           render();
@@ -7595,6 +7783,42 @@
         if (sendBtn && !isPurchaseTab) {
           sendBtn.addEventListener("click", function () {
             sendSelectedStatusRowsToWork();
+          });
+        }
+        if (importBtn && importFileInput) {
+          importBtn.addEventListener("click", function () {
+            importFileInput.click();
+          });
+          importFileInput.addEventListener("change", function () {
+            var file = importFileInput.files && importFileInput.files[0] ? importFileInput.files[0] : null;
+            if (!file) return;
+            readFileAsTextWithEncoding(file, "utf-8")
+              .then(function (text) {
+                var parsedRows = parseStatusRowsFromFileText(text);
+                if (parsedRows.length) return parsedRows;
+                return readFileAsTextWithEncoding(file, "euc-kr").then(function (eucText) {
+                  return parseStatusRowsFromFileText(eucText);
+                });
+              })
+              .then(function (parsedRows) {
+                if (!parsedRows || !parsedRows.length) {
+                  showAppToast("가져올 매출/매입 현황 행을 찾지 못했어요.", "warning");
+                  return;
+                }
+                var importedCount = appendImportedStatusRows(parsedRows);
+                refreshGridValues();
+                updateSelectionUI();
+                applyFilterUI();
+                scheduleLedgerDraftSave();
+                showAppToast((isPurchaseTab ? "매입현황" : "매출현황") + "으로 " + importedCount + "행을 가져왔어요.", "success");
+              })
+              .catch(function (err) {
+                console.error("현황 파일 가져오기 실패:", err);
+                showAppToast(err && err.message ? err.message : "현황 파일 가져오기에 실패했어요.", "warning");
+              })
+              .finally(function () {
+                importFileInput.value = "";
+              });
           });
         }
       } else if (!isPurchaseTab && state.subTab === "work") {
