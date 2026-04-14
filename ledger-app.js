@@ -113,6 +113,7 @@
     employeeRoster: [],
     employeeRowsByMonth: {},
     outsourceVendor: "leaders",
+    outsourceRosterByVendor: {},
     outsourceRowsByKey: {},
     outsourceWarningsByKey: {},
     outsourceMetaByKey: {},
@@ -571,6 +572,112 @@
     return normalized;
   }
 
+  function getClosingOutsourceRosterFromRows(rows) {
+    var normalized = normalizeClosingOutsourceRows(rows);
+    var roster = [];
+    for (var groupStart = 0; groupStart < normalized.length; groupStart += closingOutsourceMarkers.length) {
+      var header = normalized[groupStart] || {};
+      roster.push({
+        employee: String(header.employee || ""),
+        joinDate: String(header.joinDate || ""),
+      });
+    }
+    return roster.length ? roster : [{ employee: "", joinDate: "" }];
+  }
+
+  function buildClosingOutsourceRowsByRosterAndSource(roster, sourceRows) {
+    var source = normalizeClosingOutsourceRows(sourceRows);
+    var safeRoster = Array.isArray(roster) && roster.length ? roster : [{ employee: "", joinDate: "" }];
+    var rows = [];
+    for (var groupIndex = 0; groupIndex < safeRoster.length; groupIndex++) {
+      for (var markerIndex = 0; markerIndex < closingOutsourceMarkers.length; markerIndex++) {
+        var sourceRow = source[groupIndex * closingOutsourceMarkers.length + markerIndex] || {};
+        var profile = safeRoster[groupIndex] || {};
+        var next = emptyClosingOutsourceRow(
+          markerIndex === 0 ? String(profile.employee || "") : "",
+          closingOutsourceMarkers[markerIndex]
+        );
+        next.joinDate = markerIndex === 0 ? String(profile.joinDate || "") : "";
+        next.type = sourceRow.type != null ? String(sourceRow.type) : next.type;
+        closingAttendanceDayFields.forEach(function (field) {
+          next[field] = sourceRow[field] != null ? String(sourceRow[field]) : "";
+        });
+        next.payCalc = sourceRow.payCalc != null ? String(sourceRow.payCalc) : "";
+        next.bonus = sourceRow.bonus != null ? String(sourceRow.bonus) : "";
+        next.payAmount = sourceRow.payAmount != null ? String(sourceRow.payAmount) : "";
+        rows.push(next);
+      }
+    }
+    return rows;
+  }
+
+  function getClosingOutsourceRoster(vendor) {
+    ensureClosingAttendanceState();
+    var nextVendor = vendor || closingState.outsourceVendor || "leaders";
+    var roster = closingState.outsourceRosterByVendor[nextVendor];
+    if (!Array.isArray(roster) || !roster.length) {
+      var seedRows = getClosingOutsourceSeedRows(nextVendor, closingState.attendanceMonth);
+      roster = getClosingOutsourceRosterFromRows(seedRows || buildClosingOutsourceTemplateRows());
+      closingState.outsourceRosterByVendor[nextVendor] = roster;
+    }
+    return closingState.outsourceRosterByVendor[nextVendor];
+  }
+
+  function isSameClosingOutsourceRoster(a, b) {
+    if (!Array.isArray(a) || !Array.isArray(b)) return false;
+    if (a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      var left = a[i] || {};
+      var right = b[i] || {};
+      if (String(left.employee || "") !== String(right.employee || "")) return false;
+      if (String(left.joinDate || "") !== String(right.joinDate || "")) return false;
+    }
+    return true;
+  }
+
+  function getClosingOutsourceSeedRows(vendor, monthLabel) {
+    var source = closingState.outsourceRowsByKey && typeof closingState.outsourceRowsByKey === "object"
+      ? closingState.outsourceRowsByKey
+      : {};
+    var targetMonth = parseClosingMonthNumber(monthLabel);
+    if (targetMonth) {
+      for (var step = 1; step <= 11; step++) {
+        var month = ((targetMonth - step - 1 + 120) % 12) + 1;
+        var key = vendor + "::" + month + "월";
+        if (Array.isArray(source[key]) && source[key].length) return source[key];
+      }
+    }
+    var prefix = vendor + "::";
+    var keys = Object.keys(source);
+    for (var i = 0; i < keys.length; i++) {
+      var key = keys[i];
+      if (key.indexOf(prefix) !== 0) continue;
+      if (Array.isArray(source[key]) && source[key].length) return source[key];
+    }
+    return null;
+  }
+
+  function applyClosingOutsourceRosterToVendorAllMonths(vendor, roster) {
+    var nextVendor = vendor || closingState.outsourceVendor || "leaders";
+    var safeRoster = Array.isArray(roster) && roster.length ? roster : [{ employee: "", joinDate: "" }];
+    closingState.outsourceRosterByVendor[nextVendor] = safeRoster.slice();
+    var prefix = nextVendor + "::";
+    var keys = Object.keys(closingState.outsourceRowsByKey || {}).filter(function (key) {
+      return key.indexOf(prefix) === 0;
+    });
+    if (!keys.length) {
+      var key = getClosingOutsourceKey(closingState.attendanceMonth, nextVendor);
+      closingState.outsourceRowsByKey[key] = buildClosingOutsourceRowsByRosterAndSource(safeRoster, []);
+      return;
+    }
+    keys.forEach(function (key) {
+      closingState.outsourceRowsByKey[key] = buildClosingOutsourceRowsByRosterAndSource(
+        safeRoster,
+        closingState.outsourceRowsByKey[key]
+      );
+    });
+  }
+
   function cloneClosingRowsMap(rowsByMonth) {
     var source = rowsByMonth && typeof rowsByMonth === "object" ? rowsByMonth : {};
     var cloned = {};
@@ -601,6 +708,9 @@
     }
     if (!closingState.outsourceRowsByKey || typeof closingState.outsourceRowsByKey !== "object") {
       closingState.outsourceRowsByKey = {};
+    }
+    if (!closingState.outsourceRosterByVendor || typeof closingState.outsourceRosterByVendor !== "object") {
+      closingState.outsourceRosterByVendor = {};
     }
     if (!closingState.outsourceWarningsByKey || typeof closingState.outsourceWarningsByKey !== "object") {
       closingState.outsourceWarningsByKey = {};
@@ -671,19 +781,32 @@
   function getClosingOutsourceRows(monthLabel, vendor) {
     ensureClosingAttendanceState();
     var key = getClosingOutsourceKey(monthLabel, vendor);
+    var roster = getClosingOutsourceRoster(vendor);
     if (!closingState.outsourceRowsByKey[key]) {
-      closingState.outsourceRowsByKey[key] = buildClosingOutsourceTemplateRows();
+      closingState.outsourceRowsByKey[key] = buildClosingOutsourceRowsByRosterAndSource(roster, []);
     } else {
       closingState.outsourceRowsByKey[key] =
-        normalizeClosingOutsourceRows(closingState.outsourceRowsByKey[key]);
+        buildClosingOutsourceRowsByRosterAndSource(roster, closingState.outsourceRowsByKey[key]);
     }
     return closingState.outsourceRowsByKey[key];
   }
 
   function setClosingOutsourceRows(monthLabel, vendor, rows) {
     ensureClosingAttendanceState();
-    closingState.outsourceRowsByKey[getClosingOutsourceKey(monthLabel, vendor)] =
-      normalizeClosingOutsourceRows(rows);
+    var key = getClosingOutsourceKey(monthLabel, vendor);
+    var nextVendor = vendor || closingState.outsourceVendor || "leaders";
+    var normalized = normalizeClosingOutsourceRows(rows);
+    closingState.outsourceRowsByKey[key] = normalized;
+    var nextRoster = getClosingOutsourceRosterFromRows(normalized);
+    var currentRoster = getClosingOutsourceRoster(nextVendor);
+    if (!isSameClosingOutsourceRoster(nextRoster, currentRoster)) {
+      applyClosingOutsourceRosterToVendorAllMonths(nextVendor, nextRoster);
+    } else {
+      closingState.outsourceRowsByKey[key] = buildClosingOutsourceRowsByRosterAndSource(
+        currentRoster,
+        closingState.outsourceRowsByKey[key]
+      );
+    }
   }
 
   function getClosingOutsourceWarnings(monthLabel, vendor) {
@@ -1313,7 +1436,7 @@
       for (var markerIndex = 0; markerIndex < closingEmployeeMarkers.length; markerIndex++) {
         var row = block[markerIndex] || emptyClosingEmployeeRow("", closingEmployeeMarkers[markerIndex]);
         var rowCount = getClosingEmployeeCount(row, periodDays);
-        body += '<tr class="closing-matrix-row">';
+        body += '<tr class="closing-matrix-row' + (markerIndex === 0 ? ' closing-outsource-group-start' : '') + '">';
         if (markerIndex === 0) {
           body += '<th rowspan="' + closingEmployeeMarkers.length + '" class="closing-matrix-sticky left closing-matrix-name">';
           body += '<input type="text" class="closing-matrix-meta-input" data-employee-group="' + index + '" data-employee-meta="employee" value="' + escapeAttr(headerRow.employee || "") + '" placeholder="이름" />';
@@ -3128,6 +3251,22 @@
         employeeRoster: Array.isArray(closingState.employeeRoster) ? closingState.employeeRoster.slice() : [],
         employeeRowsByMonth: cloneClosingRowsMap(closingState.employeeRowsByMonth),
         outsourceVendor: closingState.outsourceVendor || "leaders",
+        outsourceRosterByVendor: (function () {
+          var source = closingState.outsourceRosterByVendor && typeof closingState.outsourceRosterByVendor === "object"
+            ? closingState.outsourceRosterByVendor
+            : {};
+          var cloned = {};
+          Object.keys(source).forEach(function (vendor) {
+            var roster = Array.isArray(source[vendor]) ? source[vendor] : [];
+            cloned[vendor] = roster.map(function (profile) {
+              return {
+                employee: String((profile && profile.employee) || ""),
+                joinDate: String((profile && profile.joinDate) || ""),
+              };
+            });
+          });
+          return cloned;
+        })(),
         outsourceRowsByKey: (function () {
           var source = closingState.outsourceRowsByKey && typeof closingState.outsourceRowsByKey === "object"
             ? closingState.outsourceRowsByKey
@@ -3293,6 +3432,20 @@
         : [];
       closingState.employeeRowsByMonth = cloneClosingRowsMap(closingData.employeeRowsByMonth);
       closingState.outsourceVendor = String(closingData.outsourceVendor || "leaders");
+      closingState.outsourceRosterByVendor = {};
+      if (closingData.outsourceRosterByVendor && typeof closingData.outsourceRosterByVendor === "object") {
+        Object.keys(closingData.outsourceRosterByVendor).forEach(function (vendor) {
+          var roster = Array.isArray(closingData.outsourceRosterByVendor[vendor])
+            ? closingData.outsourceRosterByVendor[vendor]
+            : [];
+          closingState.outsourceRosterByVendor[vendor] = roster.map(function (profile) {
+            return {
+              employee: String((profile && profile.employee) || ""),
+              joinDate: String((profile && profile.joinDate) || ""),
+            };
+          });
+        });
+      }
       closingState.outsourceRowsByKey = {};
       if (closingData.outsourceRowsByKey && typeof closingData.outsourceRowsByKey === "object") {
         Object.keys(closingData.outsourceRowsByKey).forEach(function (key) {
