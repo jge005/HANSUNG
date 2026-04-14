@@ -921,6 +921,71 @@
     return grouped.reduce(function (sum, value) { return sum + value; }, 0);
   }
 
+  var CLOSING_HOURLY_WAGE_2026_KR = 10320;
+
+  function isOutsourceAbsenceValue(value, hasWarning) {
+    var text = String(value || "").trim();
+    if (hasWarning && !text) return true;
+    if (!text) return true;
+    if (/결근/.test(text)) return true;
+    var num = parseCalcNumber(text);
+    if (num == null) return false;
+    return num <= 0;
+  }
+
+  function calculateClosingOutsourceWeeklyHolidayHours(block, warnings, groupStart, daysInMonth) {
+    var normalRow = block && block[0] ? block[0] : {};
+    var extraHours = 0;
+    for (var sunday = 1; sunday <= daysInMonth; sunday++) {
+      if (getClosingWeekdayLabel(sunday) !== "일") continue;
+      var weekStart = Math.max(1, sunday - 6);
+      var hasWeekday = false;
+      var absentInWeek = false;
+      for (var day = weekStart; day <= sunday - 1; day++) {
+        var weekday = getClosingWeekdayLabel(day);
+        if (weekday === "일") continue;
+        hasWeekday = true;
+        var field = "d" + day;
+        var warningKey = groupStart + ":" + field;
+        var hasWarning = !!(warnings && warnings[warningKey]);
+        if (isOutsourceAbsenceValue(normalRow[field], hasWarning)) {
+          absentInWeek = true;
+          break;
+        }
+      }
+      if (hasWeekday && !absentInWeek) {
+        extraHours += 8;
+      }
+    }
+    return extraHours;
+  }
+
+  function calculateClosingOutsourceDerived(block, warnings, groupStart, daysInMonth) {
+    var weeklyHolidayHours = calculateClosingOutsourceWeeklyHolidayHours(block, warnings, groupStart, daysInMonth);
+    var weeklyHolidayPay = weeklyHolidayHours * CLOSING_HOURLY_WAGE_2026_KR;
+    var derivedRows = [];
+    var groupTotal = 0;
+    for (var i = 0; i < closingOutsourceMarkers.length; i++) {
+      var row = block[i] || emptyClosingOutsourceRow("", closingOutsourceMarkers[i]);
+      var timeTotal = calculateClosingOutsourceTimeTotal(row);
+      var basePay = timeTotal * CLOSING_HOURLY_WAGE_2026_KR;
+      var bonusPay = i === 0 ? weeklyHolidayPay : 0;
+      var payAmount = basePay + bonusPay;
+      groupTotal += payAmount;
+      derivedRows.push({
+        timeTotal: timeTotal,
+        basePay: basePay,
+        bonusPay: bonusPay,
+        payAmount: payAmount,
+      });
+    }
+    return {
+      weeklyHolidayHours: weeklyHolidayHours,
+      rows: derivedRows,
+      groupTotal: groupTotal,
+    };
+  }
+
   function getClosingOutsourceMgmtRate(vendor) {
     return vendor === "ieum" ? 0.12 : 0.15;
   }
@@ -1560,12 +1625,7 @@
     var daysInMonth = getClosingDaysInMonth();
     var year = getClosingAttendanceYear();
     var monthNumber = getClosingAttendanceMonthNumber();
-    var wageTotal = calculateClosingOutsourceGrandTotal(rows);
-    var mgmtRate = getClosingOutsourceMgmtRate(closingState.outsourceVendor);
-    var mgmtFee = Math.round(wageTotal * mgmtRate);
-    var retirement = parseCalcNumber(meta.retirement) || 0;
-    var total = wageTotal + mgmtFee + retirement;
-    var totalVat = Math.round(total * 1.1);
+    var wageTotal = 0;
     var headDays = "";
     for (var day = 1; day <= daysInMonth; day++) {
       var weekday = getClosingWeekdayLabel(day);
@@ -1580,13 +1640,16 @@
       var block = rows.slice(index, index + closingOutsourceMarkers.length);
       var headerRow = block[0] || emptyClosingOutsourceRow("", "정상");
       if (!matchesClosingAttendanceSearch(headerRow.employee, headerRow.joinDate)) continue;
-      var groupTotal = 0;
-      block.forEach(function (row) {
-        groupTotal += parseCalcNumber(row && row.payAmount) || 0;
-      });
+      var derived = calculateClosingOutsourceDerived(block, warnings, index, daysInMonth);
+      wageTotal += derived.groupTotal;
       for (var markerIndex = 0; markerIndex < closingOutsourceMarkers.length; markerIndex++) {
         var row = block[markerIndex] || emptyClosingOutsourceRow("", closingOutsourceMarkers[markerIndex]);
-        var timeTotal = calculateClosingOutsourceTimeTotal(row);
+        var derivedRow = derived.rows[markerIndex] || {
+          timeTotal: calculateClosingOutsourceTimeTotal(row),
+          basePay: 0,
+          bonusPay: 0,
+          payAmount: 0,
+        };
         body += '<tr class="closing-employee-matrix-row' + (markerIndex === 0 ? ' closing-employee-group-start' : '') + '">';
         if (markerIndex === 0) {
           body += '<th rowspan="' + closingOutsourceMarkers.length + '" class="closing-matrix-sticky left closing-matrix-name">';
@@ -1608,24 +1671,29 @@
           body += '<input type="text" class="closing-matrix-input" data-outsource-row="' + (index + markerIndex) + '" data-outsource-field="' + field + '" value="' + escapeAttr(row[field] || "") + '" />';
           body += '</td>';
         }
-        body += '<td class="closing-matrix-summary center">' + escapeHtml(formatDisplayNumber(timeTotal || 0)) + '</td>';
-        body += '<td class="closing-matrix-summary"><input type="text" class="closing-matrix-input right" data-outsource-row="' + (index + markerIndex) + '" data-outsource-field="payCalc" value="' + escapeAttr(row.payCalc || "") + '" /></td>';
-        body += '<td class="closing-matrix-summary"><input type="text" class="closing-matrix-input right" data-outsource-row="' + (index + markerIndex) + '" data-outsource-field="bonus" value="' + escapeAttr(row.bonus || "") + '" /></td>';
-        body += '<td class="closing-matrix-summary"><input type="text" class="closing-matrix-input right" data-outsource-row="' + (index + markerIndex) + '" data-outsource-field="payAmount" value="' + escapeAttr(row.payAmount || "") + '" /></td>';
+        body += '<td class="closing-matrix-summary center">' + escapeHtml(formatDisplayNumber(derivedRow.timeTotal || 0)) + '</td>';
+        body += '<td class="closing-matrix-summary right">' + escapeHtml(formatDisplayNumber(derivedRow.basePay || 0)) + '</td>';
+        body += '<td class="closing-matrix-summary right">' + escapeHtml(formatDisplayNumber(derivedRow.bonusPay || 0)) + '</td>';
+        body += '<td class="closing-matrix-summary right">' + escapeHtml(formatDisplayNumber(derivedRow.payAmount || 0)) + '</td>';
         if (markerIndex === 0) {
           body += '<td rowspan="' + closingOutsourceMarkers.length + '" class="closing-matrix-total right">';
-          body += '<div>' + escapeHtml(formatDisplayNumber(groupTotal || 0)) + '</div>';
+          body += '<div>' + escapeHtml(formatDisplayNumber(derived.groupTotal || 0)) + '</div>';
           body += '<button type="button" class="closing-remove-mini" data-remove-outsource-group="' + index + '">-</button>';
           body += '</td>';
         }
         body += '</tr>';
       }
     }
+    var mgmtRate = getClosingOutsourceMgmtRate(closingState.outsourceVendor);
+    var mgmtFee = Math.round(wageTotal * mgmtRate);
+    var retirement = parseCalcNumber(meta.retirement) || 0;
+    var total = wageTotal + mgmtFee + retirement;
+    var totalVat = Math.round(total * 1.1);
     return (
       '<div class="closing-matrix-wrap">' +
         '<div class="closing-matrix-summarybar">' +
           '<div class="closing-matrix-badge">' + escapeHtml(year + "년 " + monthNumber + "월 " + getClosingOutsourceVendorLabel() + " 급여 청구내역") + '</div>' +
-          '<div class="closing-matrix-badge strong">총 급여지급액 ' + escapeHtml(formatClosingCurrency(wageTotal)) + '</div>' +
+          '<div class="closing-matrix-badge strong">총 급여지급액 ' + escapeHtml(formatClosingCurrency(wageTotal)) + ' <span class="muted">(시급 ' + escapeHtml(formatDisplayNumber(CLOSING_HOURLY_WAGE_2026_KR)) + '원)</span></div>' +
           '<div class="closing-matrix-badge">관리비(' + escapeHtml(String(Math.round(mgmtRate * 100))) + '%) ' + escapeHtml(formatClosingCurrency(mgmtFee)) + '</div>' +
           '<div class="closing-matrix-badge">퇴직금 <input type="text" class="closing-inline-input" style="min-width:110px;height:30px" id="closing-outsource-retirement" value="' + escapeAttr(meta.retirement || "") + '" /></div>' +
           '<div class="closing-matrix-badge">총 금액 ' + escapeHtml(formatClosingCurrency(total)) + '</div>' +
