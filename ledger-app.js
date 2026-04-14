@@ -929,34 +929,86 @@
     return value;
   }
 
-  function isOutsourceAbsenceValue(value, hasWarning) {
+  function isOutsourceAbsenceValue(value) {
     var text = String(value || "").trim();
-    if (hasWarning && !text) return true;
-    if (!text) return true;
+    if (!text) return false;
     if (/결근/.test(text)) return true;
     var num = parseCalcNumber(text);
     if (num == null) return false;
     return num <= 0;
   }
 
+  function getWeekdayLabelByDate(year, month, day) {
+    var labels = ["일", "월", "화", "수", "목", "금", "토"];
+    return labels[new Date(year, month - 1, day).getDay()];
+  }
+
+  function getPreviousClosingMonthInfo() {
+    var year = getClosingAttendanceYear();
+    var month = getClosingAttendanceMonthNumber();
+    var prevMonth = month === 1 ? 12 : month - 1;
+    var prevYear = month === 1 ? year - 1 : year;
+    var prevDays = new Date(prevYear, prevMonth, 0).getDate();
+    return {
+      year: prevYear,
+      month: prevMonth,
+      monthLabel: prevMonth + "월",
+      daysInMonth: prevDays,
+    };
+  }
+
+  function findOutsourceNormalRowByEmployee(monthLabel, vendor, employeeName) {
+    var rows = normalizeClosingOutsourceRows(getClosingOutsourceRows(monthLabel, vendor));
+    var token = normalizeClosingSearchText(employeeName || "");
+    if (!token) return null;
+    for (var i = 0; i < rows.length; i += closingOutsourceMarkers.length) {
+      var name = normalizeClosingSearchText(rows[i] && rows[i].employee);
+      if (!name) continue;
+      if (name === token || name.indexOf(token) >= 0 || token.indexOf(name) >= 0) {
+        return rows[i];
+      }
+    }
+    return null;
+  }
+
+  function getOutsourceNormalCellValueForWeekly(currentNormalRow, previousNormalRow, dayInCurrentMonth, previousMonthInfo) {
+    if (dayInCurrentMonth >= 1) {
+      return currentNormalRow ? currentNormalRow["d" + dayInCurrentMonth] : "";
+    }
+    var prevDay = previousMonthInfo.daysInMonth + dayInCurrentMonth;
+    if (!previousNormalRow || prevDay < 1 || prevDay > previousMonthInfo.daysInMonth) return "";
+    return previousNormalRow["d" + prevDay];
+  }
+
   function calculateClosingOutsourceWeeklyHolidayHours(block, warnings, groupStart, daysInMonth) {
     var normalRow = block && block[0] ? block[0] : {};
+    var employeeName = String(normalRow.employee || "");
+    var previousMonthInfo = getPreviousClosingMonthInfo();
+    var previousNormalRow = findOutsourceNormalRowByEmployee(
+      previousMonthInfo.monthLabel,
+      closingState.outsourceVendor,
+      employeeName
+    );
     var dayLimit = Math.min(daysInMonth, getClosingWarningDayLimit());
     var extraHours = 0;
     for (var sunday = 1; sunday <= dayLimit; sunday++) {
       if (getClosingWeekdayLabel(sunday) !== "일") continue;
-      var weekStart = Math.max(1, sunday - 6);
       var hasWeekday = false;
       var absentInWeek = false;
-      for (var day = weekStart; day <= sunday - 1; day++) {
+      for (var day = sunday - 6; day <= sunday - 1; day++) {
         if (day > dayLimit) break;
-        var weekday = getClosingWeekdayLabel(day);
+        var weekday = day >= 1
+          ? getClosingWeekdayLabel(day)
+          : getWeekdayLabelByDate(previousMonthInfo.year, previousMonthInfo.month, previousMonthInfo.daysInMonth + day);
         if (weekday === "일") continue;
         hasWeekday = true;
-        var field = "d" + day;
-        var warningKey = groupStart + ":" + field;
-        var hasWarning = !!(warnings && warnings[warningKey]);
-        if (isOutsourceAbsenceValue(normalRow[field], hasWarning)) {
+        var value = getOutsourceNormalCellValueForWeekly(
+          normalRow,
+          previousNormalRow,
+          day,
+          previousMonthInfo
+        );
+        if (isOutsourceAbsenceValue(value)) {
           absentInWeek = true;
           break;
         }
@@ -975,9 +1027,7 @@
       var weekday = getClosingWeekdayLabel(day);
       if (weekday === "일") continue;
       var field = "d" + day;
-      var warningKey = groupStart + ":" + field;
-      var hasWarning = !!(warnings && warnings[warningKey]);
-      if (isOutsourceAbsenceValue(normalRow[field], hasWarning)) {
+      if (isOutsourceAbsenceValue(normalRow[field])) {
         return 0;
       }
     }
