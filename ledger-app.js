@@ -1818,34 +1818,253 @@
     return String(value == null ? "" : value).trim();
   }
 
-  function parseSalesCloseRowsFromWorkbookBuffer(arrayBuffer) {
-    var grid = getWorkbookFirstSheetGridFromBuffer(arrayBuffer);
+  function normalizeSalesCloseHeaderToken(value) {
+    return String(value == null ? "" : value)
+      .replace(/\s+/g, "")
+      .replace(/[().]/g, "")
+      .toUpperCase();
+  }
+
+  function findSalesCloseHeaderMapFromGrid(grid) {
+    var safeGrid = Array.isArray(grid) ? grid : [];
+    for (var r = 0; r < safeGrid.length; r++) {
+      var row = safeGrid[r] || [];
+      var cols = {
+        no: -1,
+        division: -1,
+        company: -1,
+        closeDate: -1,
+        amount: -1,
+        mailSent: -1,
+        mailReply: -1,
+        issueConfirm: -1,
+        note: -1,
+      };
+      var score = 0;
+      for (var c = 0; c < row.length; c++) {
+        var token = normalizeSalesCloseHeaderToken(row[c]);
+        if (!token) continue;
+        if (cols.no < 0 && (token === "NO" || token === "NO." || token.indexOf("NO") === 0)) {
+          cols.no = c;
+          score++;
+          continue;
+        }
+        if (cols.division < 0 && (token === "구분" || token.indexOf("구분") === 0)) {
+          cols.division = c;
+          score++;
+          continue;
+        }
+        if (cols.company < 0 && token.indexOf("업체명") >= 0) {
+          cols.company = c;
+          score++;
+          continue;
+        }
+        if (cols.closeDate < 0 && (token.indexOf("마감일") >= 0 || token.indexOf("발일/발행") >= 0 || token.indexOf("발일발행") >= 0)) {
+          cols.closeDate = c;
+          score++;
+          continue;
+        }
+        if (cols.amount < 0 && token.indexOf("매출액") >= 0) {
+          cols.amount = c;
+          score++;
+          continue;
+        }
+        if (cols.mailSent < 0 && token.indexOf("메일발송") >= 0) {
+          cols.mailSent = c;
+          score++;
+          continue;
+        }
+        if (cols.mailReply < 0 && token.indexOf("회신메일") >= 0) {
+          cols.mailReply = c;
+          score++;
+          continue;
+        }
+        if (cols.issueConfirm < 0 && token.indexOf("발행확인") >= 0) {
+          cols.issueConfirm = c;
+          score++;
+          continue;
+        }
+        if (cols.note < 0 && token.indexOf("비고") >= 0) {
+          cols.note = c;
+          score++;
+          continue;
+        }
+      }
+      if (cols.no >= 0 && cols.company >= 0 && cols.amount >= 0 && cols.mailSent >= 0 && cols.mailReply >= 0 && cols.issueConfirm >= 0 && score >= 6) {
+        return { rowIndex: r, cols: cols };
+      }
+    }
+    return null;
+  }
+
+  function readWorkbookFromArrayBuffer(arrayBuffer) {
+    if (!(window.XLSX && window.XLSX.read && window.XLSX.utils && window.XLSX.utils.sheet_to_json)) {
+      throw new Error("엑셀 엔진을 불러오지 못했습니다.");
+    }
+    return window.XLSX.read(arrayBuffer, { type: "array", cellDates: false, raw: false });
+  }
+
+  function getWorkbookFirstSheetName(workbook) {
+    var names = workbook && workbook.SheetNames ? workbook.SheetNames : [];
+    return names.length ? names[0] : "";
+  }
+
+  function getWorkbookSheetGrid(workbook, sheetName) {
+    var name = sheetName || getWorkbookFirstSheetName(workbook);
+    if (!name || !workbook || !workbook.Sheets || !workbook.Sheets[name]) return [];
+    return window.XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, raw: false, defval: "" });
+  }
+
+  function getWorkbookSheetHtml(workbook, sheetName) {
+    var name = sheetName || getWorkbookFirstSheetName(workbook);
+    if (!name || !workbook || !workbook.Sheets || !workbook.Sheets[name]) return "";
+    if (!(window.XLSX && window.XLSX.utils && window.XLSX.utils.sheet_to_html)) {
+      throw new Error("엑셀 미리보기 엔진을 불러오지 못했습니다.");
+    }
+    return window.XLSX.utils.sheet_to_html(workbook.Sheets[name], { editable: false });
+  }
+
+  function inferWorkbookBookType(filename) {
+    var name = String(filename || "").toLowerCase();
+    if (/\.xls$/i.test(name)) return "xls";
+    return "xlsx";
+  }
+
+  function buildSalesCloseRowsAndRefsFromGrid(grid, headerMap) {
     var rows = buildClosingSalesCloseSeedRows();
-    var lastDivision = "";
+    var rowRefsByNo = {};
     var imported = 0;
-    for (var i = 0; i < grid.length; i++) {
-      var row = grid[i] || [];
-      var noText = toTextCell(row[0]);
+    var lastDivision = "";
+    var cols = headerMap && headerMap.cols ? headerMap.cols : {};
+    for (var r = (headerMap ? headerMap.rowIndex + 1 : 0); r < grid.length; r++) {
+      var row = grid[r] || [];
+      var noText = toTextCell(cols.no >= 0 ? row[cols.no] : "");
       if (!/^\d+$/.test(noText)) continue;
       var no = Number(noText);
       if (!isFinite(no) || no < 1 || no > closingCloseTableRowCount) continue;
       var target = rows[no - 1] || emptyClosingSalesCloseRow(String(no));
-      var division = toTextCell(row[1]);
+      var division = cols.division >= 0 ? toTextCell(row[cols.division]) : "";
       if (division) lastDivision = division;
       target.no = String(no);
       target.division = division || lastDivision || target.division || "";
-      target.company = toTextCell(row[2]);
-      target.closeDate = toTextCell(row[3]);
-      target.amount = toTextCell(row[4]);
-      target.mailSent = toTextCell(row[5]);
-      target.mailReply = toTextCell(row[6]);
-      target.issueConfirm = toTextCell(row[7]);
-      target.note = toTextCell(row[8]);
+      target.company = cols.company >= 0 ? toTextCell(row[cols.company]) : "";
+      target.closeDate = cols.closeDate >= 0 ? toTextCell(row[cols.closeDate]) : "";
+      target.amount = cols.amount >= 0 ? toTextCell(row[cols.amount]) : "";
+      target.mailSent = cols.mailSent >= 0 ? toTextCell(row[cols.mailSent]) : "";
+      target.mailReply = cols.mailReply >= 0 ? toTextCell(row[cols.mailReply]) : "";
+      target.issueConfirm = cols.issueConfirm >= 0 ? toTextCell(row[cols.issueConfirm]) : "";
+      target.note = cols.note >= 0 ? toTextCell(row[cols.note]) : "";
       rows[no - 1] = target;
+      rowRefsByNo[String(no)] = {
+        no: String(no),
+        rowIndex: r,
+        refs: {
+          amount: cols.amount >= 0 ? window.XLSX.utils.encode_cell({ r: r, c: cols.amount }) : "",
+          mailSent: cols.mailSent >= 0 ? window.XLSX.utils.encode_cell({ r: r, c: cols.mailSent }) : "",
+          mailReply: cols.mailReply >= 0 ? window.XLSX.utils.encode_cell({ r: r, c: cols.mailReply }) : "",
+          issueConfirm: cols.issueConfirm >= 0 ? window.XLSX.utils.encode_cell({ r: r, c: cols.issueConfirm }) : "",
+        },
+      };
       imported++;
     }
     if (!imported) throw new Error("매출 마감 양식에서 읽을 행을 찾지 못했습니다.");
-    return normalizeClosingSalesCloseRows(rows);
+    return {
+      rows: normalizeClosingSalesCloseRows(rows),
+      rowRefsByNo: rowRefsByNo,
+    };
+  }
+
+  function analyzeSalesCloseWorkbookBuffer(arrayBuffer) {
+    var workbook = readWorkbookFromArrayBuffer(arrayBuffer);
+    var sheetName = getWorkbookFirstSheetName(workbook);
+    if (!sheetName) throw new Error("엑셀 시트를 찾지 못했습니다.");
+    var grid = getWorkbookSheetGrid(workbook, sheetName);
+    var headerMap = findSalesCloseHeaderMapFromGrid(grid);
+    if (!headerMap) throw new Error("매출 마감 헤더(NO/업체명/매출액/메일발송/회신메일/발행확인)를 찾지 못했습니다.");
+    var parsed = buildSalesCloseRowsAndRefsFromGrid(grid, headerMap);
+    return {
+      workbook: workbook,
+      sheetName: sheetName,
+      previewHtml: getWorkbookSheetHtml(workbook, sheetName),
+      rows: parsed.rows,
+      rowRefsByNo: parsed.rowRefsByNo,
+      headerMap: headerMap,
+    };
+  }
+
+  function setSalesCloseSyncMeta(meta) {
+    closingExcelSync.sales = closingExcelSync.sales || { handle: null, name: "", previewHtml: "" };
+    closingExcelSync.sales.syncMeta = meta || null;
+  }
+
+  function setSheetCellValueForSalesClose(sheet, ref, value, preferNumber) {
+    if (!sheet || !ref) return;
+    var text = String(value == null ? "" : value).trim();
+    var cell = sheet[ref] || {};
+    if (!text) {
+      cell.t = "s";
+      cell.v = "";
+      delete cell.w;
+      sheet[ref] = cell;
+      return;
+    }
+    if (preferNumber) {
+      var numeric = Number(text.replace(/,/g, ""));
+      if (isFinite(numeric)) {
+        cell.t = "n";
+        cell.v = numeric;
+        delete cell.w;
+        sheet[ref] = cell;
+        return;
+      }
+    }
+    cell.t = "s";
+    cell.v = text;
+    delete cell.w;
+    sheet[ref] = cell;
+  }
+
+  async function writeSalesCloseFieldToLinkedExcel(no, field, value) {
+    var allowed = { amount: true, mailSent: true, mailReply: true, issueConfirm: true };
+    if (!allowed[field]) throw new Error("지원하지 않는 편집 항목입니다.");
+    var slot = closingExcelSync.sales || {};
+    if (!slot.handle) throw new Error("먼저 '엑셀 연결'로 원본 파일을 연결해주세요.");
+    var file = await slot.handle.getFile();
+    var sourceBuffer = await file.arrayBuffer();
+    var analysis = analyzeSalesCloseWorkbookBuffer(sourceBuffer);
+    var rowInfo = analysis.rowRefsByNo[String(no)];
+    var ref = rowInfo && rowInfo.refs ? rowInfo.refs[field] : "";
+    if (!ref) throw new Error("선택한 행의 원본 셀 좌표를 찾지 못했습니다.");
+    var sheet = analysis.workbook.Sheets[analysis.sheetName];
+    setSheetCellValueForSalesClose(sheet, ref, value, field === "amount");
+    var wbBuffer = window.XLSX.write(analysis.workbook, {
+      bookType: inferWorkbookBookType(slot.name || file.name || ""),
+      type: "array",
+      cellStyles: true,
+    });
+    var writable = await slot.handle.createWritable();
+    await writable.write(wbBuffer);
+    await writable.close();
+    var refreshed = analyzeSalesCloseWorkbookBuffer(wbBuffer);
+    closingExcelSync.sales.previewHtml = refreshed.previewHtml;
+    setSalesCloseSyncMeta({
+      sheetName: refreshed.sheetName,
+      rowRefsByNo: refreshed.rowRefsByNo,
+      headerMap: refreshed.headerMap,
+    });
+    setClosingSalesCloseRows(closingState.attendanceMonth, refreshed.rows);
+    scheduleLedgerDraftSave();
+    return true;
+  }
+
+  function parseSalesCloseRowsFromWorkbookBuffer(arrayBuffer) {
+    var analysis = analyzeSalesCloseWorkbookBuffer(arrayBuffer);
+    setSalesCloseSyncMeta({
+      sheetName: analysis.sheetName,
+      rowRefsByNo: analysis.rowRefsByNo,
+      headerMap: analysis.headerMap,
+    });
+    return analysis.rows;
   }
 
   function parsePurchaseCloseRowsFromWorkbookBuffer(arrayBuffer) {
@@ -1969,12 +2188,18 @@
     if (!handle) throw new Error("먼저 엑셀 연결 버튼으로 파일을 선택해주세요.");
     var file = await handle.getFile();
     var buffer = await file.arrayBuffer();
-    closingExcelSync[kind].previewHtml = getWorkbookFirstSheetHtmlFromBuffer(buffer);
     if (kind === "sales") {
-      var salesRows = parseSalesCloseRowsFromWorkbookBuffer(buffer);
-      setClosingSalesCloseRows(closingState.attendanceMonth, salesRows);
-      return salesRows.length;
+      var salesAnalysis = analyzeSalesCloseWorkbookBuffer(buffer);
+      closingExcelSync.sales.previewHtml = salesAnalysis.previewHtml;
+      setSalesCloseSyncMeta({
+        sheetName: salesAnalysis.sheetName,
+        rowRefsByNo: salesAnalysis.rowRefsByNo,
+        headerMap: salesAnalysis.headerMap,
+      });
+      setClosingSalesCloseRows(closingState.attendanceMonth, salesAnalysis.rows);
+      return salesAnalysis.rows.length;
     }
+    closingExcelSync[kind].previewHtml = getWorkbookFirstSheetHtmlFromBuffer(buffer);
     var purchaseRows = parsePurchaseCloseRowsFromWorkbookBuffer(buffer);
     setClosingPurchaseCloseRows(closingState.attendanceMonth, purchaseRows);
     return purchaseRows.length;
@@ -1984,6 +2209,41 @@
     var slot = closingExcelSync[kind] || {};
     var handle = slot.handle;
     if (!handle) throw new Error("먼저 엑셀 연결 버튼으로 파일을 선택해주세요.");
+    if (kind === "sales") {
+      var sourceFile = await handle.getFile();
+      var sourceBuffer = await sourceFile.arrayBuffer();
+      var analysis = analyzeSalesCloseWorkbookBuffer(sourceBuffer);
+      var rowsForWrite = normalizeClosingSalesCloseRows(getClosingSalesCloseRows(closingState.attendanceMonth));
+      for (var i = 0; i < rowsForWrite.length; i++) {
+        var row = rowsForWrite[i] || {};
+        var no = String(Number(row.no || (i + 1)));
+        if (!/^\d+$/.test(no)) continue;
+        var rowInfo = analysis.rowRefsByNo[no];
+        if (!rowInfo || !rowInfo.refs) continue;
+        setSheetCellValueForSalesClose(analysis.workbook.Sheets[analysis.sheetName], rowInfo.refs.amount, row.amount || "", true);
+        setSheetCellValueForSalesClose(analysis.workbook.Sheets[analysis.sheetName], rowInfo.refs.mailSent, row.mailSent || "", false);
+        setSheetCellValueForSalesClose(analysis.workbook.Sheets[analysis.sheetName], rowInfo.refs.mailReply, row.mailReply || "", false);
+        setSheetCellValueForSalesClose(analysis.workbook.Sheets[analysis.sheetName], rowInfo.refs.issueConfirm, row.issueConfirm || "", false);
+      }
+      var salesBuffer = window.XLSX.write(analysis.workbook, {
+        bookType: inferWorkbookBookType(slot.name || sourceFile.name || ""),
+        type: "array",
+        cellStyles: true,
+      });
+      var salesWritable = await handle.createWritable();
+      await salesWritable.write(salesBuffer);
+      await salesWritable.close();
+      var refreshedSales = analyzeSalesCloseWorkbookBuffer(salesBuffer);
+      closingExcelSync.sales.previewHtml = refreshedSales.previewHtml;
+      setSalesCloseSyncMeta({
+        sheetName: refreshedSales.sheetName,
+        rowRefsByNo: refreshedSales.rowRefsByNo,
+        headerMap: refreshedSales.headerMap,
+      });
+      setClosingSalesCloseRows(closingState.attendanceMonth, refreshedSales.rows);
+      scheduleLedgerDraftSave();
+      return refreshedSales.rows.length;
+    }
     var rows = kind === "sales"
       ? normalizeClosingSalesCloseRows(getClosingSalesCloseRows(closingState.attendanceMonth))
       : normalizeClosingPurchaseCloseRows(getClosingPurchaseCloseRows(closingState.attendanceMonth));
@@ -8231,6 +8491,134 @@
     return spans;
   }
 
+  function buildTableCellMatrix(tableEl) {
+    var matrix = [];
+    var rows = tableEl && tableEl.rows ? Array.prototype.slice.call(tableEl.rows) : [];
+    for (var r = 0; r < rows.length; r++) {
+      var tr = rows[r];
+      if (!matrix[r]) matrix[r] = [];
+      var c = 0;
+      var cells = tr && tr.cells ? Array.prototype.slice.call(tr.cells) : [];
+      for (var i = 0; i < cells.length; i++) {
+        var cell = cells[i];
+        while (matrix[r][c]) c++;
+        var rowSpan = Math.max(1, Number(cell.getAttribute("rowspan")) || cell.rowSpan || 1);
+        var colSpan = Math.max(1, Number(cell.getAttribute("colspan")) || cell.colSpan || 1);
+        for (var rr = r; rr < r + rowSpan; rr++) {
+          if (!matrix[rr]) matrix[rr] = [];
+          for (var cc = c; cc < c + colSpan; cc++) {
+            matrix[rr][cc] = cell;
+          }
+        }
+        c += colSpan;
+      }
+    }
+    return matrix;
+  }
+
+  function findSalesCloseHeaderMapFromTableMatrix(matrix) {
+    var grid = [];
+    for (var r = 0; r < matrix.length; r++) {
+      var row = [];
+      var cols = matrix[r] || [];
+      for (var c = 0; c < cols.length; c++) {
+        var cell = cols[c];
+        row[c] = cell ? toTextCell(cell.textContent) : "";
+      }
+      grid.push(row);
+    }
+    return findSalesCloseHeaderMapFromGrid(grid);
+  }
+
+  function bindClosingSalesPreviewDirectEdit(appRoot) {
+    var host = appRoot ? appRoot.querySelector(".closing-excel-preview-host") : null;
+    if (!host) return;
+    var table = host.querySelector("table");
+    if (!table) return;
+    var syncMeta = closingExcelSync.sales && closingExcelSync.sales.syncMeta ? closingExcelSync.sales.syncMeta : null;
+    if (!syncMeta || !syncMeta.rowRefsByNo) return;
+    if (!(closingExcelSync.sales && closingExcelSync.sales.handle)) return;
+    var matrix = buildTableCellMatrix(table);
+    var headerMap = findSalesCloseHeaderMapFromTableMatrix(matrix);
+    if (!headerMap || !headerMap.cols) return;
+    var amountCol = headerMap.cols.amount;
+    var mailSentCol = headerMap.cols.mailSent;
+    var mailReplyCol = headerMap.cols.mailReply;
+    var issueConfirmCol = headerMap.cols.issueConfirm;
+    var noCol = headerMap.cols.no;
+    var colToField = {};
+    colToField[amountCol] = "amount";
+    colToField[mailSentCol] = "mailSent";
+    colToField[mailReplyCol] = "mailReply";
+    colToField[issueConfirmCol] = "issueConfirm";
+    var editableCols = [amountCol, mailSentCol, mailReplyCol, issueConfirmCol].filter(function (col, idx, arr) {
+      return col >= 0 && arr.indexOf(col) === idx;
+    });
+    if (!editableCols.length || noCol < 0) return;
+
+    for (var r = headerMap.rowIndex + 1; r < matrix.length; r++) {
+      var rowCells = matrix[r] || [];
+      var noCell = rowCells[noCol];
+      var noText = toTextCell(noCell ? noCell.textContent : "");
+      if (!/^\d+$/.test(noText)) continue;
+      var no = String(Number(noText));
+      var rowRefInfo = syncMeta.rowRefsByNo[no];
+      if (!rowRefInfo || !rowRefInfo.refs) continue;
+      for (var ec = 0; ec < editableCols.length; ec++) {
+        var col = editableCols[ec];
+        var field = colToField[col] || "";
+        var targetCell = rowCells[col];
+        if (!targetCell || !field || !rowRefInfo.refs[field]) continue;
+        if (targetCell.getAttribute("data-sales-live-edit") === "1") continue;
+        targetCell.setAttribute("data-sales-live-edit", "1");
+        targetCell.setAttribute("data-sales-live-no", no);
+        targetCell.setAttribute("data-sales-live-field", field);
+        targetCell.setAttribute("contenteditable", "true");
+        targetCell.classList.add("sales-live-editable");
+        targetCell.dataset.lastValue = toTextCell(targetCell.textContent);
+        targetCell.addEventListener("keydown", function (e) {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            e.stopPropagation();
+            e.currentTarget.blur();
+          }
+        });
+        targetCell.addEventListener("paste", function (e) {
+          e.preventDefault();
+          var text = "";
+          if (e.clipboardData && e.clipboardData.getData) {
+            text = e.clipboardData.getData("text/plain") || "";
+          } else if (window.clipboardData && window.clipboardData.getData) {
+            text = window.clipboardData.getData("Text") || "";
+          }
+          document.execCommand("insertText", false, String(text).replace(/\r?\n/g, " "));
+        });
+        targetCell.addEventListener("blur", function (e) {
+          var cell = e.currentTarget;
+          if (!cell) return;
+          if (cell.dataset.saving === "1") return;
+          var nextValue = toTextCell(cell.textContent);
+          var prevValue = String(cell.dataset.lastValue || "");
+          if (nextValue === prevValue) return;
+          var targetNo = String(cell.getAttribute("data-sales-live-no") || "");
+          var targetField = String(cell.getAttribute("data-sales-live-field") || "");
+          cell.dataset.saving = "1";
+          writeSalesCloseFieldToLinkedExcel(targetNo, targetField, nextValue)
+            .then(function () {
+              cell.dataset.lastValue = nextValue;
+            })
+            .catch(function (err) {
+              cell.textContent = prevValue;
+              showAppToast(err && err.message ? err.message : "원본 엑셀 반영에 실패했어요.", "warning");
+            })
+            .finally(function () {
+              cell.dataset.saving = "0";
+            });
+        });
+      }
+    }
+  }
+
   function renderClosingSalesCloseTab() {
     ensureClosingAttendanceState();
     var monthOptions = getClosingMonthOptions().map(function (option) {
@@ -9352,9 +9740,14 @@
             if (!file) return;
             readFileAsArrayBuffer(file)
               .then(function (buffer) {
-                closingExcelSync.sales.previewHtml = getWorkbookFirstSheetHtmlFromBuffer(buffer);
-                var rows = parseSalesCloseRowsFromWorkbookBuffer(buffer);
-                setClosingSalesCloseRows(closingState.attendanceMonth, rows);
+                var analysis = analyzeSalesCloseWorkbookBuffer(buffer);
+                closingExcelSync.sales.previewHtml = analysis.previewHtml;
+                setSalesCloseSyncMeta({
+                  sheetName: analysis.sheetName,
+                  rowRefsByNo: analysis.rowRefsByNo,
+                  headerMap: analysis.headerMap,
+                });
+                setClosingSalesCloseRows(closingState.attendanceMonth, analysis.rows);
                 scheduleLedgerDraftSave();
                 render();
                 showAppToast("매출 마감 엑셀을 가져왔어요.", "success");
@@ -9404,6 +9797,7 @@
             }
           });
         }
+        bindClosingSalesPreviewDirectEdit(app);
       } else if (state.closingSubTab === "purchaseclose") {
         var closeMonthSelectForPurchase = document.getElementById("closing-close-month");
         if (closeMonthSelectForPurchase) {
