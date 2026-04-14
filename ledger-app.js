@@ -1049,12 +1049,13 @@
     for (var i = 0; i < closingOutsourceMarkers.length; i++) {
       var row = block[i] || emptyClosingOutsourceRow("", closingOutsourceMarkers[i]);
       var timeTotal = calculateClosingOutsourceTimeTotal(row);
-      var basePay = timeTotal * hourlyWage;
-      var bonusPay = i === 0 ? (weeklyHolidayPay + perfectAttendancePay) : 0;
+      var paidHours = timeTotal + (i === 0 ? weeklyHolidayHours : 0);
+      var basePay = paidHours * hourlyWage;
+      var bonusPay = i === 0 ? perfectAttendancePay : 0;
       var payAmount = basePay + bonusPay;
       groupTotal += payAmount;
       derivedRows.push({
-        timeTotal: timeTotal,
+        timeTotal: paidHours,
         basePay: basePay,
         bonusPay: bonusPay,
         payAmount: payAmount,
@@ -1062,6 +1063,7 @@
     }
     return {
       weeklyHolidayHours: weeklyHolidayHours,
+      weeklyHolidayPay: weeklyHolidayPay,
       perfectAttendancePay: perfectAttendancePay,
       rows: derivedRows,
       groupTotal: groupTotal,
@@ -4676,6 +4678,23 @@
       rows.sort(function (a, b) {
         var av = a ? a[colKey] : "";
         var bv = b ? b[colKey] : "";
+        if (colKey === "date") {
+          var ad = parseSalesMonthDay(av);
+          var bd = parseSalesMonthDay(bv);
+          var adValue = ad ? ad.month * 100 + ad.day : null;
+          var bdValue = bd ? bd.month * 100 + bd.day : null;
+          if (adValue != null && bdValue != null) {
+            var dateResult = adValue - bdValue;
+            if (!dateResult) {
+              dateResult = (a && a.__order != null ? a.__order : 0) - (b && b.__order != null ? b.__order : 0);
+            }
+            return direction === "desc" ? -dateResult : dateResult;
+          }
+          if (adValue != null || bdValue != null) {
+            var mixedResult = adValue != null ? -1 : 1;
+            return direction === "desc" ? -mixedResult : mixedResult;
+          }
+        }
         var an = parseCalcNumber(av);
         var bn = parseCalcNumber(bv);
         var result = 0;
@@ -7559,6 +7578,98 @@
     );
   }
 
+  function getClosingInputCellInfo(input) {
+    if (!(input instanceof HTMLInputElement)) return null;
+    var outsourceRow = input.getAttribute("data-outsource-row");
+    var outsourceField = input.getAttribute("data-outsource-field");
+    if (outsourceRow != null && outsourceField) {
+      var fieldMatch = String(outsourceField).match(/^d(\d+)$/);
+      var col = fieldMatch ? Number(fieldMatch[1]) : (outsourceField === "payCalc" ? 1001 : (outsourceField === "bonus" ? 1002 : (outsourceField === "payAmount" ? 1003 : -1)));
+      if (col >= 0) {
+        return {
+          type: "outsource",
+          row: Number(outsourceRow),
+          col: col,
+        };
+      }
+    }
+    var employeeRow = input.getAttribute("data-employee-row");
+    var employeeField = input.getAttribute("data-employee-field");
+    if (employeeRow != null && employeeField) {
+      var employeeMatch = String(employeeField).match(/^d(\d+)$/);
+      if (employeeMatch) {
+        return {
+          type: "employee",
+          row: Number(employeeRow),
+          col: Number(employeeMatch[1]),
+        };
+      }
+    }
+    return null;
+  }
+
+  function focusClosingInputByCellInfo(wrap, info) {
+    if (!wrap || !info) return false;
+    var selector = "";
+    if (info.type === "outsource") {
+      var fieldName = info.col <= 31 ? ("d" + info.col) : (info.col === 1001 ? "payCalc" : (info.col === 1002 ? "bonus" : "payAmount"));
+      selector = 'input[data-outsource-row="' + info.row + '"][data-outsource-field="' + fieldName + '"]';
+    } else if (info.type === "employee") {
+      selector = 'input[data-employee-row="' + info.row + '"][data-employee-field="d' + info.col + '"]';
+    }
+    if (!selector) return false;
+    var next = wrap.querySelector(selector);
+    if (!(next instanceof HTMLInputElement)) return false;
+    next.focus();
+    next.select();
+    return true;
+  }
+
+  function autoFocusClosingFirstInput(wrap) {
+    if (!wrap) return;
+    var active = document.activeElement;
+    if (active instanceof HTMLInputElement && wrap.contains(active)) return;
+    var first = wrap.querySelector(
+      'input[data-outsource-row][data-outsource-field^="d"], input[data-employee-row][data-employee-field^="d"]'
+    );
+    if (first instanceof HTMLInputElement) {
+      first.focus();
+      first.select();
+    }
+  }
+
+  function bindClosingInputNavigation(wrap) {
+    if (!wrap || wrap.__closingNavigationBound) return;
+    wrap.__closingNavigationBound = true;
+    wrap.addEventListener("keydown", function (e) {
+      var target = e.target;
+      if (!(target instanceof HTMLInputElement)) return;
+      var info = getClosingInputCellInfo(target);
+      if (!info) return;
+      var nextInfo = null;
+      if (e.key === "Enter" || e.key === "ArrowDown") {
+        nextInfo = { type: info.type, row: info.row + 1, col: info.col };
+      } else if (e.key === "ArrowUp") {
+        nextInfo = { type: info.type, row: info.row - 1, col: info.col };
+      } else if (e.key === "ArrowLeft") {
+        nextInfo = { type: info.type, row: info.row, col: info.col - 1 };
+      } else if (e.key === "ArrowRight") {
+        nextInfo = { type: info.type, row: info.row, col: info.col + 1 };
+      }
+      if (!nextInfo) return;
+      if (nextInfo.row < 0) return;
+      if (info.type === "employee") {
+        if (nextInfo.col < 1) nextInfo.col = 1;
+        if (nextInfo.col > 31) nextInfo.col = 31;
+      } else if (info.type === "outsource") {
+        if (nextInfo.col < 1) nextInfo.col = 1;
+        if (nextInfo.col > 1003) nextInfo.col = 1003;
+      }
+      if (!focusClosingInputByCellInfo(wrap, nextInfo)) return;
+      e.preventDefault();
+    });
+  }
+
   function renderClosingPlaceholderTab(title, description) {
     return (
       '<div class="closing-page">' +
@@ -8377,6 +8488,8 @@
         if (closingState.attendanceView === "outsource") {
           var outsourceWrap = app.querySelector(".closing-matrix-wrap");
           if (outsourceWrap) {
+            bindClosingInputNavigation(outsourceWrap);
+            autoFocusClosingFirstInput(outsourceWrap);
             outsourceWrap.querySelectorAll("[data-remove-outsource-group]").forEach(function (btn) {
               btn.addEventListener("click", function () {
                 removeClosingOutsourceGroup(Number(btn.getAttribute("data-remove-outsource-group")));
@@ -8449,6 +8562,8 @@
         } else {
           var employeeWrap = app.querySelector(".closing-matrix-wrap");
           if (employeeWrap) {
+            bindClosingInputNavigation(employeeWrap);
+            autoFocusClosingFirstInput(employeeWrap);
             employeeWrap.querySelectorAll("[data-remove-employee-group]").forEach(function (btn) {
               btn.addEventListener("click", function () {
                 removeClosingEmployeeGroup(Number(btn.getAttribute("data-remove-employee-group")));
