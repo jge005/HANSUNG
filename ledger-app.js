@@ -1082,7 +1082,8 @@
     for (var i = 0; i < closingOutsourceMarkers.length; i++) {
       var row = block[i] || emptyClosingOutsourceRow("", closingOutsourceMarkers[i]);
       var rawTimeTotal = calculateClosingOutsourceTimeTotal(row);
-      var timeTotal = rawTimeTotal + (i === 0 ? weeklyHolidayHours : 0);
+      // 시간은 입력값 그대로 합산한다. (주휴 자동 +8 가산 비활성화)
+      var timeTotal = rawTimeTotal;
       var multiplier = getClosingOutsourceWageMultiplier(row.type || closingOutsourceMarkers[i]);
       var basePay = timeTotal * hourlyWage * multiplier;
       // 주휴는 시간/급여계산(기본급)으로만 반영하고, 만근수당은 별도 1일치만 유지한다.
