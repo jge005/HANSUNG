@@ -7907,37 +7907,76 @@
     });
   }
 
+  function getClosingDivisionSpans(rows) {
+    var spans = {};
+    var start = -1;
+    var label = "";
+    for (var i = 0; i < rows.length; i++) {
+      var current = String((rows[i] && rows[i].division) || "").trim();
+      if (current) {
+        if (start >= 0) {
+          spans[start] = { start: start, span: i - start, label: label };
+        }
+        start = i;
+        label = current;
+      }
+    }
+    if (start >= 0) {
+      spans[start] = { start: start, span: rows.length - start, label: label };
+    }
+    return spans;
+  }
+
   function renderClosingSalesCloseTab() {
     ensureClosingAttendanceState();
     var rows = getClosingSalesCloseRows(closingState.attendanceMonth);
     var monthOptions = getClosingMonthOptions().map(function (option) {
       return '<option value="' + escapeAttr(option.value) + '"' + (option.value === closingState.attendanceMonth ? " selected" : "") + ">" + escapeHtml(option.label) + "</option>";
     }).join("");
+    var spans = getClosingDivisionSpans(rows);
     var body = rows.map(function (row, index) {
+      var divisionCell = "";
+      var spanInfo = spans[index];
+      if (spanInfo && spanInfo.start === index) {
+        divisionCell = '<td class="closing-excel-center" rowspan="' + spanInfo.span + '">' +
+          '<input type="text" class="closing-excel-input center" data-sales-close-row="' + index + '" data-sales-close-field="division" value="' + escapeAttr(row.division || "") + '" />' +
+        '</td>';
+      }
       return '<tr>' +
-        '<td class="center">' + escapeHtml(row.no || String(index + 1)) + '</td>' +
-        '<td><input type="text" class="closing-inline-input" data-sales-close-row="' + index + '" data-sales-close-field="division" value="' + escapeAttr(row.division || "") + '" /></td>' +
-        '<td><input type="text" class="closing-inline-input" data-sales-close-row="' + index + '" data-sales-close-field="company" value="' + escapeAttr(row.company || "") + '" /></td>' +
-        '<td><input type="text" class="closing-inline-input" data-sales-close-row="' + index + '" data-sales-close-field="closeDate" value="' + escapeAttr(row.closeDate || "") + '" /></td>' +
-        '<td><input type="text" class="closing-inline-input" data-sales-close-row="' + index + '" data-sales-close-field="taxIssueDate" value="' + escapeAttr(row.taxIssueDate || "") + '" /></td>' +
-        '<td><input type="text" class="closing-inline-input right" data-sales-close-row="' + index + '" data-sales-close-field="amount" value="' + escapeAttr(row.amount || "") + '" /></td>' +
-        '<td><input type="text" class="closing-inline-input center" data-sales-close-row="' + index + '" data-sales-close-field="mailSent" value="' + escapeAttr(row.mailSent || "") + '" /></td>' +
-        '<td><input type="text" class="closing-inline-input center" data-sales-close-row="' + index + '" data-sales-close-field="mailReply" value="' + escapeAttr(row.mailReply || "") + '" /></td>' +
-        '<td><input type="text" class="closing-inline-input center" data-sales-close-row="' + index + '" data-sales-close-field="issueConfirm" value="' + escapeAttr(row.issueConfirm || "") + '" /></td>' +
-        '<td><input type="text" class="closing-inline-input" data-sales-close-row="' + index + '" data-sales-close-field="note" value="' + escapeAttr(row.note || "") + '" /></td>' +
+        '<td class="closing-excel-center">' + escapeHtml(row.no || String(index + 1)) + '</td>' +
+        divisionCell +
+        '<td><input type="text" class="closing-excel-input closing-excel-center" data-sales-close-row="' + index + '" data-sales-close-field="company" value="' + escapeAttr(row.company || "") + '" /></td>' +
+        '<td><input type="text" class="closing-excel-input center" data-sales-close-row="' + index + '" data-sales-close-field="closeDate" value="' + escapeAttr(row.closeDate || "") + '" /></td>' +
+        '<td><input type="text" class="closing-excel-input right" data-sales-close-row="' + index + '" data-sales-close-field="amount" value="' + escapeAttr(row.amount || "") + '" /></td>' +
+        '<td><input type="text" class="closing-excel-input center" data-sales-close-row="' + index + '" data-sales-close-field="mailSent" value="' + escapeAttr(row.mailSent || "") + '" /></td>' +
+        '<td><input type="text" class="closing-excel-input center" data-sales-close-row="' + index + '" data-sales-close-field="mailReply" value="' + escapeAttr(row.mailReply || "") + '" /></td>' +
+        '<td><input type="text" class="closing-excel-input center" data-sales-close-row="' + index + '" data-sales-close-field="issueConfirm" value="' + escapeAttr(row.issueConfirm || "") + '" /></td>' +
+        '<td class="closing-excel-note"><textarea class="closing-excel-textarea" data-sales-close-row="' + index + '" data-sales-close-field="note">' + escapeHtml(row.note || "") + '</textarea></td>' +
       '</tr>';
     }).join("");
     return (
       '<div class="closing-page">' +
         '<div class="closing-card closing-card-wide">' +
           '<div class="closing-title">' + icon("scroll") + ' 매출 업체별 마감 확인</div>' +
-          '<div class="closing-copy">' + escapeHtml(getClosingAttendanceYear() + "년 " + closingState.attendanceMonth + " 매출 마감내역/세금계산서 확인표") + '</div>' +
           '<div class="closing-inline-controls" style="margin-top:8px"><label class="closing-inline-label" for="closing-close-month">대상월</label><select id="closing-close-month" class="closing-inline-select">' + monthOptions + '</select></div>' +
         '</div>' +
         '<div class="closing-card closing-card-wide">' +
-          '<div class="closing-table-simple-wrap">' +
-            '<table class="closing-table-simple">' +
-              '<thead><tr><th style="width:48px">NO.</th><th style="width:72px">구분</th><th style="width:240px">업체명</th><th style="width:110px">마감일</th><th style="width:110px">계산서발행</th><th style="width:150px">매출액</th><th style="width:90px">메일발송</th><th style="width:90px">회신메일</th><th style="width:90px">발행확인</th><th>비고</th></tr></thead>' +
+          '<div class="closing-excel-sheet">' +
+            '<table class="closing-excel-table">' +
+              '<thead>' +
+                '<tr><th colspan="9" class="closing-excel-title">마감내역서/세금계산서</th></tr>' +
+                '<tr>' +
+                  '<th style="width:64px">NO.</th>' +
+                  '<th style="width:70px"></th>' +
+                  '<th style="width:300px" class="closing-excel-head">업체명</th>' +
+                  '<th style="width:110px" class="closing-excel-head">마감일</th>' +
+                  '<th style="width:150px" class="closing-excel-head">매출액</th>' +
+                  '<th style="width:120px" class="closing-excel-head">메일발송</th>' +
+                  '<th style="width:120px" class="closing-excel-head">회신메일</th>' +
+                  '<th style="width:110px" class="closing-excel-head">발행확인</th>' +
+                  '<th class="closing-excel-head">비고</th>' +
+                '</tr>' +
+              '</thead>' +
               '<tbody>' + body + '</tbody>' +
             '</table>' +
           '</div>' +
@@ -7952,30 +7991,53 @@
     var monthOptions = getClosingMonthOptions().map(function (option) {
       return '<option value="' + escapeAttr(option.value) + '"' + (option.value === closingState.attendanceMonth ? " selected" : "") + ">" + escapeHtml(option.label) + "</option>";
     }).join("");
+    var spans = getClosingDivisionSpans(rows);
     var body = rows.map(function (row, index) {
+      var divisionCell = "";
+      var spanInfo = spans[index];
+      if (spanInfo && spanInfo.start === index) {
+        divisionCell = '<td class="closing-excel-center" rowspan="' + spanInfo.span + '">' +
+          '<input type="text" class="closing-excel-input center" data-purchase-close-row="' + index + '" data-purchase-close-field="division" value="' + escapeAttr(row.division || "") + '" />' +
+        '</td>';
+      }
       return '<tr>' +
-        '<td class="center">' + escapeHtml(row.no || String(index + 1)) + '</td>' +
-        '<td><input type="text" class="closing-inline-input" data-purchase-close-row="' + index + '" data-purchase-close-field="division" value="' + escapeAttr(row.division || "") + '" /></td>' +
-        '<td><input type="text" class="closing-inline-input" data-purchase-close-row="' + index + '" data-purchase-close-field="company" value="' + escapeAttr(row.company || "") + '" /></td>' +
-        '<td><input type="text" class="closing-inline-input" data-purchase-close-row="' + index + '" data-purchase-close-field="closeIssueDate" value="' + escapeAttr(row.closeIssueDate || "") + '" /></td>' +
-        '<td><input type="text" class="closing-inline-input right" data-purchase-close-row="' + index + '" data-purchase-close-field="supplyAmount" value="' + escapeAttr(row.supplyAmount || "") + '" /></td>' +
-        '<td><input type="text" class="closing-inline-input right" data-purchase-close-row="' + index + '" data-purchase-close-field="totalAmount" value="' + escapeAttr(row.totalAmount || "") + '" /></td>' +
-        '<td><input type="text" class="closing-inline-input center" data-purchase-close-row="' + index + '" data-purchase-close-field="detailCheck" value="' + escapeAttr(row.detailCheck || "") + '" /></td>' +
-        '<td><input type="text" class="closing-inline-input center" data-purchase-close-row="' + index + '" data-purchase-close-field="issueConfirm" value="' + escapeAttr(row.issueConfirm || "") + '" /></td>' +
-        '<td><input type="text" class="closing-inline-input" data-purchase-close-row="' + index + '" data-purchase-close-field="note" value="' + escapeAttr(row.note || "") + '" /></td>' +
+        '<td class="closing-excel-center">' + escapeHtml(row.no || String(index + 1)) + '</td>' +
+        divisionCell +
+        '<td><input type="text" class="closing-excel-input closing-excel-center" data-purchase-close-row="' + index + '" data-purchase-close-field="company" value="' + escapeAttr(row.company || "") + '" /></td>' +
+        '<td><input type="text" class="closing-excel-input center" data-purchase-close-row="' + index + '" data-purchase-close-field="closeIssueDate" value="' + escapeAttr(row.closeIssueDate || "") + '" /></td>' +
+        '<td><input type="text" class="closing-excel-input right" data-purchase-close-row="' + index + '" data-purchase-close-field="supplyAmount" value="' + escapeAttr(row.supplyAmount || "") + '" /></td>' +
+        '<td><input type="text" class="closing-excel-input right" data-purchase-close-row="' + index + '" data-purchase-close-field="totalAmount" value="' + escapeAttr(row.totalAmount || "") + '" /></td>' +
+        '<td><input type="text" class="closing-excel-input center" data-purchase-close-row="' + index + '" data-purchase-close-field="detailCheck" value="' + escapeAttr(row.detailCheck || "") + '" /></td>' +
+        '<td><input type="text" class="closing-excel-input center" data-purchase-close-row="' + index + '" data-purchase-close-field="issueConfirm" value="' + escapeAttr(row.issueConfirm || "") + '" /></td>' +
+        '<td class="closing-excel-note"><textarea class="closing-excel-textarea" data-purchase-close-row="' + index + '" data-purchase-close-field="note">' + escapeHtml(row.note || "") + '</textarea></td>' +
       '</tr>';
     }).join("");
     return (
       '<div class="closing-page">' +
         '<div class="closing-card closing-card-wide">' +
           '<div class="closing-title">' + icon("folder") + ' 매입 업체별 마감 확인</div>' +
-          '<div class="closing-copy">' + escapeHtml(getClosingAttendanceYear() + "년 " + closingState.attendanceMonth + " 매입 마감내역/세금계산서 확인표") + '</div>' +
           '<div class="closing-inline-controls" style="margin-top:8px"><label class="closing-inline-label" for="closing-close-month">대상월</label><select id="closing-close-month" class="closing-inline-select">' + monthOptions + '</select></div>' +
         '</div>' +
         '<div class="closing-card closing-card-wide">' +
-          '<div class="closing-table-simple-wrap">' +
-            '<table class="closing-table-simple">' +
-              '<thead><tr><th style="width:48px">NO.</th><th style="width:72px">구분</th><th style="width:240px">업체명</th><th style="width:140px">마감일/발행일</th><th style="width:160px">매입금액(공급가액)</th><th style="width:130px">합계 금액</th><th style="width:90px">내역확인</th><th style="width:90px">발행확인</th><th>비고</th></tr></thead>' +
+          '<div class="closing-excel-sheet">' +
+            '<table class="closing-excel-table">' +
+              '<thead>' +
+                '<tr>' +
+                  '<th colspan="3" class="closing-excel-title">마감내역서/세금계산서</th>' +
+                  '<th colspan="6" class="closing-excel-banner">매입 업체 세금계산서 발행\n개인으로,법인으로 끊겼는지 잘 확인하기</th>' +
+                '</tr>' +
+                '<tr>' +
+                  '<th style="width:64px">NO.</th>' +
+                  '<th style="width:70px"></th>' +
+                  '<th style="width:300px" class="closing-excel-head">업체명</th>' +
+                  '<th style="width:140px" class="closing-excel-head">발일/발행</th>' +
+                  '<th style="width:220px" class="closing-excel-head">매입금액(공급가액)</th>' +
+                  '<th style="width:180px" class="closing-excel-head">합계 금액</th>' +
+                  '<th style="width:110px" class="closing-excel-head">내역확인</th>' +
+                  '<th style="width:110px" class="closing-excel-head">발행확인</th>' +
+                  '<th class="closing-excel-head">비고</th>' +
+                '</tr>' +
+              '</thead>' +
               '<tbody>' + body + '</tbody>' +
             '</table>' +
           '</div>' +
