@@ -1030,6 +1030,15 @@
         }
       }
       if (hasWeekday && !absentInWeek) {
+        var sundayField = "d" + sunday;
+        var sundayText = String(normalRow[sundayField] || "").trim();
+        var sundayNum = parseCalcNumber(sundayText);
+        if (sundayNum != null && sundayNum > 0) {
+          continue;
+        }
+        if (sundayText && sundayNum == null) {
+          continue;
+        }
         extraHours += 8;
       }
     }
@@ -1052,7 +1061,6 @@
 
   function calculateClosingOutsourceDerived(block, warnings, groupStart, daysInMonth, hourlyWage) {
     var weeklyHolidayHours = calculateClosingOutsourceWeeklyHolidayHours(block, warnings, groupStart, daysInMonth);
-    var weeklyHolidayPay = weeklyHolidayHours * hourlyWage;
     var perfectAttendancePay = calculateClosingOutsourcePerfectAttendancePay(
       block,
       warnings,
@@ -1064,12 +1072,10 @@
     var groupTotal = 0;
     for (var i = 0; i < closingOutsourceMarkers.length; i++) {
       var row = block[i] || emptyClosingOutsourceRow("", closingOutsourceMarkers[i]);
-      var timeTotal = calculateClosingOutsourceTimeTotal(row);
+      var rawTimeTotal = calculateClosingOutsourceTimeTotal(row);
+      var timeTotal = rawTimeTotal + (i === 0 ? weeklyHolidayHours : 0);
       var basePay = timeTotal * hourlyWage;
       var bonusPay = i === 0 ? perfectAttendancePay : 0;
-      if (i === 0) {
-        bonusPay += weeklyHolidayPay;
-      }
       var payAmount = basePay + bonusPay;
       groupTotal += payAmount;
       derivedRows.push({
@@ -1081,7 +1087,6 @@
     }
     return {
       weeklyHolidayHours: weeklyHolidayHours,
-      weeklyHolidayPay: weeklyHolidayPay,
       perfectAttendancePay: perfectAttendancePay,
       rows: derivedRows,
       groupTotal: groupTotal,
