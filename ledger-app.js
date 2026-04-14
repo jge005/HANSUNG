@@ -1056,7 +1056,16 @@
         return 0;
       }
     }
-    return 8 * hourlyWage;
+    // 만근수당은 월 1회, 1일치(8시간)만 지급한다.
+    return 8 * DEFAULT_CLOSING_HOURLY_WAGE_2026_KR;
+  }
+
+  function getClosingOutsourceWageMultiplier(type) {
+    var marker = String(type || "").trim();
+    if (marker === "연장" || marker === "심야" || marker === "특근") {
+      return 1.5;
+    }
+    return 1;
   }
 
   function calculateClosingOutsourceDerived(block, warnings, groupStart, daysInMonth, hourlyWage) {
@@ -1074,7 +1083,9 @@
       var row = block[i] || emptyClosingOutsourceRow("", closingOutsourceMarkers[i]);
       var rawTimeTotal = calculateClosingOutsourceTimeTotal(row);
       var timeTotal = rawTimeTotal + (i === 0 ? weeklyHolidayHours : 0);
-      var basePay = timeTotal * hourlyWage;
+      var multiplier = getClosingOutsourceWageMultiplier(row.type || closingOutsourceMarkers[i]);
+      var basePay = timeTotal * hourlyWage * multiplier;
+      // 주휴는 시간/급여계산(기본급)으로만 반영하고, 만근수당은 별도 1일치만 유지한다.
       var bonusPay = i === 0 ? perfectAttendancePay : 0;
       var payAmount = basePay + bonusPay;
       groupTotal += payAmount;
