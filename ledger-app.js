@@ -1218,6 +1218,23 @@
     });
   }
 
+  function readFileAsArrayBuffer(file) {
+    return new Promise(function (resolve, reject) {
+      if (!file) {
+        reject(new Error("파일을 먼저 선택해주세요."));
+        return;
+      }
+      var reader = new FileReader();
+      reader.onload = function () {
+        resolve(reader.result);
+      };
+      reader.onerror = function () {
+        reject(new Error("파일을 읽는 중 문제가 생겼습니다."));
+      };
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
   function parseSpreadsheetXmlToGrid(text) {
     var parser = new DOMParser();
     var xml = parser.parseFromString(String(text || ""), "application/xml");
@@ -1294,24 +1311,8 @@
     return score;
   }
 
-  function parseStatusRowsFromFileText(text) {
-    var content = String(text || "");
-    if (content.indexOf("\u0000") >= 0) {
-      throw new Error("바이너리 .xls 형식은 직접 읽기 어려워요. 엑셀에서 .xml(스프레드시트 2003) 또는 .csv로 저장 후 가져와주세요.");
-    }
-    var grid = [];
-    if (
-      /<\?xml/i.test(content) &&
-      /schemas-microsoft-com:office:spreadsheet/i.test(content)
-    ) {
-      grid = parseSpreadsheetXmlToGrid(content);
-    } else if (/<table/i.test(content)) {
-      grid = parseHtmlTableToGrid(content);
-    } else {
-      grid = parseClipboardGrid(content);
-    }
-    if (!grid.length) return [];
-
+  function parseStatusRowsFromGrid(grid) {
+    if (!grid || !grid.length) return [];
     var bestHeaderIndex = -1;
     var bestHeaderMap = {};
     var bestScore = 0;
@@ -1359,6 +1360,46 @@
       rows.push(item);
     }
     return rows;
+  }
+
+  function parseStatusRowsFromWorkbookBuffer(arrayBuffer) {
+    if (!(window.XLSX && window.XLSX.read && window.XLSX.utils && window.XLSX.utils.sheet_to_json)) {
+      throw new Error("엑셀 엔진을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.");
+    }
+    var workbook = window.XLSX.read(arrayBuffer, { type: "array", cellDates: false, raw: false });
+    var sheetNames = workbook && workbook.SheetNames ? workbook.SheetNames : [];
+    if (!sheetNames.length) return [];
+    var mergedRows = [];
+    for (var i = 0; i < sheetNames.length; i++) {
+      var sheet = workbook.Sheets[sheetNames[i]];
+      if (!sheet) continue;
+      var grid = window.XLSX.utils.sheet_to_json(sheet, {
+        header: 1,
+        raw: false,
+        defval: "",
+      });
+      var parsed = parseStatusRowsFromGrid(grid);
+      if (parsed.length) {
+        mergedRows = mergedRows.concat(parsed);
+      }
+    }
+    return mergedRows;
+  }
+
+  function parseStatusRowsFromFileText(text) {
+    var content = String(text || "");
+    var grid = [];
+    if (
+      /<\?xml/i.test(content) &&
+      /schemas-microsoft-com:office:spreadsheet/i.test(content)
+    ) {
+      grid = parseSpreadsheetXmlToGrid(content);
+    } else if (/<table/i.test(content)) {
+      grid = parseHtmlTableToGrid(content);
+    } else {
+      grid = parseClipboardGrid(content);
+    }
+    return parseStatusRowsFromGrid(grid);
   }
 
   function appendImportedStatusRows(rows) {
@@ -1705,7 +1746,7 @@
           '<div class="closing-matrix-badge">' + escapeHtml(getClosingEmployeePeriodLabel()) + '</div>' +
           '<div class="closing-matrix-badge">야근 / 특근 / 지각 / 조퇴 / 결근 월 합계</div>' +
         '</div>' +
-        '<div class="closing-employee-grid">' + (visibleCount ? body : '<div class="muted">표시할 데이터가 없습니다.</div>') + '</div>' +
+        '<div class="closing-employee-grid closing-employee-grid-compact">' + (visibleCount ? body : '<div class="muted">표시할 데이터가 없습니다.</div>') + '</div>' +
       '</div>'
     );
   }
@@ -7594,7 +7635,7 @@
           '<input type="text" class="field" id="status-filter-keyword" style="width:180px;height:36px" placeholder="검색어" />' +
           '<button type="button" class="soft-btn filter-apply-btn" id="btn-filter-apply">적용</button>' +
           '<button type="button" class="soft-btn filter-clear-btn" id="btn-filter-clear">해제</button>' +
-          '<input type="file" id="status-import-file" accept=".xls,.xml,.csv,.txt,.htm,.html" style="display:none" />' +
+          '<input type="file" id="status-import-file" accept=".xls,.xlsx,.xml,.csv,.txt,.htm,.html" style="display:none" />' +
           '<button type="button" class="soft-btn" id="btn-status-import">' + (isPurchaseTab ? "매입대장 가져오기" : "매출대장 가져오기") + '</button>' +
           '<div class="toolbar-segment" style="display:inline-flex;gap:6px;margin-left:4px">' +
           '<button type="button" class="soft-btn' + (activeClientType === "all" ? ' active-filter' : '') + '" id="btn-filter-client-all">전체</button>' +
@@ -7792,12 +7833,16 @@
           importFileInput.addEventListener("change", function () {
             var file = importFileInput.files && importFileInput.files[0] ? importFileInput.files[0] : null;
             if (!file) return;
-            readFileAsTextWithEncoding(file, "utf-8")
-              .then(function (text) {
-                var parsedRows = parseStatusRowsFromFileText(text);
-                if (parsedRows.length) return parsedRows;
-                return readFileAsTextWithEncoding(file, "euc-kr").then(function (eucText) {
-                  return parseStatusRowsFromFileText(eucText);
+            readFileAsArrayBuffer(file)
+              .then(function (buffer) {
+                var workbookRows = parseStatusRowsFromWorkbookBuffer(buffer);
+                if (workbookRows.length) return workbookRows;
+                return readFileAsTextWithEncoding(file, "utf-8").then(function (utfText) {
+                  var utfRows = parseStatusRowsFromFileText(utfText);
+                  if (utfRows.length) return utfRows;
+                  return readFileAsTextWithEncoding(file, "euc-kr").then(function (eucText) {
+                    return parseStatusRowsFromFileText(eucText);
+                  });
                 });
               })
               .then(function (parsedRows) {

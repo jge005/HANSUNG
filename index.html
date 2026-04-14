@@ -1310,6 +1310,10 @@
       grid-template-columns: repeat(2, minmax(260px, 1fr));
       gap: 18px 22px;
     }
+    .closing-employee-grid.closing-employee-grid-compact {
+      grid-template-columns: repeat(4, minmax(180px, 1fr));
+      gap: 10px 10px;
+    }
     .closing-employee-card {
       border: 1px solid #d6cde8;
       background: #fff;
@@ -1397,6 +1401,24 @@
       text-align: right;
       color: var(--text-dark);
     }
+    .closing-employee-grid.closing-employee-grid-compact .closing-employee-card {
+      border-radius: 8px;
+    }
+    .closing-employee-grid.closing-employee-grid-compact .closing-employee-card-head {
+      padding: 6px 8px;
+      min-height: 34px;
+    }
+    .closing-employee-grid.closing-employee-grid-compact .closing-employee-name-readonly {
+      font-size: 16px;
+      line-height: 1.2;
+    }
+    .closing-employee-grid.closing-employee-grid-compact .closing-employee-mini-table {
+      font-size: 11px;
+    }
+    .closing-employee-grid.closing-employee-grid-compact .closing-employee-mini-table th,
+    .closing-employee-grid.closing-employee-grid-compact .closing-employee-mini-table td {
+      padding: 4px 6px;
+    }
     @media (max-width: 920px) {
       .manage-toolbar-grid,
       .manage-summary-grid,
@@ -1404,6 +1426,9 @@
       .closing-grid,
       .closing-employee-grid {
         grid-template-columns: 1fr;
+      }
+      .closing-employee-grid.closing-employee-grid-compact {
+        grid-template-columns: repeat(2, minmax(180px, 1fr));
       }
       .manage-toolbar-actions {
         justify-content: flex-start;
@@ -1739,6 +1764,7 @@
   <script type="module" src="./firebase-init.js"></script>
   <script type="module" src="./firestore-api.js"></script>
   <script src="./sheet-engine.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="./ledger-app.js"></script>
 </body>
 </html>
