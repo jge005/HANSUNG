@@ -941,13 +941,15 @@
 
   function calculateClosingOutsourceWeeklyHolidayHours(block, warnings, groupStart, daysInMonth) {
     var normalRow = block && block[0] ? block[0] : {};
+    var dayLimit = Math.min(daysInMonth, getClosingWarningDayLimit());
     var extraHours = 0;
-    for (var sunday = 1; sunday <= daysInMonth; sunday++) {
+    for (var sunday = 1; sunday <= dayLimit; sunday++) {
       if (getClosingWeekdayLabel(sunday) !== "일") continue;
       var weekStart = Math.max(1, sunday - 6);
       var hasWeekday = false;
       var absentInWeek = false;
       for (var day = weekStart; day <= sunday - 1; day++) {
+        if (day > dayLimit) break;
         var weekday = getClosingWeekdayLabel(day);
         if (weekday === "일") continue;
         hasWeekday = true;
@@ -968,7 +970,8 @@
 
   function calculateClosingOutsourcePerfectAttendancePay(block, warnings, groupStart, daysInMonth, hourlyWage) {
     var normalRow = block && block[0] ? block[0] : {};
-    for (var day = 1; day <= daysInMonth; day++) {
+    var dayLimit = Math.min(daysInMonth, getClosingWarningDayLimit());
+    for (var day = 1; day <= dayLimit; day++) {
       var weekday = getClosingWeekdayLabel(day);
       if (weekday === "일") continue;
       var field = "d" + day;
