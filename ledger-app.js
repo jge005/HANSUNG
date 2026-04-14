@@ -7835,19 +7835,36 @@
             if (!file) return;
             readFileAsArrayBuffer(file)
               .then(function (buffer) {
-                var workbookRows = parseStatusRowsFromWorkbookBuffer(buffer);
+                var workbookRows = [];
+                try {
+                  workbookRows = parseStatusRowsFromWorkbookBuffer(buffer);
+                } catch (workbookErr) {
+                  console.warn("워크북 파서 실패, 텍스트 파서로 재시도:", workbookErr);
+                  workbookRows = [];
+                }
                 if (workbookRows.length) return workbookRows;
                 return readFileAsTextWithEncoding(file, "utf-8").then(function (utfText) {
-                  var utfRows = parseStatusRowsFromFileText(utfText);
+                  var utfRows = [];
+                  try {
+                    utfRows = parseStatusRowsFromFileText(utfText);
+                  } catch (utfErr) {
+                    console.warn("UTF-8 텍스트 파서 실패:", utfErr);
+                    utfRows = [];
+                  }
                   if (utfRows.length) return utfRows;
                   return readFileAsTextWithEncoding(file, "euc-kr").then(function (eucText) {
-                    return parseStatusRowsFromFileText(eucText);
+                    try {
+                      return parseStatusRowsFromFileText(eucText);
+                    } catch (eucErr) {
+                      console.warn("EUC-KR 텍스트 파서 실패:", eucErr);
+                      return [];
+                    }
                   });
                 });
               })
               .then(function (parsedRows) {
                 if (!parsedRows || !parsedRows.length) {
-                  showAppToast("가져올 매출/매입 현황 행을 찾지 못했어요.", "warning");
+                  showAppToast("파일을 읽었지만 현황 행을 찾지 못했어요. 암호/보호된 파일이면 해제 후 다시 시도해주세요.", "warning");
                   return;
                 }
                 var importedCount = appendImportedStatusRows(parsedRows);
