@@ -110,6 +110,7 @@
     attendanceMonth: "",
     attendanceView: "employee",
     employeeViewMode: "entry",
+    employeeRoster: [],
     employeeRowsByMonth: {},
     outsourceVendor: "leaders",
     outsourceRowsByKey: {},
@@ -418,6 +419,68 @@
     return rows.length ? rows : buildClosingEmployeeTemplateRows();
   }
 
+  function getClosingEmployeeRosterFromRows(rows) {
+    var normalized = normalizeClosingEmployeeRows(rows);
+    var roster = [];
+    for (var groupStart = 0; groupStart < normalized.length; groupStart += closingEmployeeMarkers.length) {
+      roster.push(String((normalized[groupStart] && normalized[groupStart].employee) || ""));
+    }
+    if (!roster.length) {
+      roster = closingEmployeeNames.slice();
+    }
+    return roster;
+  }
+
+  function isSameEmployeeRoster(a, b) {
+    if (!Array.isArray(a) || !Array.isArray(b)) return false;
+    if (a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (String(a[i] || "") !== String(b[i] || "")) return false;
+    }
+    return true;
+  }
+
+  function buildClosingEmployeeRowsByRosterAndSource(roster, sourceRows) {
+    var source = normalizeClosingEmployeeRows(sourceRows);
+    var safeRoster = Array.isArray(roster) && roster.length ? roster : closingEmployeeNames.slice();
+    var rows = [];
+    for (var groupIndex = 0; groupIndex < safeRoster.length; groupIndex++) {
+      for (var markerIndex = 0; markerIndex < closingEmployeeMarkers.length; markerIndex++) {
+        var sourceRow = source[groupIndex * closingEmployeeMarkers.length + markerIndex] || {};
+        var next = emptyClosingEmployeeRow(
+          markerIndex === 0 ? String(safeRoster[groupIndex] || "") : "",
+          closingEmployeeMarkers[markerIndex]
+        );
+        next.count = sourceRow.count != null && String(sourceRow.count).trim() !== "" ? String(sourceRow.count) : "0";
+        closingAttendanceDayFields.forEach(function (field) {
+          next[field] = sourceRow[field] != null ? String(sourceRow[field]) : "";
+        });
+        rows.push(next);
+      }
+    }
+    return rows;
+  }
+
+  function applyClosingEmployeeRosterToAllMonths(roster) {
+    var safeRoster = Array.isArray(roster) && roster.length ? roster : closingEmployeeNames.slice();
+    closingState.employeeRoster = safeRoster.slice();
+    if (!closingState.employeeRowsByMonth || typeof closingState.employeeRowsByMonth !== "object") {
+      closingState.employeeRowsByMonth = {};
+    }
+    var keys = Object.keys(closingState.employeeRowsByMonth);
+    if (!keys.length) {
+      var monthKey = closingState.attendanceMonth || defaultClosingMonthLabel();
+      closingState.employeeRowsByMonth[monthKey] = buildClosingEmployeeRowsByRosterAndSource(safeRoster, []);
+      return;
+    }
+    keys.forEach(function (monthKey) {
+      closingState.employeeRowsByMonth[monthKey] = buildClosingEmployeeRowsByRosterAndSource(
+        safeRoster,
+        closingState.employeeRowsByMonth[monthKey]
+      );
+    });
+  }
+
   function getClosingEmployeeSeedRows(monthLabel) {
     var byMonth = closingState.employeeRowsByMonth || {};
     var targetMonth = parseClosingMonthNumber(monthLabel);
@@ -527,6 +590,9 @@
     if (closingState.employeeViewMode !== "summary") {
       closingState.employeeViewMode = "entry";
     }
+    if (!Array.isArray(closingState.employeeRoster)) {
+      closingState.employeeRoster = [];
+    }
     if (!closingState.employeeRowsByMonth || typeof closingState.employeeRowsByMonth !== "object") {
       closingState.employeeRowsByMonth = {};
     }
@@ -545,14 +611,20 @@
     if (typeof closingState.attendanceSearch !== "string") {
       closingState.attendanceSearch = "";
     }
+    if (!closingState.employeeRoster.length) {
+      var seedRows = closingState.employeeRowsByMonth[closingState.attendanceMonth] || getClosingEmployeeSeedRows(closingState.attendanceMonth);
+      closingState.employeeRoster = getClosingEmployeeRosterFromRows(seedRows || buildClosingEmployeeTemplateRows());
+    }
     if (!closingState.employeeRowsByMonth[closingState.attendanceMonth]) {
-      var seedRows = getClosingEmployeeSeedRows(closingState.attendanceMonth);
-      closingState.employeeRowsByMonth[closingState.attendanceMonth] = seedRows
-        ? buildClosingEmployeeRowsFromRoster(seedRows)
-        : buildClosingEmployeeTemplateRows();
+      closingState.employeeRowsByMonth[closingState.attendanceMonth] = buildClosingEmployeeRowsByRosterAndSource(
+        closingState.employeeRoster,
+        []
+      );
     } else {
-      closingState.employeeRowsByMonth[closingState.attendanceMonth] =
-        normalizeClosingEmployeeRows(closingState.employeeRowsByMonth[closingState.attendanceMonth]);
+      closingState.employeeRowsByMonth[closingState.attendanceMonth] = buildClosingEmployeeRowsByRosterAndSource(
+        closingState.employeeRoster,
+        closingState.employeeRowsByMonth[closingState.attendanceMonth]
+      );
     }
     return closingState;
   }
@@ -561,21 +633,33 @@
     ensureClosingAttendanceState();
     var key = monthLabel || closingState.attendanceMonth;
     if (!closingState.employeeRowsByMonth[key]) {
-      var seedRows = getClosingEmployeeSeedRows(key);
-      closingState.employeeRowsByMonth[key] = seedRows
-        ? buildClosingEmployeeRowsFromRoster(seedRows)
-        : buildClosingEmployeeTemplateRows();
+      closingState.employeeRowsByMonth[key] = buildClosingEmployeeRowsByRosterAndSource(
+        closingState.employeeRoster,
+        []
+      );
     } else {
-      closingState.employeeRowsByMonth[key] =
-        normalizeClosingEmployeeRows(closingState.employeeRowsByMonth[key]);
+      closingState.employeeRowsByMonth[key] = buildClosingEmployeeRowsByRosterAndSource(
+        closingState.employeeRoster,
+        closingState.employeeRowsByMonth[key]
+      );
     }
     return closingState.employeeRowsByMonth[key];
   }
 
   function setClosingEmployeeRows(monthLabel, rows) {
     ensureClosingAttendanceState();
-    closingState.employeeRowsByMonth[monthLabel || closingState.attendanceMonth] =
-      normalizeClosingEmployeeRows(rows);
+    var key = monthLabel || closingState.attendanceMonth;
+    var normalized = normalizeClosingEmployeeRows(rows);
+    closingState.employeeRowsByMonth[key] = normalized;
+    var nextRoster = getClosingEmployeeRosterFromRows(normalized);
+    if (!isSameEmployeeRoster(nextRoster, closingState.employeeRoster)) {
+      applyClosingEmployeeRosterToAllMonths(nextRoster);
+    } else {
+      closingState.employeeRowsByMonth[key] = buildClosingEmployeeRowsByRosterAndSource(
+        closingState.employeeRoster,
+        closingState.employeeRowsByMonth[key]
+      );
+    }
   }
 
   function getClosingOutsourceKey(monthLabel, vendor) {
@@ -3041,6 +3125,7 @@
         attendanceView: closingState.attendanceView === "outsource" ? "outsource" : "employee",
         employeeViewMode: closingState.employeeViewMode === "summary" ? "summary" : "entry",
         attendanceSearch: String(closingState.attendanceSearch || ""),
+        employeeRoster: Array.isArray(closingState.employeeRoster) ? closingState.employeeRoster.slice() : [],
         employeeRowsByMonth: cloneClosingRowsMap(closingState.employeeRowsByMonth),
         outsourceVendor: closingState.outsourceVendor || "leaders",
         outsourceRowsByKey: (function () {
@@ -3203,6 +3288,9 @@
       closingState.attendanceView = closingData.attendanceView === "outsource" ? "outsource" : "employee";
       closingState.employeeViewMode = closingData.employeeViewMode === "summary" ? "summary" : "entry";
       closingState.attendanceSearch = String(closingData.attendanceSearch || "");
+      closingState.employeeRoster = Array.isArray(closingData.employeeRoster)
+        ? closingData.employeeRoster.map(function (name) { return String(name || ""); })
+        : [];
       closingState.employeeRowsByMonth = cloneClosingRowsMap(closingData.employeeRowsByMonth);
       closingState.outsourceVendor = String(closingData.outsourceVendor || "leaders");
       closingState.outsourceRowsByKey = {};
