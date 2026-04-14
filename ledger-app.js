@@ -828,7 +828,7 @@
     ensureClosingAttendanceState();
     var key = getClosingOutsourceKey(monthLabel, vendor);
     if (!closingState.outsourceMetaByKey[key] || typeof closingState.outsourceMetaByKey[key] !== "object") {
-      closingState.outsourceMetaByKey[key] = { retirement: "" };
+      closingState.outsourceMetaByKey[key] = { retirement: "", hourlyWage: "" };
     }
     return closingState.outsourceMetaByKey[key];
   }
@@ -836,7 +836,7 @@
   function setClosingOutsourceMeta(monthLabel, vendor, meta) {
     ensureClosingAttendanceState();
     closingState.outsourceMetaByKey[getClosingOutsourceKey(monthLabel, vendor)] = Object.assign(
-      { retirement: "" },
+      { retirement: "", hourlyWage: "" },
       meta || {}
     );
   }
@@ -921,7 +921,13 @@
     return grouped.reduce(function (sum, value) { return sum + value; }, 0);
   }
 
-  var CLOSING_HOURLY_WAGE_2026_KR = 10320;
+  var DEFAULT_CLOSING_HOURLY_WAGE_2026_KR = 10320;
+
+  function getClosingOutsourceHourlyWage(meta) {
+    var value = parseCalcNumber(meta && meta.hourlyWage);
+    if (value == null || value <= 0) return DEFAULT_CLOSING_HOURLY_WAGE_2026_KR;
+    return value;
+  }
 
   function isOutsourceAbsenceValue(value, hasWarning) {
     var text = String(value || "").trim();
@@ -960,16 +966,38 @@
     return extraHours;
   }
 
-  function calculateClosingOutsourceDerived(block, warnings, groupStart, daysInMonth) {
+  function calculateClosingOutsourcePerfectAttendancePay(block, warnings, groupStart, daysInMonth, hourlyWage) {
+    var normalRow = block && block[0] ? block[0] : {};
+    for (var day = 1; day <= daysInMonth; day++) {
+      var weekday = getClosingWeekdayLabel(day);
+      if (weekday === "일") continue;
+      var field = "d" + day;
+      var warningKey = groupStart + ":" + field;
+      var hasWarning = !!(warnings && warnings[warningKey]);
+      if (isOutsourceAbsenceValue(normalRow[field], hasWarning)) {
+        return 0;
+      }
+    }
+    return 8 * hourlyWage;
+  }
+
+  function calculateClosingOutsourceDerived(block, warnings, groupStart, daysInMonth, hourlyWage) {
     var weeklyHolidayHours = calculateClosingOutsourceWeeklyHolidayHours(block, warnings, groupStart, daysInMonth);
-    var weeklyHolidayPay = weeklyHolidayHours * CLOSING_HOURLY_WAGE_2026_KR;
+    var weeklyHolidayPay = weeklyHolidayHours * hourlyWage;
+    var perfectAttendancePay = calculateClosingOutsourcePerfectAttendancePay(
+      block,
+      warnings,
+      groupStart,
+      daysInMonth,
+      hourlyWage
+    );
     var derivedRows = [];
     var groupTotal = 0;
     for (var i = 0; i < closingOutsourceMarkers.length; i++) {
       var row = block[i] || emptyClosingOutsourceRow("", closingOutsourceMarkers[i]);
       var timeTotal = calculateClosingOutsourceTimeTotal(row);
-      var basePay = timeTotal * CLOSING_HOURLY_WAGE_2026_KR;
-      var bonusPay = i === 0 ? weeklyHolidayPay : 0;
+      var basePay = timeTotal * hourlyWage;
+      var bonusPay = i === 0 ? (weeklyHolidayPay + perfectAttendancePay) : 0;
       var payAmount = basePay + bonusPay;
       groupTotal += payAmount;
       derivedRows.push({
@@ -981,6 +1009,7 @@
     }
     return {
       weeklyHolidayHours: weeklyHolidayHours,
+      perfectAttendancePay: perfectAttendancePay,
       rows: derivedRows,
       groupTotal: groupTotal,
     };
@@ -1625,6 +1654,7 @@
     var daysInMonth = getClosingDaysInMonth();
     var year = getClosingAttendanceYear();
     var monthNumber = getClosingAttendanceMonthNumber();
+    var hourlyWage = getClosingOutsourceHourlyWage(meta);
     var wageTotal = 0;
     var headDays = "";
     for (var day = 1; day <= daysInMonth; day++) {
@@ -1640,7 +1670,7 @@
       var block = rows.slice(index, index + closingOutsourceMarkers.length);
       var headerRow = block[0] || emptyClosingOutsourceRow("", "정상");
       if (!matchesClosingAttendanceSearch(headerRow.employee, headerRow.joinDate)) continue;
-      var derived = calculateClosingOutsourceDerived(block, warnings, index, daysInMonth);
+      var derived = calculateClosingOutsourceDerived(block, warnings, index, daysInMonth, hourlyWage);
       wageTotal += derived.groupTotal;
       for (var markerIndex = 0; markerIndex < closingOutsourceMarkers.length; markerIndex++) {
         var row = block[markerIndex] || emptyClosingOutsourceRow("", closingOutsourceMarkers[markerIndex]);
@@ -1693,7 +1723,8 @@
       '<div class="closing-matrix-wrap">' +
         '<div class="closing-matrix-summarybar">' +
           '<div class="closing-matrix-badge">' + escapeHtml(year + "년 " + monthNumber + "월 " + getClosingOutsourceVendorLabel() + " 급여 청구내역") + '</div>' +
-          '<div class="closing-matrix-badge strong">총 급여지급액 ' + escapeHtml(formatClosingCurrency(wageTotal)) + ' <span class="muted">(시급 ' + escapeHtml(formatDisplayNumber(CLOSING_HOURLY_WAGE_2026_KR)) + '원)</span></div>' +
+          '<div class="closing-matrix-badge">시급 <input type="text" class="closing-inline-input right" style="min-width:100px;height:30px" id="closing-outsource-hourly-wage" value="' + escapeAttr(meta.hourlyWage || String(DEFAULT_CLOSING_HOURLY_WAGE_2026_KR)) + '" /></div>' +
+          '<div class="closing-matrix-badge strong">총 급여지급액 ' + escapeHtml(formatClosingCurrency(wageTotal)) + ' <span class="muted">(시급 ' + escapeHtml(formatDisplayNumber(hourlyWage)) + '원)</span></div>' +
           '<div class="closing-matrix-badge">관리비(' + escapeHtml(String(Math.round(mgmtRate * 100))) + '%) ' + escapeHtml(formatClosingCurrency(mgmtFee)) + '</div>' +
           '<div class="closing-matrix-badge">퇴직금 <input type="text" class="closing-inline-input" style="min-width:110px;height:30px" id="closing-outsource-retirement" value="' + escapeAttr(meta.retirement || "") + '" /></div>' +
           '<div class="closing-matrix-badge">총 금액 ' + escapeHtml(formatClosingCurrency(total)) + '</div>' +
@@ -3600,7 +3631,7 @@
             : {};
           var cloned = {};
           Object.keys(source).forEach(function (key) {
-            cloned[key] = Object.assign({ retirement: "" }, source[key] || {});
+            cloned[key] = Object.assign({ retirement: "", hourlyWage: "" }, source[key] || {});
           });
           return cloned;
         })(),
@@ -3769,7 +3800,7 @@
       closingState.outsourceMetaByKey = {};
       if (closingData.outsourceMetaByKey && typeof closingData.outsourceMetaByKey === "object") {
         Object.keys(closingData.outsourceMetaByKey).forEach(function (key) {
-          closingState.outsourceMetaByKey[key] = Object.assign({ retirement: "" }, closingData.outsourceMetaByKey[key] || {});
+          closingState.outsourceMetaByKey[key] = Object.assign({ retirement: "", hourlyWage: "" }, closingData.outsourceMetaByKey[key] || {});
         });
       }
     }
@@ -8343,6 +8374,18 @@
                 scheduleLedgerDraftSave();
               });
               outsourceRetirementInput.addEventListener("change", function () {
+                render();
+              });
+            }
+            var outsourceHourlyWageInput = document.getElementById("closing-outsource-hourly-wage");
+            if (outsourceHourlyWageInput) {
+              outsourceHourlyWageInput.addEventListener("input", function () {
+                var meta = getClosingOutsourceMeta(closingState.attendanceMonth, closingState.outsourceVendor);
+                meta.hourlyWage = outsourceHourlyWageInput.value || "";
+                setClosingOutsourceMeta(closingState.attendanceMonth, closingState.outsourceVendor, meta);
+                scheduleLedgerDraftSave();
+              });
+              outsourceHourlyWageInput.addEventListener("change", function () {
                 render();
               });
             }
