@@ -2343,10 +2343,102 @@
           '<div class="closing-matrix-badge">' + escapeHtml(year + "년 " + monthNumber + "월 정직원 연동 화면") + '</div>' +
           '<div class="closing-matrix-badge">' + escapeHtml(getClosingEmployeePeriodLabel()) + '</div>' +
           '<div class="closing-matrix-badge">야근 / 특근 / 지각 / 조퇴 / 결근 월 합계</div>' +
+          '<button type="button" class="soft-btn" id="closing-employee-summary-capture" style="margin-left:auto">연동표 캡처</button>' +
         '</div>' +
         '<div class="closing-employee-grid closing-employee-grid-compact">' + (visibleCount ? body : '<div class="muted">표시할 데이터가 없습니다.</div>') + '</div>' +
       '</div>'
     );
+  }
+
+  function buildClosingEmployeeSummaryClipboardText() {
+    var rows = getClosingEmployeeRows(closingState.attendanceMonth);
+    var periodDays = getClosingEmployeePeriodDays();
+    var lines = [];
+    lines.push(getClosingAttendanceYear() + "년 " + getClosingAttendanceMonthNumber() + "월 정직원 연동 화면");
+    lines.push("성명\t야근\t특근\t지각\t조퇴\t결근");
+    for (var index = 0; index < rows.length; index += closingEmployeeMarkers.length) {
+      var block = rows.slice(index, index + closingEmployeeMarkers.length);
+      var headerRow = block[0] || emptyClosingEmployeeRow("", "야근");
+      if (!matchesClosingAttendanceSearch(headerRow.employee, "")) continue;
+      var counts = { "야근": "0", "특근": "0", "지각": "0", "조퇴": "0", "결근": "0" };
+      for (var markerIndex = 0; markerIndex < closingEmployeeMarkers.length; markerIndex++) {
+        var row = block[markerIndex] || emptyClosingEmployeeRow("", closingEmployeeMarkers[markerIndex]);
+        counts[row.type || closingEmployeeMarkers[markerIndex]] = String(getClosingEmployeeCount(row, periodDays));
+      }
+      lines.push([
+        String(headerRow.employee || ""),
+        counts["야근"] || "0",
+        counts["특근"] || "0",
+        counts["지각"] || "0",
+        counts["조퇴"] || "0",
+        counts["결근"] || "0"
+      ].join("\t"));
+    }
+    return lines.join("\n");
+  }
+
+  function ensureHtml2Canvas() {
+    if (window.html2canvas) return Promise.resolve(window.html2canvas);
+    return new Promise(function (resolve, reject) {
+      var existing = document.getElementById("html2canvas-loader");
+      if (existing) {
+        existing.addEventListener("load", function () {
+          if (window.html2canvas) resolve(window.html2canvas);
+          else reject(new Error("캡처 엔진 로딩에 실패했습니다."));
+        }, { once: true });
+        existing.addEventListener("error", function () {
+          reject(new Error("캡처 엔진 스크립트를 불러오지 못했습니다."));
+        }, { once: true });
+        return;
+      }
+      var script = document.createElement("script");
+      script.id = "html2canvas-loader";
+      script.src = "https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js";
+      script.onload = function () {
+        if (window.html2canvas) resolve(window.html2canvas);
+        else reject(new Error("캡처 엔진 로딩에 실패했습니다."));
+      };
+      script.onerror = function () {
+        reject(new Error("캡처 엔진 스크립트를 불러오지 못했습니다."));
+      };
+      document.head.appendChild(script);
+    });
+  }
+
+  function downloadBlob(blob, filename) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  async function captureClosingEmployeeSummaryAsPng() {
+    var target = document.querySelector(".closing-matrix-wrap");
+    if (!target) throw new Error("캡처할 연동 화면을 찾지 못했습니다.");
+    var html2canvas = await ensureHtml2Canvas();
+    var canvas = await html2canvas(target, {
+      backgroundColor: "#ffffff",
+      scale: 2,
+      useCORS: true,
+      logging: false,
+      scrollX: 0,
+      scrollY: 0,
+      windowWidth: Math.max(document.documentElement.clientWidth, target.scrollWidth),
+      windowHeight: Math.max(document.documentElement.clientHeight, target.scrollHeight)
+    });
+    return new Promise(function (resolve, reject) {
+      canvas.toBlob(function (blob) {
+        if (!blob) {
+          reject(new Error("캡처 이미지를 만들지 못했습니다."));
+          return;
+        }
+        resolve(blob);
+      }, "image/png");
+    });
   }
 
   function todayIsoString() {
@@ -9155,6 +9247,40 @@
               setClosingEmployeeRows(closingState.attendanceMonth, rows);
               scheduleLedgerDraftSave();
             });
+          }
+          if (closingState.employeeViewMode === "summary") {
+            var summaryCaptureBtn = document.getElementById("closing-employee-summary-capture");
+            if (summaryCaptureBtn) {
+              summaryCaptureBtn.addEventListener("click", function () {
+                if (summaryCaptureBtn.disabled) return;
+                summaryCaptureBtn.disabled = true;
+                summaryCaptureBtn.textContent = "캡처 중...";
+                captureClosingEmployeeSummaryAsPng()
+                  .then(function (blob) {
+                    if (navigator.clipboard && navigator.clipboard.write && typeof ClipboardItem !== "undefined") {
+                      return navigator.clipboard.write([
+                        new ClipboardItem({ "image/png": blob })
+                      ]).then(function () {
+                        showAppToast("연동표를 이미지로 클립보드에 복사했어요.", "success");
+                      }).catch(function () {
+                        var filename = "정직원_연동표_" + closingState.attendanceMonth + ".png";
+                        downloadBlob(blob, filename);
+                        showAppToast("클립보드 권한이 없어 PNG 파일로 저장했어요.", "warning");
+                      });
+                    }
+                    var fallbackFilename = "정직원_연동표_" + closingState.attendanceMonth + ".png";
+                    downloadBlob(blob, fallbackFilename);
+                    showAppToast("현재 환경에서는 이미지 클립보드가 어려워 PNG 파일로 저장했어요.", "warning");
+                  })
+                  .catch(function (err) {
+                    showAppToast(err && err.message ? err.message : "연동표 캡처에 실패했어요.", "warning");
+                  })
+                  .finally(function () {
+                    summaryCaptureBtn.disabled = false;
+                    summaryCaptureBtn.textContent = "연동표 캡처";
+                  });
+              });
+            }
           }
         }
       } else if (state.closingSubTab === "salesclose") {
