@@ -116,6 +116,8 @@
     outsourceRowsByKey: {},
     outsourceWarningsByKey: {},
     outsourceMetaByKey: {},
+    salesCloseRowsByMonth: {},
+    purchaseCloseRowsByMonth: {},
     attendanceSearch: "",
   };
   var activeLedgerKind = "sales";
@@ -159,6 +161,19 @@
     { value: "ieum", label: "이음플러스" }
   ];
   var closingOutsourceMarkers = ["정상", "연장", "심야", "특근"];
+  var closingCloseTableRowCount = 52;
+  var salesCloseCompaniesSeed = [
+    "대영전자㈜ 광주지점", "대영전자 S/P는 신공장 사업자로 끊기", "대영 VINA", "대영일렉트릭", "디지티 (영세율)", "디지티 S/P",
+    "HS일렉트릭", "대성포레스", "대정", "동아전기", "무등스크린", "삼광반도체", "성진전자기술", "세현전자", "승명이엔지",
+    "아이테크코리아", "알.비.코리아", "에스디씨코퍼래이션", "에스제이아이 (구 성지산업)", "영림테크", "우인전자", "월드전자기술",
+    "유미전자", "정신전자", "제이에스테크", "진흥전기", "창조테크", "플라텔"
+  ];
+  var purchaseCloseCompaniesSeed = [
+    "아톰", "와이에스워터", "영테크", "하나에스피", "제이앤디테크", "서암", "엠텍", "태용", "효성앵글", "광성포장", "넥서스",
+    "녹원씨엔아이", "다온씨엔티", "대흥인텍스", "덕성하이텍", "동영화성", "두리테크", "삼지산업", "성일테크", "성전목형",
+    "에스에이치텍", "에이치티피", "엔씨씨통상", "오로라", "전원기획", "제일피복상사", "에스이테크", "보우테이프", "카고브릿지",
+    "㈜휴먼스", "KGL (AIR)", "KGL (VSL)", "부천삼정 (경동택배)", "천일콤프레샤", "모세프린텍", "트랜스모바일", "우성ENG (구 티엔제이)"
+  ];
   var closingAttendanceColumns = [
     { key: "employee", label: "이름", width: 118 },
     { key: "type", label: "구분", width: 76 }
@@ -365,6 +380,59 @@
       price: "",
       name: "",
     };
+  }
+
+  function emptyClosingSalesCloseRow(no) {
+    return {
+      no: no || "",
+      division: "",
+      company: "",
+      closeDate: "",
+      taxIssueDate: "",
+      amount: "",
+      mailSent: "",
+      mailReply: "",
+      issueConfirm: "",
+      note: "",
+    };
+  }
+
+  function emptyClosingPurchaseCloseRow(no) {
+    return {
+      no: no || "",
+      division: "",
+      company: "",
+      closeIssueDate: "",
+      supplyAmount: "",
+      totalAmount: "",
+      detailCheck: "",
+      issueConfirm: "",
+      note: "",
+    };
+  }
+
+  function buildClosingSalesCloseSeedRows() {
+    var rows = [];
+    for (var i = 1; i <= closingCloseTableRowCount; i++) {
+      var row = emptyClosingSalesCloseRow(String(i));
+      row.company = salesCloseCompaniesSeed[i - 1] || "";
+      if (i === 1) row.division = "법인";
+      if (i === 8) row.division = "개인";
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  function buildClosingPurchaseCloseSeedRows() {
+    var rows = [];
+    for (var i = 1; i <= closingCloseTableRowCount; i++) {
+      var row = emptyClosingPurchaseCloseRow(String(i));
+      row.company = purchaseCloseCompaniesSeed[i - 1] || "";
+      if (i === 1) row.division = "개인";
+      if (i === 8) row.division = "법인";
+      rows.push(row);
+    }
+    return rows;
   }
 
   function defaultClosingMonthLabel() {
@@ -717,6 +785,12 @@
     if (!closingState.outsourceMetaByKey || typeof closingState.outsourceMetaByKey !== "object") {
       closingState.outsourceMetaByKey = {};
     }
+    if (!closingState.salesCloseRowsByMonth || typeof closingState.salesCloseRowsByMonth !== "object") {
+      closingState.salesCloseRowsByMonth = {};
+    }
+    if (!closingState.purchaseCloseRowsByMonth || typeof closingState.purchaseCloseRowsByMonth !== "object") {
+      closingState.purchaseCloseRowsByMonth = {};
+    }
     if (typeof closingState.attendanceSearch !== "string") {
       closingState.attendanceSearch = "";
     }
@@ -736,6 +810,81 @@
       );
     }
     return closingState;
+  }
+
+  function normalizeClosingSalesCloseRows(rows) {
+    var source = Array.isArray(rows) ? rows : [];
+    var normalized = [];
+    for (var i = 0; i < Math.max(closingCloseTableRowCount, source.length); i++) {
+      var row = source[i] || emptyClosingSalesCloseRow(String(i + 1));
+      normalized.push({
+        no: String((row && row.no) || (i + 1)),
+        division: String((row && row.division) || ""),
+        company: String((row && row.company) || ""),
+        closeDate: String((row && row.closeDate) || ""),
+        taxIssueDate: String((row && row.taxIssueDate) || ""),
+        amount: String((row && row.amount) || ""),
+        mailSent: String((row && row.mailSent) || ""),
+        mailReply: String((row && row.mailReply) || ""),
+        issueConfirm: String((row && row.issueConfirm) || ""),
+        note: String((row && row.note) || ""),
+      });
+    }
+    return normalized.slice(0, closingCloseTableRowCount);
+  }
+
+  function normalizeClosingPurchaseCloseRows(rows) {
+    var source = Array.isArray(rows) ? rows : [];
+    var normalized = [];
+    for (var i = 0; i < Math.max(closingCloseTableRowCount, source.length); i++) {
+      var row = source[i] || emptyClosingPurchaseCloseRow(String(i + 1));
+      normalized.push({
+        no: String((row && row.no) || (i + 1)),
+        division: String((row && row.division) || ""),
+        company: String((row && row.company) || ""),
+        closeIssueDate: String((row && row.closeIssueDate) || ""),
+        supplyAmount: String((row && row.supplyAmount) || ""),
+        totalAmount: String((row && row.totalAmount) || ""),
+        detailCheck: String((row && row.detailCheck) || ""),
+        issueConfirm: String((row && row.issueConfirm) || ""),
+        note: String((row && row.note) || ""),
+      });
+    }
+    return normalized.slice(0, closingCloseTableRowCount);
+  }
+
+  function getClosingSalesCloseRows(monthLabel) {
+    ensureClosingAttendanceState();
+    var key = monthLabel || closingState.attendanceMonth;
+    if (!Array.isArray(closingState.salesCloseRowsByMonth[key])) {
+      closingState.salesCloseRowsByMonth[key] = buildClosingSalesCloseSeedRows();
+    } else {
+      closingState.salesCloseRowsByMonth[key] = normalizeClosingSalesCloseRows(closingState.salesCloseRowsByMonth[key]);
+    }
+    return closingState.salesCloseRowsByMonth[key];
+  }
+
+  function setClosingSalesCloseRows(monthLabel, rows) {
+    ensureClosingAttendanceState();
+    var key = monthLabel || closingState.attendanceMonth;
+    closingState.salesCloseRowsByMonth[key] = normalizeClosingSalesCloseRows(rows);
+  }
+
+  function getClosingPurchaseCloseRows(monthLabel) {
+    ensureClosingAttendanceState();
+    var key = monthLabel || closingState.attendanceMonth;
+    if (!Array.isArray(closingState.purchaseCloseRowsByMonth[key])) {
+      closingState.purchaseCloseRowsByMonth[key] = buildClosingPurchaseCloseSeedRows();
+    } else {
+      closingState.purchaseCloseRowsByMonth[key] = normalizeClosingPurchaseCloseRows(closingState.purchaseCloseRowsByMonth[key]);
+    }
+    return closingState.purchaseCloseRowsByMonth[key];
+  }
+
+  function setClosingPurchaseCloseRows(monthLabel, rows) {
+    ensureClosingAttendanceState();
+    var key = monthLabel || closingState.attendanceMonth;
+    closingState.purchaseCloseRowsByMonth[key] = normalizeClosingPurchaseCloseRows(rows);
   }
 
   function getClosingEmployeeRows(monthLabel) {
@@ -3755,7 +3904,27 @@
             : {};
           var cloned = {};
           Object.keys(source).forEach(function (key) {
-            cloned[key] = Object.assign({ retirement: "", hourlyWage: "" }, source[key] || {});
+            cloned[key] = Object.assign({ retirement: "", hourlyWage: "", lockDay: "" }, source[key] || {});
+          });
+          return cloned;
+        })(),
+        salesCloseRowsByMonth: (function () {
+          var source = closingState.salesCloseRowsByMonth && typeof closingState.salesCloseRowsByMonth === "object"
+            ? closingState.salesCloseRowsByMonth
+            : {};
+          var cloned = {};
+          Object.keys(source).forEach(function (key) {
+            cloned[key] = normalizeClosingSalesCloseRows(source[key]);
+          });
+          return cloned;
+        })(),
+        purchaseCloseRowsByMonth: (function () {
+          var source = closingState.purchaseCloseRowsByMonth && typeof closingState.purchaseCloseRowsByMonth === "object"
+            ? closingState.purchaseCloseRowsByMonth
+            : {};
+          var cloned = {};
+          Object.keys(source).forEach(function (key) {
+            cloned[key] = normalizeClosingPurchaseCloseRows(source[key]);
           });
           return cloned;
         })(),
@@ -3924,7 +4093,19 @@
       closingState.outsourceMetaByKey = {};
       if (closingData.outsourceMetaByKey && typeof closingData.outsourceMetaByKey === "object") {
         Object.keys(closingData.outsourceMetaByKey).forEach(function (key) {
-          closingState.outsourceMetaByKey[key] = Object.assign({ retirement: "", hourlyWage: "" }, closingData.outsourceMetaByKey[key] || {});
+          closingState.outsourceMetaByKey[key] = Object.assign({ retirement: "", hourlyWage: "", lockDay: "" }, closingData.outsourceMetaByKey[key] || {});
+        });
+      }
+      closingState.salesCloseRowsByMonth = {};
+      if (closingData.salesCloseRowsByMonth && typeof closingData.salesCloseRowsByMonth === "object") {
+        Object.keys(closingData.salesCloseRowsByMonth).forEach(function (key) {
+          closingState.salesCloseRowsByMonth[key] = normalizeClosingSalesCloseRows(closingData.salesCloseRowsByMonth[key]);
+        });
+      }
+      closingState.purchaseCloseRowsByMonth = {};
+      if (closingData.purchaseCloseRowsByMonth && typeof closingData.purchaseCloseRowsByMonth === "object") {
+        Object.keys(closingData.purchaseCloseRowsByMonth).forEach(function (key) {
+          closingState.purchaseCloseRowsByMonth[key] = normalizeClosingPurchaseCloseRows(closingData.purchaseCloseRowsByMonth[key]);
         });
       }
     }
@@ -7726,6 +7907,83 @@
     });
   }
 
+  function renderClosingSalesCloseTab() {
+    ensureClosingAttendanceState();
+    var rows = getClosingSalesCloseRows(closingState.attendanceMonth);
+    var monthOptions = getClosingMonthOptions().map(function (option) {
+      return '<option value="' + escapeAttr(option.value) + '"' + (option.value === closingState.attendanceMonth ? " selected" : "") + ">" + escapeHtml(option.label) + "</option>";
+    }).join("");
+    var body = rows.map(function (row, index) {
+      return '<tr>' +
+        '<td class="center">' + escapeHtml(row.no || String(index + 1)) + '</td>' +
+        '<td><input type="text" class="closing-inline-input" data-sales-close-row="' + index + '" data-sales-close-field="division" value="' + escapeAttr(row.division || "") + '" /></td>' +
+        '<td><input type="text" class="closing-inline-input" data-sales-close-row="' + index + '" data-sales-close-field="company" value="' + escapeAttr(row.company || "") + '" /></td>' +
+        '<td><input type="text" class="closing-inline-input" data-sales-close-row="' + index + '" data-sales-close-field="closeDate" value="' + escapeAttr(row.closeDate || "") + '" /></td>' +
+        '<td><input type="text" class="closing-inline-input" data-sales-close-row="' + index + '" data-sales-close-field="taxIssueDate" value="' + escapeAttr(row.taxIssueDate || "") + '" /></td>' +
+        '<td><input type="text" class="closing-inline-input right" data-sales-close-row="' + index + '" data-sales-close-field="amount" value="' + escapeAttr(row.amount || "") + '" /></td>' +
+        '<td><input type="text" class="closing-inline-input center" data-sales-close-row="' + index + '" data-sales-close-field="mailSent" value="' + escapeAttr(row.mailSent || "") + '" /></td>' +
+        '<td><input type="text" class="closing-inline-input center" data-sales-close-row="' + index + '" data-sales-close-field="mailReply" value="' + escapeAttr(row.mailReply || "") + '" /></td>' +
+        '<td><input type="text" class="closing-inline-input center" data-sales-close-row="' + index + '" data-sales-close-field="issueConfirm" value="' + escapeAttr(row.issueConfirm || "") + '" /></td>' +
+        '<td><input type="text" class="closing-inline-input" data-sales-close-row="' + index + '" data-sales-close-field="note" value="' + escapeAttr(row.note || "") + '" /></td>' +
+      '</tr>';
+    }).join("");
+    return (
+      '<div class="closing-page">' +
+        '<div class="closing-card closing-card-wide">' +
+          '<div class="closing-title">' + icon("scroll") + ' 매출 업체별 마감 확인</div>' +
+          '<div class="closing-copy">' + escapeHtml(getClosingAttendanceYear() + "년 " + closingState.attendanceMonth + " 매출 마감내역/세금계산서 확인표") + '</div>' +
+          '<div class="closing-inline-controls" style="margin-top:8px"><label class="closing-inline-label" for="closing-close-month">대상월</label><select id="closing-close-month" class="closing-inline-select">' + monthOptions + '</select></div>' +
+        '</div>' +
+        '<div class="closing-card closing-card-wide">' +
+          '<div class="closing-table-simple-wrap">' +
+            '<table class="closing-table-simple">' +
+              '<thead><tr><th style="width:48px">NO.</th><th style="width:72px">구분</th><th style="width:240px">업체명</th><th style="width:110px">마감일</th><th style="width:110px">계산서발행</th><th style="width:150px">매출액</th><th style="width:90px">메일발송</th><th style="width:90px">회신메일</th><th style="width:90px">발행확인</th><th>비고</th></tr></thead>' +
+              '<tbody>' + body + '</tbody>' +
+            '</table>' +
+          '</div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function renderClosingPurchaseCloseTab() {
+    ensureClosingAttendanceState();
+    var rows = getClosingPurchaseCloseRows(closingState.attendanceMonth);
+    var monthOptions = getClosingMonthOptions().map(function (option) {
+      return '<option value="' + escapeAttr(option.value) + '"' + (option.value === closingState.attendanceMonth ? " selected" : "") + ">" + escapeHtml(option.label) + "</option>";
+    }).join("");
+    var body = rows.map(function (row, index) {
+      return '<tr>' +
+        '<td class="center">' + escapeHtml(row.no || String(index + 1)) + '</td>' +
+        '<td><input type="text" class="closing-inline-input" data-purchase-close-row="' + index + '" data-purchase-close-field="division" value="' + escapeAttr(row.division || "") + '" /></td>' +
+        '<td><input type="text" class="closing-inline-input" data-purchase-close-row="' + index + '" data-purchase-close-field="company" value="' + escapeAttr(row.company || "") + '" /></td>' +
+        '<td><input type="text" class="closing-inline-input" data-purchase-close-row="' + index + '" data-purchase-close-field="closeIssueDate" value="' + escapeAttr(row.closeIssueDate || "") + '" /></td>' +
+        '<td><input type="text" class="closing-inline-input right" data-purchase-close-row="' + index + '" data-purchase-close-field="supplyAmount" value="' + escapeAttr(row.supplyAmount || "") + '" /></td>' +
+        '<td><input type="text" class="closing-inline-input right" data-purchase-close-row="' + index + '" data-purchase-close-field="totalAmount" value="' + escapeAttr(row.totalAmount || "") + '" /></td>' +
+        '<td><input type="text" class="closing-inline-input center" data-purchase-close-row="' + index + '" data-purchase-close-field="detailCheck" value="' + escapeAttr(row.detailCheck || "") + '" /></td>' +
+        '<td><input type="text" class="closing-inline-input center" data-purchase-close-row="' + index + '" data-purchase-close-field="issueConfirm" value="' + escapeAttr(row.issueConfirm || "") + '" /></td>' +
+        '<td><input type="text" class="closing-inline-input" data-purchase-close-row="' + index + '" data-purchase-close-field="note" value="' + escapeAttr(row.note || "") + '" /></td>' +
+      '</tr>';
+    }).join("");
+    return (
+      '<div class="closing-page">' +
+        '<div class="closing-card closing-card-wide">' +
+          '<div class="closing-title">' + icon("folder") + ' 매입 업체별 마감 확인</div>' +
+          '<div class="closing-copy">' + escapeHtml(getClosingAttendanceYear() + "년 " + closingState.attendanceMonth + " 매입 마감내역/세금계산서 확인표") + '</div>' +
+          '<div class="closing-inline-controls" style="margin-top:8px"><label class="closing-inline-label" for="closing-close-month">대상월</label><select id="closing-close-month" class="closing-inline-select">' + monthOptions + '</select></div>' +
+        '</div>' +
+        '<div class="closing-card closing-card-wide">' +
+          '<div class="closing-table-simple-wrap">' +
+            '<table class="closing-table-simple">' +
+              '<thead><tr><th style="width:48px">NO.</th><th style="width:72px">구분</th><th style="width:240px">업체명</th><th style="width:140px">마감일/발행일</th><th style="width:160px">매입금액(공급가액)</th><th style="width:130px">합계 금액</th><th style="width:90px">내역확인</th><th style="width:90px">발행확인</th><th>비고</th></tr></thead>' +
+              '<tbody>' + body + '</tbody>' +
+            '</table>' +
+          '</div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
   function renderClosingPlaceholderTab(title, description) {
     return (
       '<div class="closing-page">' +
@@ -8411,9 +8669,9 @@
       if (state.closingSubTab === "attendance") {
         closingBody = renderClosingAttendanceTab();
       } else if (state.closingSubTab === "salesclose") {
-        closingBody = renderClosingPlaceholderTab("매출마감", "업체별 매출 마감 확인과 메일/세금계산서 체크 흐름을 넣을 자리입니다.");
+        closingBody = renderClosingSalesCloseTab();
       } else if (state.closingSubTab === "purchaseclose") {
-        closingBody = renderClosingPlaceholderTab("매입마감", "업체별 매입 마감 확인과 세금계산서 수취 확인 흐름을 넣을 자리입니다.");
+        closingBody = renderClosingPurchaseCloseTab();
       }
 
       app.innerHTML = top + '<div class="content">' + closingTabsHtml + closingBody + "</div>";
@@ -8685,6 +8943,58 @@
             });
           }
         }
+      } else if (state.closingSubTab === "salesclose") {
+        var closeMonthSelectForSales = document.getElementById("closing-close-month");
+        if (closeMonthSelectForSales) {
+          closeMonthSelectForSales.value = closingState.attendanceMonth || defaultClosingMonthLabel();
+          closeMonthSelectForSales.addEventListener("change", function () {
+            closingState.attendanceMonth = closeMonthSelectForSales.value || defaultClosingMonthLabel();
+            ensureClosingAttendanceState();
+            scheduleLedgerDraftSave();
+            render();
+          });
+        }
+        app.querySelectorAll("[data-sales-close-row]").forEach(function (inputEl) {
+          inputEl.addEventListener("input", function () {
+            var rowIndex = Number(inputEl.getAttribute("data-sales-close-row"));
+            var field = inputEl.getAttribute("data-sales-close-field");
+            if (isNaN(rowIndex) || !field) return;
+            var rows = normalizeClosingSalesCloseRows(getClosingSalesCloseRows(closingState.attendanceMonth));
+            rows[rowIndex] = Object.assign({}, rows[rowIndex] || {}, (function () {
+              var next = {};
+              next[field] = inputEl.value || "";
+              return next;
+            })());
+            setClosingSalesCloseRows(closingState.attendanceMonth, rows);
+            scheduleLedgerDraftSave();
+          });
+        });
+      } else if (state.closingSubTab === "purchaseclose") {
+        var closeMonthSelectForPurchase = document.getElementById("closing-close-month");
+        if (closeMonthSelectForPurchase) {
+          closeMonthSelectForPurchase.value = closingState.attendanceMonth || defaultClosingMonthLabel();
+          closeMonthSelectForPurchase.addEventListener("change", function () {
+            closingState.attendanceMonth = closeMonthSelectForPurchase.value || defaultClosingMonthLabel();
+            ensureClosingAttendanceState();
+            scheduleLedgerDraftSave();
+            render();
+          });
+        }
+        app.querySelectorAll("[data-purchase-close-row]").forEach(function (inputEl) {
+          inputEl.addEventListener("input", function () {
+            var rowIndex = Number(inputEl.getAttribute("data-purchase-close-row"));
+            var field = inputEl.getAttribute("data-purchase-close-field");
+            if (isNaN(rowIndex) || !field) return;
+            var rows = normalizeClosingPurchaseCloseRows(getClosingPurchaseCloseRows(closingState.attendanceMonth));
+            rows[rowIndex] = Object.assign({}, rows[rowIndex] || {}, (function () {
+              var next = {};
+              next[field] = inputEl.value || "";
+              return next;
+            })());
+            setClosingPurchaseCloseRows(closingState.attendanceMonth, rows);
+            scheduleLedgerDraftSave();
+          });
+        });
       }
       return;
     }
