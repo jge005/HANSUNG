@@ -603,6 +603,18 @@
     return new Date(year, month, 0).getDate();
   }
 
+  function getClosingVisibleDayCount() {
+    var maxDays = getClosingDaysInMonth();
+    var now = new Date();
+    if (
+      getClosingAttendanceYear() === now.getFullYear() &&
+      getClosingAttendanceMonthNumber() === now.getMonth() + 1
+    ) {
+      return Math.max(1, Math.min(maxDays, now.getDate()));
+    }
+    return maxDays;
+  }
+
   function getClosingWeekdayLabel(day) {
     var labels = ["일", "월", "화", "수", "목", "금", "토"];
     var year = getClosingAttendanceYear();
@@ -619,11 +631,21 @@
 
   function calculateClosingOutsourceTimeTotal(row) {
     var total = 0;
+    var visibleDays = getClosingVisibleDayCount();
     closingAttendanceDayFields.forEach(function (field, index) {
-      if (index + 1 > getClosingDaysInMonth()) return;
+      if (index + 1 > visibleDays) return;
       total += parseCalcNumber(row && row[field]) || 0;
     });
     return total;
+  }
+
+  function normalizeJoinDateText(value) {
+    var text = String(value || "").trim();
+    var digits = text.replace(/\D/g, "");
+    if (digits.length === 8) {
+      return digits.slice(0, 4) + "-" + digits.slice(4, 6) + "-" + digits.slice(6);
+    }
+    return text;
   }
 
   function calculateClosingOutsourceGrandTotal(rows) {
@@ -927,7 +949,7 @@
     var rows = getClosingOutsourceRows(closingState.attendanceMonth, closingState.outsourceVendor);
     var warnings = getClosingOutsourceWarnings(closingState.attendanceMonth, closingState.outsourceVendor);
     var meta = getClosingOutsourceMeta(closingState.attendanceMonth, closingState.outsourceVendor);
-    var daysInMonth = getClosingDaysInMonth();
+    var visibleDays = getClosingVisibleDayCount();
     var year = getClosingAttendanceYear();
     var monthNumber = getClosingAttendanceMonthNumber();
     var wageTotal = calculateClosingOutsourceGrandTotal(rows);
@@ -937,10 +959,10 @@
     var total = wageTotal + mgmtFee + retirement;
     var totalVat = Math.round(total * 1.1);
     var headDays = "";
-    for (var day = 1; day <= daysInMonth; day++) {
+    for (var day = 1; day <= visibleDays; day++) {
       var weekday = getClosingWeekdayLabel(day);
       headDays +=
-        '<th class="closing-matrix-day-head' + getClosingWeekdayClass(day) + '">' +
+        '<th class="closing-matrix-day-head">' +
           '<div class="closing-matrix-weekday">' + escapeHtml(weekday) + '</div>' +
           '<div class="closing-matrix-daynum">' + day + '</div>' +
         '</th>';
@@ -954,38 +976,32 @@
       block.forEach(function (row) {
         groupTotal += parseCalcNumber(row && row.payAmount) || 0;
       });
-      for (var markerIndex = 0; markerIndex < closingOutsourceMarkers.length; markerIndex++) {
-        var row = block[markerIndex] || emptyClosingOutsourceRow("", closingOutsourceMarkers[markerIndex]);
-        var timeTotal = calculateClosingOutsourceTimeTotal(row);
-        body += '<tr class="closing-matrix-row">';
-        if (markerIndex === 0) {
-          body += '<th rowspan="' + closingOutsourceMarkers.length + '" class="closing-matrix-sticky left">';
-          body += '<input type="text" class="closing-matrix-meta-input" data-outsource-group="' + index + '" data-outsource-meta="employee" value="' + escapeAttr(headerRow.employee || "") + '" />';
-          body += '</th>';
-          body += '<th rowspan="' + closingOutsourceMarkers.length + '" class="closing-matrix-sticky left closing-matrix-join">';
-          body += '<input type="text" class="closing-matrix-meta-input" data-outsource-group="' + index + '" data-outsource-meta="joinDate" value="' + escapeAttr(headerRow.joinDate || "") + '" placeholder="근속 시작일" />';
-          body += '</th>';
-        }
-        body += '<th class="closing-matrix-type">' + escapeHtml(row.type || closingOutsourceMarkers[markerIndex]) + '</th>';
-        for (var dayCol = 1; dayCol <= daysInMonth; dayCol++) {
-          var field = "d" + dayCol;
-          var warningKey = (index + markerIndex) + ":" + field;
-          body += '<td class="closing-matrix-cell' + getClosingWeekdayClass(dayCol) + (warnings[warningKey] ? ' warning' : '') + '">';
-          body += '<input type="text" class="closing-matrix-input" data-outsource-row="' + (index + markerIndex) + '" data-outsource-field="' + field + '" value="' + escapeAttr(row[field] || "") + '" />';
-          body += '</td>';
-        }
-        body += '<td class="closing-matrix-summary center">' + escapeHtml(formatDisplayNumber(timeTotal || 0)) + '</td>';
-        body += '<td class="closing-matrix-summary"><input type="text" class="closing-matrix-input right" data-outsource-row="' + (index + markerIndex) + '" data-outsource-field="payCalc" value="' + escapeAttr(row.payCalc || "") + '" /></td>';
-        body += '<td class="closing-matrix-summary"><input type="text" class="closing-matrix-input right" data-outsource-row="' + (index + markerIndex) + '" data-outsource-field="bonus" value="' + escapeAttr(row.bonus || "") + '" /></td>';
-        body += '<td class="closing-matrix-summary"><input type="text" class="closing-matrix-input right" data-outsource-row="' + (index + markerIndex) + '" data-outsource-field="payAmount" value="' + escapeAttr(row.payAmount || "") + '" /></td>';
-        if (markerIndex === 0) {
-          body += '<td rowspan="' + closingOutsourceMarkers.length + '" class="closing-matrix-total right">';
-          body += '<div>' + escapeHtml(formatDisplayNumber(groupTotal || 0)) + '</div>';
-          body += '<button type="button" class="tiny-danger-btn mt-3" data-remove-outsource-group="' + index + '">삭제</button>';
-          body += '</td>';
-        }
-        body += '</tr>';
+      var row = block[0] || emptyClosingOutsourceRow("", "정상");
+      var timeTotal = calculateClosingOutsourceTimeTotal(row);
+      body += '<tr class="closing-matrix-row">';
+      body += '<th class="closing-matrix-sticky left">';
+      body += '<input type="text" class="closing-matrix-meta-input" data-outsource-group="' + index + '" data-outsource-meta="employee" value="' + escapeAttr(headerRow.employee || "") + '" />';
+      body += '</th>';
+      body += '<th class="closing-matrix-sticky left closing-matrix-join">';
+      body += '<input type="text" class="closing-matrix-meta-input" data-outsource-group="' + index + '" data-outsource-meta="joinDate" value="' + escapeAttr(normalizeJoinDateText(headerRow.joinDate || "")) + '" placeholder="근속 시작일" />';
+      body += '</th>';
+      body += '<th class="closing-matrix-type">정상</th>';
+      for (var dayCol = 1; dayCol <= visibleDays; dayCol++) {
+        var field = "d" + dayCol;
+        var warningKey = index + ":" + field;
+        body += '<td class="closing-matrix-cell' + (warnings[warningKey] ? ' warning' : '') + '">';
+        body += '<input type="text" class="closing-matrix-input" data-outsource-row="' + index + '" data-outsource-field="' + field + '" value="' + escapeAttr(row[field] || "") + '" />';
+        body += '</td>';
       }
+      body += '<td class="closing-matrix-summary center">' + escapeHtml(formatDisplayNumber(timeTotal || 0)) + '</td>';
+      body += '<td class="closing-matrix-summary"><input type="text" class="closing-matrix-input right" data-outsource-row="' + index + '" data-outsource-field="payCalc" value="' + escapeAttr(row.payCalc || "") + '" /></td>';
+      body += '<td class="closing-matrix-summary"><input type="text" class="closing-matrix-input right" data-outsource-row="' + index + '" data-outsource-field="bonus" value="' + escapeAttr(row.bonus || "") + '" /></td>';
+      body += '<td class="closing-matrix-summary"><input type="text" class="closing-matrix-input right" data-outsource-row="' + index + '" data-outsource-field="payAmount" value="' + escapeAttr(row.payAmount || "") + '" /></td>';
+      body += '<td class="closing-matrix-total right">';
+      body += '<div>' + escapeHtml(formatDisplayNumber(groupTotal || 0)) + '</div>';
+      body += '<button type="button" class="tiny-danger-btn mt-3" data-remove-outsource-group="' + index + '">삭제</button>';
+      body += '</td>';
+      body += '</tr>';
     }
     return (
       '<div class="closing-matrix-wrap">' +
@@ -998,7 +1014,7 @@
           '<div class="closing-matrix-badge strong">총 금액(VAT 포함) ' + escapeHtml(formatClosingCurrency(totalVat)) + '</div>' +
         '</div>' +
         '<div class="closing-matrix-table-wrap">' +
-          '<table class="closing-matrix-table">' +
+          '<table class="closing-matrix-table closing-matrix-table-compact">' +
             '<thead>' +
               '<tr>' +
                 '<th class="closing-matrix-sticky left" rowspan="2">성명</th>' +
@@ -1067,20 +1083,19 @@
       var block = rows.slice(index, index + closingEmployeeMarkers.length);
       var headerRow = block[0] || emptyClosingEmployeeRow("", "야근");
       if (!matchesClosingAttendanceSearch(headerRow.employee, "")) continue;
-      body += '<div class="closing-employee-card">';
-      body += '<div class="closing-employee-card-head">';
-      body += '<div class="closing-employee-name-readonly">' + escapeHtml(headerRow.employee || "이름") + '</div>';
-      body += '</div>';
-      body += '<table class="closing-employee-mini-table"><tbody>';
+      var counts = {};
       for (var markerIndex = 0; markerIndex < closingEmployeeMarkers.length; markerIndex++) {
         var row = block[markerIndex] || emptyClosingEmployeeRow("", closingEmployeeMarkers[markerIndex]);
-        body += '<tr>';
-        body += '<th>' + escapeHtml(row.type || closingEmployeeMarkers[markerIndex]) + '</th>';
-        body += '<td class="right">' + escapeHtml(String(row.count || "0")) + '</td>';
-        body += '</tr>';
+        counts[row.type || closingEmployeeMarkers[markerIndex]] = row.count || "0";
       }
-      body += '</tbody></table>';
-      body += '</div>';
+      body += '<tr>';
+      body += '<td>' + escapeHtml(headerRow.employee || "이름") + '</td>';
+      body += '<td class="right">' + escapeHtml(String(counts["야근"] || "0")) + '</td>';
+      body += '<td class="right">' + escapeHtml(String(counts["특근"] || "0")) + '</td>';
+      body += '<td class="right">' + escapeHtml(String(counts["지각"] || "0")) + '</td>';
+      body += '<td class="right">' + escapeHtml(String(counts["조퇴"] || "0")) + '</td>';
+      body += '<td class="right">' + escapeHtml(String(counts["결근"] || "0")) + '</td>';
+      body += '</tr>';
     }
     return (
       '<div class="closing-matrix-wrap">' +
@@ -1089,7 +1104,12 @@
           '<div class="closing-matrix-badge">' + escapeHtml(getClosingEmployeePeriodLabel()) + '</div>' +
           '<div class="closing-matrix-badge">수기 입력표와 같은 데이터를 요약해서 보여줍니다.</div>' +
         '</div>' +
-        '<div class="closing-employee-grid">' + body + '</div>' +
+        '<div class="closing-table-simple-wrap">' +
+          '<table class="closing-table-simple">' +
+            '<thead><tr><th>성명</th><th>야근</th><th>특근</th><th>지각</th><th>조퇴</th><th>결근</th></tr></thead>' +
+            '<tbody>' + (body || '<tr><td colspan="6" class="center muted">표시할 데이터가 없습니다.</td></tr>') + '</tbody>' +
+          '</table>' +
+        '</div>' +
       '</div>'
     );
   }
@@ -7466,9 +7486,14 @@
               }
               if (!isNaN(groupIndex) && metaField) {
                 var baseIndex = groupIndex;
+                var nextMetaValue = target.value;
+                if (metaField === "joinDate") {
+                  nextMetaValue = normalizeJoinDateText(nextMetaValue);
+                  target.value = nextMetaValue;
+                }
                 rows[baseIndex] = Object.assign({}, rows[baseIndex] || {}, (function () {
                   var next = {};
-                  next[metaField] = target.value;
+                  next[metaField] = nextMetaValue;
                   return next;
                 })());
                 setClosingOutsourceRows(closingState.attendanceMonth, closingState.outsourceVendor, rows);
