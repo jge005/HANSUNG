@@ -34,7 +34,6 @@
   ];
   var closingTabs = [
     { key: "attendance", label: "근무(급여)", icon: "sheet" },
-    { key: "meal", label: "식대", icon: "clipboard" },
     { key: "salesclose", label: "매출마감", icon: "scroll" },
     { key: "purchaseclose", label: "매입마감", icon: "folder" },
   ];
@@ -828,7 +827,7 @@
     ensureClosingAttendanceState();
     var key = getClosingOutsourceKey(monthLabel, vendor);
     if (!closingState.outsourceMetaByKey[key] || typeof closingState.outsourceMetaByKey[key] !== "object") {
-      closingState.outsourceMetaByKey[key] = { retirement: "", hourlyWage: "" };
+      closingState.outsourceMetaByKey[key] = { retirement: "", hourlyWage: "", lockDay: "" };
     }
     return closingState.outsourceMetaByKey[key];
   }
@@ -836,9 +835,19 @@
   function setClosingOutsourceMeta(monthLabel, vendor, meta) {
     ensureClosingAttendanceState();
     closingState.outsourceMetaByKey[getClosingOutsourceKey(monthLabel, vendor)] = Object.assign(
-      { retirement: "", hourlyWage: "" },
+      { retirement: "", hourlyWage: "", lockDay: "" },
       meta || {}
     );
+  }
+
+  function getClosingOutsourceLockDay(meta, daysInMonth) {
+    var maxDay = daysInMonth || getClosingDaysInMonth();
+    var value = parseCalcNumber(meta && meta.lockDay);
+    if (value == null) return 0;
+    value = Math.floor(value);
+    if (value < 0) value = 0;
+    if (value > maxDay) value = maxDay;
+    return value;
   }
 
   function getClosingAttendanceYear() {
@@ -990,7 +999,7 @@
     return previousNormalRow["d" + prevDay];
   }
 
-  function calculateClosingOutsourceWeeklyHolidayHours(block, warnings, groupStart, daysInMonth) {
+  function calculateClosingOutsourceWeeklyHolidayHours(block, warnings, groupStart, daysInMonth, applyToNormalRow, lockDay) {
     var normalRow = block && block[0] ? block[0] : {};
     var employeeName = String(normalRow.employee || "");
     var previousMonthInfo = getPreviousClosingMonthInfo();
@@ -1038,6 +1047,13 @@
         }
         if (sundayText && sundayNum == null) {
           continue;
+        }
+        var locked = applyToNormalRow && Number(lockDay || 0) >= sunday;
+        if (locked) {
+          continue;
+        }
+        if (applyToNormalRow) {
+          normalRow[sundayField] = "8";
         }
         extraHours += 8;
       }
@@ -1623,8 +1639,12 @@
 
   function applyFingerprintDataToOutsourceRows(parsedEmployees) {
     var rows = normalizeClosingOutsourceRows(getClosingOutsourceRows(closingState.attendanceMonth, closingState.outsourceVendor));
+    var previousWarnings = getClosingOutsourceWarnings(closingState.attendanceMonth, closingState.outsourceVendor);
     var warnings = {};
     var monthNumber = getClosingAttendanceMonthNumber();
+    var daysInMonth = getClosingDaysInMonth();
+    var meta = getClosingOutsourceMeta(closingState.attendanceMonth, closingState.outsourceVendor);
+    var lockDay = getClosingOutsourceLockDay(meta, daysInMonth);
     var matchedGroups = 0;
     var warningCells = 0;
     for (var groupStart = 0; groupStart < rows.length; groupStart += closingOutsourceMarkers.length) {
@@ -1643,10 +1663,17 @@
       if (matchedName) matchedGroups++;
       for (var day = 1; day <= 31; day++) {
         var field = "d" + day;
+        var warningKey = groupStart + ":" + field;
+        if (day <= lockDay) {
+          if (previousWarnings && previousWarnings[warningKey]) {
+            warnings[warningKey] = true;
+          }
+          continue;
+        }
         for (var markerOffset = 0; markerOffset < closingOutsourceMarkers.length; markerOffset++) {
           rows[groupStart + markerOffset][field] = "";
         }
-        if (!matchedName || day > getClosingDaysInMonth()) continue;
+        if (!matchedName || day > daysInMonth) continue;
         var record = parsedEmployees[matchedName][monthNumber + "-" + day];
         var calculated = calculateOutsourceRecord(record);
         if (calculated.warning) {
@@ -1654,7 +1681,7 @@
           if (day > warningLimit || isClosingWeekend(day)) {
             continue;
           }
-          warnings[groupStart + ":" + field] = true;
+          warnings[warningKey] = true;
           warningCells++;
           continue;
         }
@@ -1663,12 +1690,17 @@
         rows[groupStart + 2][field] = calculated.night;
         rows[groupStart + 3][field] = calculated.special;
       }
+      if (matchedName) {
+        var block = rows.slice(groupStart, groupStart + closingOutsourceMarkers.length);
+        calculateClosingOutsourceWeeklyHolidayHours(block, warnings, groupStart, daysInMonth, true, lockDay);
+      }
     }
     setClosingOutsourceRows(closingState.attendanceMonth, closingState.outsourceVendor, rows);
     setClosingOutsourceWarnings(closingState.attendanceMonth, closingState.outsourceVendor, warnings);
     return {
       matchedGroups: matchedGroups,
       warningCells: warningCells,
+      lockDay: lockDay,
     };
   }
 
@@ -1749,8 +1781,9 @@
     var headDays = "";
     for (var day = 1; day <= daysInMonth; day++) {
       var weekday = getClosingWeekdayLabel(day);
+      var extra = weekday === "일" ? " sunday" : (weekday === "토" ? " saturday" : "");
       headDays +=
-        '<th class="closing-matrix-day-head">' +
+        '<th class="closing-matrix-day-head' + extra + '">' +
           '<div class="closing-matrix-weekday">' + escapeHtml(weekday) + '</div>' +
           '<div class="closing-matrix-daynum">' + day + '</div>' +
         '</th>';
@@ -1783,11 +1816,12 @@
         for (var dayCol = 1; dayCol <= daysInMonth; dayCol++) {
           var field = "d" + dayCol;
           var warningKey = index + ":" + field;
+          var weekdayClass = getClosingWeekdayClass(dayCol);
           var normalText = String(row[field] || "").trim();
           var normalNum = parseCalcNumber(normalText);
           var isWarningCell = markerIndex === 0 && !!warnings[warningKey] && !normalText;
           var isCautionCell = markerIndex === 0 && !!normalText && (normalNum == null || normalNum < 8);
-          body += '<td class="closing-matrix-cell' + (isWarningCell ? ' warning' : '') + (isCautionCell ? ' caution' : '') + '">';
+          body += '<td class="closing-matrix-cell' + weekdayClass + (isWarningCell ? ' warning' : '') + (isCautionCell ? ' caution' : '') + '">';
           body += '<input type="text" class="closing-matrix-input" data-outsource-row="' + (index + markerIndex) + '" data-outsource-field="' + field + '" value="' + escapeAttr(row[field] || "") + '" />';
           body += '</td>';
         }
@@ -7450,7 +7484,6 @@
     var totalAmount = filteredRows.reduce(function (sum, row) {
       return sum + (parseCalcNumber(row.amount) || 0);
     }, 0);
-    var productSummary = buildManageProductSummary(filteredRows);
     var manageLabel = activeLedgerKind === "purchase" ? "매입" : "매출";
 
     function renderMonthOptions(selectedValue) {
@@ -7507,23 +7540,6 @@
               '</table>' +
             '</div>' +
           '</div>' +
-          '<div class="manage-side-card">' +
-            '<div class="manage-card-title">품목 집계</div>' +
-            '<div class="manage-mini-table-wrap">' +
-              '<table class="manage-mini-table">' +
-                '<thead><tr><th>품명</th><th class="right">수량</th><th class="right">금액</th></tr></thead>' +
-                '<tbody>' +
-                  (productSummary.length ? productSummary.map(function (item) {
-                    return '<tr>' +
-                      '<td>' + escapeHtml(item.name) + '</td>' +
-                      '<td class="right">' + escapeHtml(formatDisplayNumber(item.qty)) + '</td>' +
-                      '<td class="right">' + escapeHtml(formatDisplayNumber(item.amount)) + '</td>' +
-                    '</tr>';
-                  }).join("") : '<tr><td colspan="3" class="center muted">집계할 품목이 없습니다.</td></tr>') +
-                '</tbody>' +
-              '</table>' +
-            '</div>' +
-          '</div>' +
         '</div>' +
       '</div>'
     );
@@ -7531,6 +7547,8 @@
 
   function renderClosingAttendanceTab() {
     ensureClosingAttendanceState();
+    var outsourceMeta = getClosingOutsourceMeta(closingState.attendanceMonth, closingState.outsourceVendor);
+    var outsourceLockDay = getClosingOutsourceLockDay(outsourceMeta, getClosingDaysInMonth());
     var monthOptions = getClosingMonthOptions().map(function (option) {
       return (
         '<option value="' + escapeHtml(option.value) + '"' +
@@ -7585,6 +7603,9 @@
                   '<select id="closing-outsource-vendor" class="closing-inline-select">' +
                     outsourceVendorOptions +
                   '</select>' +
+                  '<label class="closing-inline-label" for="closing-outsource-lock-day">수정일</label>' +
+                  '<input type="text" id="closing-outsource-lock-day" class="closing-inline-input right" style="width:64px" placeholder="일" value="' + escapeAttr(outsourceLockDay ? String(outsourceLockDay) : "") + '" />' +
+                  '<button type="button" class="soft-btn" id="closing-outsource-lock-today">오늘 고정</button>' +
                   '<label class="closing-inline-file">' +
                     '<span class="closing-inline-file-btn">지문 원본 선택</span>' +
                     '<input type="file" id="closing-fingerprint-file" accept=".xls,.xml,.xlsx" />' +
@@ -8389,8 +8410,6 @@
       var closingBody = "";
       if (state.closingSubTab === "attendance") {
         closingBody = renderClosingAttendanceTab();
-      } else if (state.closingSubTab === "meal") {
-        closingBody = renderClosingPlaceholderTab("식대", "식대 원본과 월별 정산 시트를 연결할 자리입니다.");
       } else if (state.closingSubTab === "salesclose") {
         closingBody = renderClosingPlaceholderTab("매출마감", "업체별 매출 마감 확인과 메일/세금계산서 체크 흐름을 넣을 자리입니다.");
       } else if (state.closingSubTab === "purchaseclose") {
@@ -8480,6 +8499,36 @@
             render();
           });
         }
+        var closingOutsourceLockDayInput = document.getElementById("closing-outsource-lock-day");
+        if (closingOutsourceLockDayInput) {
+          closingOutsourceLockDayInput.addEventListener("change", function () {
+            var meta = getClosingOutsourceMeta(closingState.attendanceMonth, closingState.outsourceVendor);
+            var parsed = parseCalcNumber(closingOutsourceLockDayInput.value);
+            if (parsed == null) {
+              meta.lockDay = "";
+            } else {
+              var normalized = Math.floor(parsed);
+              if (normalized < 0) normalized = 0;
+              if (normalized > getClosingDaysInMonth()) normalized = getClosingDaysInMonth();
+              meta.lockDay = String(normalized);
+            }
+            setClosingOutsourceMeta(closingState.attendanceMonth, closingState.outsourceVendor, meta);
+            scheduleLedgerDraftSave();
+            render();
+          });
+        }
+        var closingOutsourceLockTodayButton = document.getElementById("closing-outsource-lock-today");
+        if (closingOutsourceLockTodayButton) {
+          closingOutsourceLockTodayButton.addEventListener("click", function () {
+            var lockDay = getClosingWarningDayLimit();
+            var meta = getClosingOutsourceMeta(closingState.attendanceMonth, closingState.outsourceVendor);
+            meta.lockDay = String(lockDay);
+            setClosingOutsourceMeta(closingState.attendanceMonth, closingState.outsourceVendor, meta);
+            scheduleLedgerDraftSave();
+            render();
+            showAppToast("수정일을 " + lockDay + "일로 고정했어요. 다음 자동채우기부터 이전 날짜는 유지됩니다.", "success");
+          });
+        }
         var closingFingerprintFileInput = document.getElementById("closing-fingerprint-file");
         if (closingFingerprintFileInput) {
           closingFingerprintFileInput.addEventListener("change", function () {
@@ -8504,7 +8553,7 @@
                   scheduleLedgerDraftSave();
                   render();
                   showAppToast(
-                    "자동채우기를 완료했어요. 적용 직원 " + outsourceResult.matchedGroups + "명, 확인 필요 칸 " + outsourceResult.warningCells + "개",
+                    "자동채우기를 완료했어요. 적용 직원 " + outsourceResult.matchedGroups + "명, 확인 필요 칸 " + outsourceResult.warningCells + "개 (수정일 " + outsourceResult.lockDay + "일까지 보호)",
                     outsourceResult.warningCells ? "warning" : "success"
                   );
                 } else {

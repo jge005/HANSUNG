@@ -1156,6 +1156,7 @@
     }
     .closing-matrix-table-wrap {
       overflow: auto;
+      max-height: min(68vh, calc(100vh - 260px));
       border: 1px solid #d6cde8;
       border-radius: 12px;
       background: #fff;
@@ -1186,6 +1187,10 @@
       font-weight: 700;
       text-align: center;
       height: 42px;
+    }
+    .closing-matrix-table thead .left {
+      z-index: 4;
+      background: #faf7ff;
     }
     .closing-matrix-table .left {
       position: sticky;
