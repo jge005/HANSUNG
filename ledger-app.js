@@ -73,6 +73,7 @@
     draftId: null,
     legacyDraftId: null,
     loadedFromFirebase: false,
+    initialLoadFinished: false,
     loadingPromise: null,
     saveTimer: null,
     localSaveTimer: null,
@@ -108,6 +109,7 @@
   var closingState = {
     attendanceMonth: "",
     attendanceView: "employee",
+    employeeViewMode: "entry",
     employeeRowsByMonth: {},
     outsourceVendor: "leaders",
     outsourceRowsByKey: {},
@@ -480,6 +482,9 @@
     }
     if (closingState.attendanceView !== "outsource") {
       closingState.attendanceView = "employee";
+    }
+    if (closingState.employeeViewMode !== "summary") {
+      closingState.employeeViewMode = "entry";
     }
     if (!closingState.employeeRowsByMonth || typeof closingState.employeeRowsByMonth !== "object") {
       closingState.employeeRowsByMonth = {};
@@ -941,12 +946,10 @@
         '</th>';
     }
     var body = "";
-    var displayGroup = 0;
     for (var index = 0; index < rows.length; index += closingOutsourceMarkers.length) {
       var block = rows.slice(index, index + closingOutsourceMarkers.length);
       var headerRow = block[0] || emptyClosingOutsourceRow("", "정상");
       if (!matchesClosingAttendanceSearch(headerRow.employee, headerRow.joinDate)) continue;
-      displayGroup++;
       var groupTotal = 0;
       block.forEach(function (row) {
         groupTotal += parseCalcNumber(row && row.payAmount) || 0;
@@ -956,12 +959,11 @@
         var timeTotal = calculateClosingOutsourceTimeTotal(row);
         body += '<tr class="closing-matrix-row">';
         if (markerIndex === 0) {
-          body += '<th rowspan="' + closingOutsourceMarkers.length + '" class="closing-matrix-sticky left center">' + displayGroup + '</th>';
           body += '<th rowspan="' + closingOutsourceMarkers.length + '" class="closing-matrix-sticky left">';
           body += '<input type="text" class="closing-matrix-meta-input" data-outsource-group="' + index + '" data-outsource-meta="employee" value="' + escapeAttr(headerRow.employee || "") + '" />';
           body += '</th>';
-          body += '<th rowspan="' + closingOutsourceMarkers.length + '" class="closing-matrix-sticky left">';
-          body += '<input type="text" class="closing-matrix-meta-input" data-outsource-group="' + index + '" data-outsource-meta="joinDate" value="' + escapeAttr(headerRow.joinDate || "") + '" placeholder="YYYY-MM-DD" />';
+          body += '<th rowspan="' + closingOutsourceMarkers.length + '" class="closing-matrix-sticky left closing-matrix-join">';
+          body += '<input type="text" class="closing-matrix-meta-input" data-outsource-group="' + index + '" data-outsource-meta="joinDate" value="' + escapeAttr(headerRow.joinDate || "") + '" placeholder="근속 시작일" />';
           body += '</th>';
         }
         body += '<th class="closing-matrix-type">' + escapeHtml(row.type || closingOutsourceMarkers[markerIndex]) + '</th>';
@@ -999,9 +1001,8 @@
           '<table class="closing-matrix-table">' +
             '<thead>' +
               '<tr>' +
-                '<th class="closing-matrix-sticky left" rowspan="2">순번</th>' +
                 '<th class="closing-matrix-sticky left" rowspan="2">성명</th>' +
-                '<th class="closing-matrix-sticky left" rowspan="2">입사일</th>' +
+                '<th class="closing-matrix-sticky left closing-matrix-join" rowspan="2">근속 시작</th>' +
                 '<th rowspan="2">구분</th>' +
                 headDays +
                 '<th rowspan="2">시간</th>' +
@@ -1018,7 +1019,7 @@
     );
   }
 
-  function renderClosingEmployeeMatrix() {
+  function renderClosingEmployeeEntryMatrix() {
     var rows = getClosingEmployeeRows(closingState.attendanceMonth);
     var year = getClosingAttendanceYear();
     var monthNumber = getClosingAttendanceMonthNumber();
@@ -1048,9 +1049,45 @@
     return (
       '<div class="closing-matrix-wrap">' +
         '<div class="closing-matrix-summarybar">' +
-          '<div class="closing-matrix-badge">' + escapeHtml(year + "년 " + monthNumber + "월 정직원 근태 표시 시트") + '</div>' +
+          '<div class="closing-matrix-badge">' + escapeHtml(year + "년 " + monthNumber + "월 정직원 수기 입력") + '</div>' +
           '<div class="closing-matrix-badge">' + escapeHtml(getClosingEmployeePeriodLabel()) + '</div>' +
           '<div class="closing-matrix-badge">야근 / 특근 / 지각 / 조퇴 / 결근 월 합계</div>' +
+        '</div>' +
+        '<div class="closing-employee-grid">' + body + '</div>' +
+      '</div>'
+    );
+  }
+
+  function renderClosingEmployeeSummaryMatrix() {
+    var rows = getClosingEmployeeRows(closingState.attendanceMonth);
+    var year = getClosingAttendanceYear();
+    var monthNumber = getClosingAttendanceMonthNumber();
+    var body = "";
+    for (var index = 0; index < rows.length; index += closingEmployeeMarkers.length) {
+      var block = rows.slice(index, index + closingEmployeeMarkers.length);
+      var headerRow = block[0] || emptyClosingEmployeeRow("", "야근");
+      if (!matchesClosingAttendanceSearch(headerRow.employee, "")) continue;
+      body += '<div class="closing-employee-card">';
+      body += '<div class="closing-employee-card-head">';
+      body += '<div class="closing-employee-name-readonly">' + escapeHtml(headerRow.employee || "이름") + '</div>';
+      body += '</div>';
+      body += '<table class="closing-employee-mini-table"><tbody>';
+      for (var markerIndex = 0; markerIndex < closingEmployeeMarkers.length; markerIndex++) {
+        var row = block[markerIndex] || emptyClosingEmployeeRow("", closingEmployeeMarkers[markerIndex]);
+        body += '<tr>';
+        body += '<th>' + escapeHtml(row.type || closingEmployeeMarkers[markerIndex]) + '</th>';
+        body += '<td class="right">' + escapeHtml(String(row.count || "0")) + '</td>';
+        body += '</tr>';
+      }
+      body += '</tbody></table>';
+      body += '</div>';
+    }
+    return (
+      '<div class="closing-matrix-wrap">' +
+        '<div class="closing-matrix-summarybar">' +
+          '<div class="closing-matrix-badge">' + escapeHtml(year + "년 " + monthNumber + "월 정직원 연동 화면") + '</div>' +
+          '<div class="closing-matrix-badge">' + escapeHtml(getClosingEmployeePeriodLabel()) + '</div>' +
+          '<div class="closing-matrix-badge">수기 입력표와 같은 데이터를 요약해서 보여줍니다.</div>' +
         '</div>' +
         '<div class="closing-employee-grid">' + body + '</div>' +
       '</div>'
@@ -2739,6 +2776,7 @@
 
   function getLedgerPayload() {
     ensureLedgerBundles();
+    syncActiveLedgerBundle();
     var salesStoredRowCount = Math.max(MIN_ROW_COUNT, getLastUsedRowIndex(salesLedgerBundle.rows) + 20);
     var purchaseStoredRowCount = Math.max(MIN_ROW_COUNT, getLastUsedRowIndex(purchaseLedgerBundle.rows) + 20);
     var trimmedWorkItems = trimTrailingRows(workState.items, workGridFields, 12, function () { return {}; });
@@ -2776,6 +2814,7 @@
       closing: {
         attendanceMonth: closingState.attendanceMonth || defaultClosingMonthLabel(),
         attendanceView: closingState.attendanceView === "outsource" ? "outsource" : "employee",
+        employeeViewMode: closingState.employeeViewMode === "summary" ? "summary" : "entry",
         attendanceSearch: String(closingState.attendanceSearch || ""),
         employeeRowsByMonth: cloneClosingRowsMap(closingState.employeeRowsByMonth),
         outsourceVendor: closingState.outsourceVendor || "leaders",
@@ -2824,7 +2863,12 @@
     var closingData = data.closing && typeof data.closing === "object" ? data.closing : null;
 
     if (Array.isArray(salesData.statusRows)) {
-      salesLedgerBundle.rows = normalizeSalesRows(salesData.statusRows);
+      var nextSalesRows = normalizeSalesRows(salesData.statusRows);
+      var currentSalesLast = getLastUsedRowIndex(salesLedgerBundle.rows || []);
+      var nextSalesLast = getLastUsedRowIndex(nextSalesRows);
+      if (!(nextSalesLast < 0 && currentSalesLast >= 0)) {
+        salesLedgerBundle.rows = nextSalesRows;
+      }
     }
 
     if (Array.isArray(sharedData.workItems)) {
@@ -2867,9 +2911,19 @@
     }
 
     if (purchaseData && Array.isArray(purchaseData.statusRows)) {
-      purchaseLedgerBundle.rows = normalizeSalesRows(purchaseData.statusRows);
+      var nextPurchaseRows = normalizeSalesRows(purchaseData.statusRows);
+      var currentPurchaseLast = getLastUsedRowIndex(purchaseLedgerBundle.rows || []);
+      var nextPurchaseLast = getLastUsedRowIndex(nextPurchaseRows);
+      if (!(nextPurchaseLast < 0 && currentPurchaseLast >= 0)) {
+        purchaseLedgerBundle.rows = nextPurchaseRows;
+      }
     } else if (Array.isArray(data.purchaseStatusRows)) {
-      purchaseLedgerBundle.rows = normalizeSalesRows(data.purchaseStatusRows);
+      var legacyPurchaseRows = normalizeSalesRows(data.purchaseStatusRows);
+      var currentLegacyPurchaseLast = getLastUsedRowIndex(purchaseLedgerBundle.rows || []);
+      var nextLegacyPurchaseLast = getLastUsedRowIndex(legacyPurchaseRows);
+      if (!(nextLegacyPurchaseLast < 0 && currentLegacyPurchaseLast >= 0)) {
+        purchaseLedgerBundle.rows = legacyPurchaseRows;
+      }
     }
     if (purchaseData && Array.isArray(purchaseData.clientRows)) {
       purchaseLedgerBundle.clientState.rows = normalizeClientGridRows(purchaseData.clientRows, 20);
@@ -2922,6 +2976,7 @@
         ? closingData.attendanceMonth
         : defaultClosingMonthLabel();
       closingState.attendanceView = closingData.attendanceView === "outsource" ? "outsource" : "employee";
+      closingState.employeeViewMode = closingData.employeeViewMode === "summary" ? "summary" : "entry";
       closingState.attendanceSearch = String(closingData.attendanceSearch || "");
       closingState.employeeRowsByMonth = cloneClosingRowsMap(closingData.employeeRowsByMonth);
       closingState.outsourceVendor = String(closingData.outsourceVendor || "leaders");
@@ -2972,6 +3027,7 @@
 
   function saveLocalLedgerBackup() {
     try {
+      syncActiveLedgerBundle();
       var payload = getLedgerPayload();
       ledgerState.localUpdatedAt = payload.updatedAt;
       localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(payload));
@@ -3060,6 +3116,11 @@
     ensureDraftId();
     flushLocalLedgerBackup();
 
+    if (!ledgerState.initialLoadFinished && ledgerState.loadingPromise) {
+      queueLedgerSaveRetry(1200);
+      return;
+    }
+
     if (!window.firebaseFirestoreApi || !window.firebaseFirestoreApi.saveWorkDraft) {
       if (attempts < 30) {
         setTimeout(function () {
@@ -3109,7 +3170,11 @@
 
       function finish(success) {
         ledgerState.loadedFromFirebase = !!success;
+        ledgerState.initialLoadFinished = true;
         ledgerState.loadingPromise = null;
+        if (ledgerState.dirty) {
+          queueLedgerSaveRetry(300);
+        }
         resolve();
       }
 
@@ -6570,6 +6635,12 @@
       );
     }).join("");
     var isEmployeeView = closingState.attendanceView !== "outsource";
+    var employeeViewToggle = isEmployeeView
+      ? '<div class="toolbar-segment" style="display:inline-flex;gap:6px;">' +
+          '<button type="button" class="soft-btn' + (closingState.employeeViewMode !== "summary" ? ' active-filter' : '') + '" data-closing-employee-view="entry">수기 입력</button>' +
+          '<button type="button" class="soft-btn' + (closingState.employeeViewMode === "summary" ? ' active-filter' : '') + '" data-closing-employee-view="summary">연동 화면</button>' +
+        '</div>'
+      : "";
     return (
       '<div class="closing-page">' +
         '<div class="closing-card closing-sheet-card">' +
@@ -6583,6 +6654,7 @@
             '<div class="closing-inline-controls">' +
               '<button type="button" class="soft-btn' + (isEmployeeView ? ' active-filter' : '') + '" data-closing-attendance-view="employee">정직원</button>' +
               '<button type="button" class="soft-btn' + (!isEmployeeView ? ' active-filter' : '') + '" data-closing-attendance-view="outsource">아웃소싱</button>' +
+              employeeViewToggle +
               '<label class="closing-inline-label" for="closing-attendance-month">대상월</label>' +
               '<select id="closing-attendance-month" class="closing-inline-select">' +
                 monthOptions +
@@ -6615,7 +6687,7 @@
         '</div>' +
         '<div class="closing-card closing-sheet-card">' +
           (isEmployeeView
-            ? renderClosingEmployeeMatrix()
+            ? (closingState.employeeViewMode === "summary" ? renderClosingEmployeeSummaryMatrix() : renderClosingEmployeeEntryMatrix())
             : renderClosingOutsourceMatrix()) +
         '</div>' +
       '</div>'
@@ -7267,6 +7339,15 @@
             var nextView = btn.getAttribute("data-closing-attendance-view") === "outsource" ? "outsource" : "employee";
             if (closingState.attendanceView === nextView) return;
             closingState.attendanceView = nextView;
+            render();
+          });
+        });
+        app.querySelectorAll("[data-closing-employee-view]").forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            var nextMode = btn.getAttribute("data-closing-employee-view") === "summary" ? "summary" : "entry";
+            if (closingState.employeeViewMode === nextMode) return;
+            closingState.employeeViewMode = nextMode;
+            scheduleLedgerDraftSave();
             render();
           });
         });
