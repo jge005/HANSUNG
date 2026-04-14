@@ -8141,32 +8141,8 @@
 
   function renderClosingSalesCloseTab() {
     ensureClosingAttendanceState();
-    var rows = getClosingSalesCloseRows(closingState.attendanceMonth);
     var monthOptions = getClosingMonthOptions().map(function (option) {
       return '<option value="' + escapeAttr(option.value) + '"' + (option.value === closingState.attendanceMonth ? " selected" : "") + ">" + escapeHtml(option.label) + "</option>";
-    }).join("");
-    var spans = getClosingDivisionSpans(rows);
-    var body = rows.map(function (row, index) {
-      var divisionCell = "";
-      var spanInfo = spans[index];
-      var amountValue = parseCalcNumber(row.amount);
-      var rowClass = amountValue != null && amountValue > 0 ? " row-green" : "";
-      if (spanInfo && spanInfo.start === index) {
-        divisionCell = '<td class="closing-excel-center" rowspan="' + spanInfo.span + '">' +
-          '<input type="text" class="closing-excel-input center" data-sales-close-row="' + index + '" data-sales-close-field="division" value="' + escapeAttr(row.division || "") + '" />' +
-        '</td>';
-      }
-      return '<tr class="' + rowClass + '">' +
-        '<td class="closing-excel-center">' + escapeHtml(row.no || String(index + 1)) + '</td>' +
-        divisionCell +
-        '<td class="company-cell"><textarea class="closing-excel-textarea closing-excel-center" data-sales-close-row="' + index + '" data-sales-close-field="company">' + escapeHtml(row.company || "") + '</textarea></td>' +
-        '<td class="close-cell"><input type="text" class="closing-excel-input center" data-sales-close-row="' + index + '" data-sales-close-field="closeDate" value="' + escapeAttr(row.closeDate || "") + '" /></td>' +
-        '<td class="amount-cell"><input type="text" class="closing-excel-input right" data-sales-close-row="' + index + '" data-sales-close-field="amount" value="' + escapeAttr(row.amount || "") + '" /></td>' +
-        '<td><input type="text" class="closing-excel-input center" data-sales-close-row="' + index + '" data-sales-close-field="mailSent" value="' + escapeAttr(row.mailSent || "") + '" /></td>' +
-        '<td><input type="text" class="closing-excel-input center" data-sales-close-row="' + index + '" data-sales-close-field="mailReply" value="' + escapeAttr(row.mailReply || "") + '" /></td>' +
-        '<td><input type="text" class="closing-excel-input center" data-sales-close-row="' + index + '" data-sales-close-field="issueConfirm" value="' + escapeAttr(row.issueConfirm || "") + '" /></td>' +
-        '<td class="closing-excel-note note-cell"><textarea class="closing-excel-textarea" data-sales-close-row="' + index + '" data-sales-close-field="note">' + escapeHtml(row.note || "") + '</textarea></td>' +
-      '</tr>';
     }).join("");
     var previewHtml = (closingExcelSync.sales && closingExcelSync.sales.previewHtml) || "";
     return (
@@ -8183,40 +8159,11 @@
             '<span class="closing-inline-note">' + escapeHtml((closingExcelSync.sales && closingExcelSync.sales.name) || "연결된 파일 없음") + '</span>' +
           '</div>' +
         '</div>' +
-        (previewHtml
-          ? '<div class="closing-card closing-card-wide"><div class="closing-title">' + icon("sheet") + ' 엑셀 원본 화면(읽기 전용)</div><div class="closing-excel-preview-host">' + previewHtml + '</div></div>'
-          : '') +
         '<div class="closing-card closing-card-wide">' +
-          '<div class="closing-excel-sheet">' +
-            '<table class="closing-excel-table closing-sales-table">' +
-              '<colgroup>' +
-                '<col style="width:44px" />' +
-                '<col style="width:72px" />' +
-                '<col style="width:205px" />' +
-                '<col style="width:82px" />' +
-                '<col style="width:110px" />' +
-                '<col style="width:86px" />' +
-                '<col style="width:86px" />' +
-                '<col style="width:86px" />' +
-                '<col style="width:440px" />' +
-              '</colgroup>' +
-              '<thead>' +
-                '<tr><th colspan="9" class="closing-excel-title">마감내역서/세금계산서</th></tr>' +
-                '<tr>' +
-                  '<th class="closing-excel-head">NO.</th>' +
-                  '<th class="closing-excel-head"></th>' +
-                  '<th class="closing-excel-head">업체명</th>' +
-                  '<th class="closing-excel-head">마감일</th>' +
-                  '<th class="closing-excel-head">매출액</th>' +
-                  '<th class="closing-excel-head">메일발송</th>' +
-                  '<th class="closing-excel-head">회신메일</th>' +
-                  '<th class="closing-excel-head">발행확인</th>' +
-                  '<th class="closing-excel-head">비고</th>' +
-                '</tr>' +
-              '</thead>' +
-              '<tbody>' + body + '</tbody>' +
-            '</table>' +
-          '</div>' +
+          '<div class="closing-title">' + icon("sheet") + ' 엑셀 원본 화면(읽기 전용)</div>' +
+          (previewHtml
+            ? '<div class="closing-excel-preview-host large">' + previewHtml + '</div>'
+            : '<div class="closing-copy">엑셀 연결 후 가져오기 또는 원본 미리보기를 눌러주세요.</div>') +
         '</div>' +
       '</div>'
     );
@@ -8224,29 +8171,8 @@
 
   function renderClosingPurchaseCloseTab() {
     ensureClosingAttendanceState();
-    var rows = getClosingPurchaseCloseRows(closingState.attendanceMonth);
     var monthOptions = getClosingMonthOptions().map(function (option) {
       return '<option value="' + escapeAttr(option.value) + '"' + (option.value === closingState.attendanceMonth ? " selected" : "") + ">" + escapeHtml(option.label) + "</option>";
-    }).join("");
-    var spans = getClosingDivisionSpans(rows);
-    var body = rows.map(function (row, index) {
-      var divisionCell = "";
-      var spanInfo = spans[index];
-      if (spanInfo && spanInfo.start === index) {
-        divisionCell = '<td class="closing-excel-center" rowspan="' + spanInfo.span + '">' +
-          '<input type="text" class="closing-excel-input center" data-purchase-close-row="' + index + '" data-purchase-close-field="division" value="' + escapeAttr(row.division || "") + '" />' +
-        '</td>';
-      }
-      return '<tr>' +
-        divisionCell +
-        '<td><input type="text" class="closing-excel-input closing-excel-center" data-purchase-close-row="' + index + '" data-purchase-close-field="company" value="' + escapeAttr(row.company || "") + '" /></td>' +
-        '<td><input type="text" class="closing-excel-input center" data-purchase-close-row="' + index + '" data-purchase-close-field="closeIssueDate" value="' + escapeAttr(row.closeIssueDate || "") + '" /></td>' +
-        '<td><input type="text" class="closing-excel-input right" data-purchase-close-row="' + index + '" data-purchase-close-field="supplyAmount" value="' + escapeAttr(row.supplyAmount || "") + '" /></td>' +
-        '<td><input type="text" class="closing-excel-input right" data-purchase-close-row="' + index + '" data-purchase-close-field="totalAmount" value="' + escapeAttr(row.totalAmount || "") + '" /></td>' +
-        '<td><input type="text" class="closing-excel-input center" data-purchase-close-row="' + index + '" data-purchase-close-field="detailCheck" value="' + escapeAttr(row.detailCheck || "") + '" /></td>' +
-        '<td><input type="text" class="closing-excel-input center" data-purchase-close-row="' + index + '" data-purchase-close-field="issueConfirm" value="' + escapeAttr(row.issueConfirm || "") + '" /></td>' +
-        '<td class="closing-excel-note"><textarea class="closing-excel-textarea" data-purchase-close-row="' + index + '" data-purchase-close-field="note">' + escapeHtml(row.note || "") + '</textarea></td>' +
-      '</tr>';
     }).join("");
     var previewHtml = (closingExcelSync.purchase && closingExcelSync.purchase.previewHtml) || "";
     return (
@@ -8263,31 +8189,11 @@
             '<span class="closing-inline-note">' + escapeHtml((closingExcelSync.purchase && closingExcelSync.purchase.name) || "연결된 파일 없음") + '</span>' +
           '</div>' +
         '</div>' +
-        (previewHtml
-          ? '<div class="closing-card closing-card-wide"><div class="closing-title">' + icon("sheet") + ' 엑셀 원본 화면(읽기 전용)</div><div class="closing-excel-preview-host">' + previewHtml + '</div></div>'
-          : '') +
         '<div class="closing-card closing-card-wide">' +
-          '<div class="closing-excel-sheet">' +
-            '<table class="closing-excel-table">' +
-              '<thead>' +
-                '<tr>' +
-                  '<th colspan="2" class="closing-excel-title">마감내역서/세금계산서</th>' +
-                  '<th colspan="6" class="closing-excel-banner">매입 업체 세금계산서 발행\n개인으로,법인으로 끊겼는지 잘 확인하기</th>' +
-                '</tr>' +
-                '<tr>' +
-                  '<th style="width:64px"></th>' +
-                  '<th style="width:300px" class="closing-excel-head">업체명</th>' +
-                  '<th style="width:140px" class="closing-excel-head">발일/발행</th>' +
-                  '<th style="width:220px" class="closing-excel-head">매입금액(공급가액)</th>' +
-                  '<th style="width:180px" class="closing-excel-head">합계 금액</th>' +
-                  '<th style="width:110px" class="closing-excel-head">내역확인</th>' +
-                  '<th style="width:110px" class="closing-excel-head">발행확인</th>' +
-                  '<th class="closing-excel-head">비고</th>' +
-                '</tr>' +
-              '</thead>' +
-              '<tbody>' + body + '</tbody>' +
-            '</table>' +
-          '</div>' +
+          '<div class="closing-title">' + icon("sheet") + ' 엑셀 원본 화면(읽기 전용)</div>' +
+          (previewHtml
+            ? '<div class="closing-excel-preview-host large">' + previewHtml + '</div>'
+            : '<div class="closing-copy">엑셀 연결 후 가져오기 또는 원본 미리보기를 눌러주세요.</div>') +
         '</div>' +
       '</div>'
     );
@@ -9206,9 +9112,8 @@
                 render();
               });
             }
-            outsourceWrap.addEventListener("change", function () {
-              render();
-            });
+            // 엑셀처럼 연속 입력(Enter/방향키) 시 포커스가 첫 셀로 튀지 않도록
+            // change 이벤트에서 전체 렌더를 강제하지 않는다.
           }
         } else {
           var employeeWrap = app.querySelector(".closing-matrix-wrap");
