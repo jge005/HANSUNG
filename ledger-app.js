@@ -1357,6 +1357,17 @@
       if (normalizeImportHeaderToken(item.date) === "월일" && normalizeImportHeaderToken(item.client) === "업체") {
         continue;
       }
+      var joined = [item.date, item.client, item.code, item.name, item.qty, item.price, item.amount, item.note1, item.note2].join(" ");
+      if (joined.indexOf("\uFFFD") >= 0) continue;
+      var weirdMatches = joined.match(/[^\u0020-\u007E\u00A0-\u024F\u1100-\u11FF\u3130-\u318F\uAC00-\uD7A3]/g);
+      if (weirdMatches && weirdMatches.length > Math.max(8, Math.floor(joined.length * 0.12))) continue;
+      var plausibleCore =
+        (/^\d{1,2}\s*월\s*\d{1,2}\s*일$/.test(item.date) || /^\d{1,2}[\/\.-]\d{1,2}$/.test(item.date) || /^\d{4}-\d{2}-\d{2}$/.test(item.date)) ||
+        parseCalcNumber(item.qty) != null ||
+        parseCalcNumber(item.price) != null ||
+        parseCalcNumber(item.amount) != null ||
+        /[A-Za-z]{1,}\d{1,}/.test(item.code);
+      if (!plausibleCore) continue;
       rows.push(item);
     }
     return rows;
@@ -1589,8 +1600,11 @@
         for (var dayCol = 1; dayCol <= daysInMonth; dayCol++) {
           var field = "d" + dayCol;
           var warningKey = index + ":" + field;
-          var isWarningCell = markerIndex === 0 && !!warnings[warningKey];
-          body += '<td class="closing-matrix-cell' + (isWarningCell ? ' warning' : '') + '">';
+          var normalText = String(row[field] || "").trim();
+          var normalNum = parseCalcNumber(normalText);
+          var isWarningCell = markerIndex === 0 && !!warnings[warningKey] && !normalText;
+          var isCautionCell = markerIndex === 0 && !!normalText && (normalNum == null || normalNum < 8);
+          body += '<td class="closing-matrix-cell' + (isWarningCell ? ' warning' : '') + (isCautionCell ? ' caution' : '') + '">';
           body += '<input type="text" class="closing-matrix-input" data-outsource-row="' + (index + markerIndex) + '" data-outsource-field="' + field + '" value="' + escapeAttr(row[field] || "") + '" />';
           body += '</td>';
         }
@@ -7833,6 +7847,8 @@
           importFileInput.addEventListener("change", function () {
             var file = importFileInput.files && importFileInput.files[0] ? importFileInput.files[0] : null;
             if (!file) return;
+            var lowerName = String(file.name || "").toLowerCase();
+            var isLegacyXls = /\.xls$/.test(lowerName) && !/\.xlsx$/.test(lowerName);
             readFileAsArrayBuffer(file)
               .then(function (buffer) {
                 var workbookRows = [];
@@ -7840,9 +7856,15 @@
                   workbookRows = parseStatusRowsFromWorkbookBuffer(buffer);
                 } catch (workbookErr) {
                   console.warn("워크북 파서 실패, 텍스트 파서로 재시도:", workbookErr);
+                  if (isLegacyXls) {
+                    throw new Error("암호/보호된 .xls 파일은 직접 가져오기 어렵습니다. 엑셀에서 암호 해제 후 .xlsx로 저장해서 가져와주세요.");
+                  }
                   workbookRows = [];
                 }
                 if (workbookRows.length) return workbookRows;
+                if (isLegacyXls) {
+                  throw new Error(".xls 파일을 해석하지 못했습니다. 엑셀에서 .xlsx로 저장 후 다시 가져와주세요.");
+                }
                 return readFileAsTextWithEncoding(file, "utf-8").then(function (utfText) {
                   var utfRows = [];
                   try {
@@ -7864,7 +7886,7 @@
               })
               .then(function (parsedRows) {
                 if (!parsedRows || !parsedRows.length) {
-                  showAppToast("파일을 읽었지만 현황 행을 찾지 못했어요. 암호/보호된 파일이면 해제 후 다시 시도해주세요.", "warning");
+                  showAppToast("가져올 수 있는 현황 행을 찾지 못했어요. 헤더(월일/업체/코드/품명/수량/단가/금액)를 확인해주세요.", "warning");
                   return;
                 }
                 var importedCount = appendImportedStatusRows(parsedRows);
@@ -8225,9 +8247,6 @@
                   return next;
                 })());
                 setClosingOutsourceRows(closingState.attendanceMonth, closingState.outsourceVendor, rows);
-                var warnings = getClosingOutsourceWarnings(closingState.attendanceMonth, closingState.outsourceVendor);
-                delete warnings[rowIndex + ":" + field];
-                setClosingOutsourceWarnings(closingState.attendanceMonth, closingState.outsourceVendor, warnings);
                 scheduleLedgerDraftSave();
                 return;
               }
