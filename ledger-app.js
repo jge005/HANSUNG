@@ -8135,20 +8135,23 @@
     var body = rows.map(function (row, index) {
       var divisionCell = "";
       var spanInfo = spans[index];
+      var amountValue = parseCalcNumber(row.amount);
+      var rowClass = amountValue != null && amountValue > 0 ? " row-green" : "";
       if (spanInfo && spanInfo.start === index) {
         divisionCell = '<td class="closing-excel-center" rowspan="' + spanInfo.span + '">' +
           '<input type="text" class="closing-excel-input center" data-sales-close-row="' + index + '" data-sales-close-field="division" value="' + escapeAttr(row.division || "") + '" />' +
         '</td>';
       }
-      return '<tr>' +
+      return '<tr class="' + rowClass + '">' +
+        '<td class="closing-excel-center">' + escapeHtml(row.no || String(index + 1)) + '</td>' +
         divisionCell +
-        '<td><input type="text" class="closing-excel-input closing-excel-center" data-sales-close-row="' + index + '" data-sales-close-field="company" value="' + escapeAttr(row.company || "") + '" /></td>' +
-        '<td><input type="text" class="closing-excel-input center" data-sales-close-row="' + index + '" data-sales-close-field="closeDate" value="' + escapeAttr(row.closeDate || "") + '" /></td>' +
-        '<td><input type="text" class="closing-excel-input right" data-sales-close-row="' + index + '" data-sales-close-field="amount" value="' + escapeAttr(row.amount || "") + '" /></td>' +
+        '<td class="company-cell"><textarea class="closing-excel-textarea closing-excel-center" data-sales-close-row="' + index + '" data-sales-close-field="company">' + escapeHtml(row.company || "") + '</textarea></td>' +
+        '<td class="close-cell"><input type="text" class="closing-excel-input center" data-sales-close-row="' + index + '" data-sales-close-field="closeDate" value="' + escapeAttr(row.closeDate || "") + '" /></td>' +
+        '<td class="amount-cell"><input type="text" class="closing-excel-input right" data-sales-close-row="' + index + '" data-sales-close-field="amount" value="' + escapeAttr(row.amount || "") + '" /></td>' +
         '<td><input type="text" class="closing-excel-input center" data-sales-close-row="' + index + '" data-sales-close-field="mailSent" value="' + escapeAttr(row.mailSent || "") + '" /></td>' +
         '<td><input type="text" class="closing-excel-input center" data-sales-close-row="' + index + '" data-sales-close-field="mailReply" value="' + escapeAttr(row.mailReply || "") + '" /></td>' +
         '<td><input type="text" class="closing-excel-input center" data-sales-close-row="' + index + '" data-sales-close-field="issueConfirm" value="' + escapeAttr(row.issueConfirm || "") + '" /></td>' +
-        '<td class="closing-excel-note"><textarea class="closing-excel-textarea" data-sales-close-row="' + index + '" data-sales-close-field="note">' + escapeHtml(row.note || "") + '</textarea></td>' +
+        '<td class="closing-excel-note note-cell"><textarea class="closing-excel-textarea" data-sales-close-row="' + index + '" data-sales-close-field="note">' + escapeHtml(row.note || "") + '</textarea></td>' +
       '</tr>';
     }).join("");
     return (
@@ -8166,17 +8169,29 @@
         '</div>' +
         '<div class="closing-card closing-card-wide">' +
           '<div class="closing-excel-sheet">' +
-            '<table class="closing-excel-table">' +
+            '<table class="closing-excel-table closing-sales-table">' +
+              '<colgroup>' +
+                '<col style="width:44px" />' +
+                '<col style="width:72px" />' +
+                '<col style="width:205px" />' +
+                '<col style="width:82px" />' +
+                '<col style="width:110px" />' +
+                '<col style="width:86px" />' +
+                '<col style="width:86px" />' +
+                '<col style="width:86px" />' +
+                '<col style="width:440px" />' +
+              '</colgroup>' +
               '<thead>' +
-                '<tr><th colspan="8" class="closing-excel-title">마감내역서/세금계산서</th></tr>' +
+                '<tr><th colspan="9" class="closing-excel-title">마감내역서/세금계산서</th></tr>' +
                 '<tr>' +
-                  '<th style="width:64px"></th>' +
-                  '<th style="width:300px" class="closing-excel-head">업체명</th>' +
-                  '<th style="width:110px" class="closing-excel-head">마감일</th>' +
-                  '<th style="width:150px" class="closing-excel-head">매출액</th>' +
-                  '<th style="width:120px" class="closing-excel-head">메일발송</th>' +
-                  '<th style="width:120px" class="closing-excel-head">회신메일</th>' +
-                  '<th style="width:110px" class="closing-excel-head">발행확인</th>' +
+                  '<th class="closing-excel-head">NO.</th>' +
+                  '<th class="closing-excel-head"></th>' +
+                  '<th class="closing-excel-head">업체명</th>' +
+                  '<th class="closing-excel-head">마감일</th>' +
+                  '<th class="closing-excel-head">매출액</th>' +
+                  '<th class="closing-excel-head">메일발송</th>' +
+                  '<th class="closing-excel-head">회신메일</th>' +
+                  '<th class="closing-excel-head">발행확인</th>' +
                   '<th class="closing-excel-head">비고</th>' +
                 '</tr>' +
               '</thead>' +
