@@ -232,6 +232,10 @@
   var closingAttendanceSheetEngine = null;
   var closingOutsourceSheetEngine = null;
   var closingFingerprintSourceFile = null;
+  var closingExcelSync = {
+    sales: { handle: null, name: "" },
+    purchase: { handle: null, name: "" },
+  };
 
   var app = document.getElementById("app");
 
@@ -1784,6 +1788,200 @@
     ST.rows = nextRows;
     ST.visibleRowsDirty = true;
     return incoming.length;
+  }
+
+  function getWorkbookFirstSheetGridFromBuffer(arrayBuffer) {
+    if (!(window.XLSX && window.XLSX.read && window.XLSX.utils && window.XLSX.utils.sheet_to_json)) {
+      throw new Error("엑셀 엔진을 불러오지 못했습니다.");
+    }
+    var workbook = window.XLSX.read(arrayBuffer, { type: "array", cellDates: false, raw: false });
+    var sheetNames = workbook && workbook.SheetNames ? workbook.SheetNames : [];
+    if (!sheetNames.length) return [];
+    var first = workbook.Sheets[sheetNames[0]];
+    if (!first) return [];
+    return window.XLSX.utils.sheet_to_json(first, { header: 1, raw: false, defval: "" });
+  }
+
+  function toTextCell(value) {
+    return String(value == null ? "" : value).trim();
+  }
+
+  function parseSalesCloseRowsFromWorkbookBuffer(arrayBuffer) {
+    var grid = getWorkbookFirstSheetGridFromBuffer(arrayBuffer);
+    var rows = buildClosingSalesCloseSeedRows();
+    var lastDivision = "";
+    var imported = 0;
+    for (var i = 0; i < grid.length; i++) {
+      var row = grid[i] || [];
+      var noText = toTextCell(row[0]);
+      if (!/^\d+$/.test(noText)) continue;
+      var no = Number(noText);
+      if (!isFinite(no) || no < 1 || no > closingCloseTableRowCount) continue;
+      var target = rows[no - 1] || emptyClosingSalesCloseRow(String(no));
+      var division = toTextCell(row[1]);
+      if (division) lastDivision = division;
+      target.no = String(no);
+      target.division = division || lastDivision || target.division || "";
+      target.company = toTextCell(row[2]);
+      target.closeDate = toTextCell(row[3]);
+      target.amount = toTextCell(row[4]);
+      target.mailSent = toTextCell(row[5]);
+      target.mailReply = toTextCell(row[6]);
+      target.issueConfirm = toTextCell(row[7]);
+      target.note = toTextCell(row[8]);
+      rows[no - 1] = target;
+      imported++;
+    }
+    if (!imported) throw new Error("매출 마감 양식에서 읽을 행을 찾지 못했습니다.");
+    return normalizeClosingSalesCloseRows(rows);
+  }
+
+  function parsePurchaseCloseRowsFromWorkbookBuffer(arrayBuffer) {
+    var grid = getWorkbookFirstSheetGridFromBuffer(arrayBuffer);
+    var rows = buildClosingPurchaseCloseSeedRows();
+    var lastDivision = "";
+    var imported = 0;
+    for (var i = 0; i < grid.length; i++) {
+      var row = grid[i] || [];
+      var noText = toTextCell(row[0]);
+      if (!/^\d+$/.test(noText)) continue;
+      var no = Number(noText);
+      if (!isFinite(no) || no < 1 || no > closingCloseTableRowCount) continue;
+      var target = rows[no - 1] || emptyClosingPurchaseCloseRow(String(no));
+      var division = toTextCell(row[1]);
+      if (division) lastDivision = division;
+      target.no = String(no);
+      target.division = division || lastDivision || target.division || "";
+      target.company = toTextCell(row[2]);
+      target.closeIssueDate = toTextCell(row[3]);
+      target.supplyAmount = toTextCell(row[4]);
+      target.totalAmount = toTextCell(row[5]);
+      target.detailCheck = toTextCell(row[6]);
+      target.issueConfirm = toTextCell(row[7]);
+      target.note = toTextCell(row[8]);
+      rows[no - 1] = target;
+      imported++;
+    }
+    if (!imported) throw new Error("매입 마감 양식에서 읽을 행을 찾지 못했습니다.");
+    return normalizeClosingPurchaseCloseRows(rows);
+  }
+
+  function buildSalesCloseExportAoA(rows) {
+    var aoa = [];
+    aoa.push(["마감내역서/세금계산서"]);
+    aoa.push(["NO.", "구분", "업체명", "마감일", "매출액", "메일발송", "회신메일", "발행확인", "비고"]);
+    rows.forEach(function (row, idx) {
+      aoa.push([
+        row.no || String(idx + 1),
+        row.division || "",
+        row.company || "",
+        row.closeDate || "",
+        row.amount || "",
+        row.mailSent || "",
+        row.mailReply || "",
+        row.issueConfirm || "",
+        row.note || "",
+      ]);
+    });
+    return aoa;
+  }
+
+  function buildPurchaseCloseExportAoA(rows) {
+    var aoa = [];
+    aoa.push(["마감내역서/세금계산서"]);
+    aoa.push(["NO.", "구분", "업체명", "발일/발행", "매입금액(공급가액)", "합계 금액", "내역확인", "발행확인", "비고"]);
+    rows.forEach(function (row, idx) {
+      aoa.push([
+        row.no || String(idx + 1),
+        row.division || "",
+        row.company || "",
+        row.closeIssueDate || "",
+        row.supplyAmount || "",
+        row.totalAmount || "",
+        row.detailCheck || "",
+        row.issueConfirm || "",
+        row.note || "",
+      ]);
+    });
+    return aoa;
+  }
+
+  function makeWorkbookBufferFromAoA(aoa, sheetName) {
+    if (!(window.XLSX && window.XLSX.utils && window.XLSX.utils.aoa_to_sheet && window.XLSX.write)) {
+      throw new Error("엑셀 엔진을 불러오지 못했습니다.");
+    }
+    var wb = window.XLSX.utils.book_new();
+    var ws = window.XLSX.utils.aoa_to_sheet(aoa);
+    window.XLSX.utils.book_append_sheet(wb, ws, sheetName || "Sheet1");
+    return window.XLSX.write(wb, { bookType: "xlsx", type: "array" });
+  }
+
+  function triggerExcelDownloadFromBuffer(buffer, filename) {
+    var blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  async function pickClosingExcelHandle(kind) {
+    if (!window.showOpenFilePicker) {
+      throw new Error("이 브라우저는 파일 연결을 지원하지 않습니다. 가져오기/내보내기 버튼을 사용해주세요.");
+    }
+    var handles = await window.showOpenFilePicker({
+      multiple: false,
+      excludeAcceptAllOption: false,
+      types: [{
+        description: "Excel",
+        accept: {
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
+          "application/vnd.ms-excel": [".xls"]
+        }
+      }]
+    });
+    if (!handles || !handles[0]) throw new Error("파일 선택이 취소되었습니다.");
+    var handle = handles[0];
+    closingExcelSync[kind] = closingExcelSync[kind] || { handle: null, name: "" };
+    closingExcelSync[kind].handle = handle;
+    closingExcelSync[kind].name = handle.name || "";
+    return handle;
+  }
+
+  async function importClosingFromLinkedExcel(kind) {
+    var slot = closingExcelSync[kind] || {};
+    var handle = slot.handle;
+    if (!handle) throw new Error("먼저 엑셀 연결 버튼으로 파일을 선택해주세요.");
+    var file = await handle.getFile();
+    var buffer = await file.arrayBuffer();
+    if (kind === "sales") {
+      var salesRows = parseSalesCloseRowsFromWorkbookBuffer(buffer);
+      setClosingSalesCloseRows(closingState.attendanceMonth, salesRows);
+      return salesRows.length;
+    }
+    var purchaseRows = parsePurchaseCloseRowsFromWorkbookBuffer(buffer);
+    setClosingPurchaseCloseRows(closingState.attendanceMonth, purchaseRows);
+    return purchaseRows.length;
+  }
+
+  async function exportClosingToLinkedExcel(kind) {
+    var slot = closingExcelSync[kind] || {};
+    var handle = slot.handle;
+    if (!handle) throw new Error("먼저 엑셀 연결 버튼으로 파일을 선택해주세요.");
+    var rows = kind === "sales"
+      ? normalizeClosingSalesCloseRows(getClosingSalesCloseRows(closingState.attendanceMonth))
+      : normalizeClosingPurchaseCloseRows(getClosingPurchaseCloseRows(closingState.attendanceMonth));
+    var aoa = kind === "sales"
+      ? buildSalesCloseExportAoA(rows)
+      : buildPurchaseCloseExportAoA(rows);
+    var wbBuffer = makeWorkbookBufferFromAoA(aoa, closingState.attendanceMonth || "Sheet1");
+    var writable = await handle.createWritable();
+    await writable.write(wbBuffer);
+    await writable.close();
+    return rows.length;
   }
 
   function applyFingerprintDataToOutsourceRows(parsedEmployees) {
@@ -7957,7 +8155,14 @@
       '<div class="closing-page">' +
         '<div class="closing-card closing-card-wide">' +
           '<div class="closing-title">' + icon("scroll") + ' 매출 업체별 마감 확인</div>' +
-          '<div class="closing-inline-controls" style="margin-top:8px"><label class="closing-inline-label" for="closing-close-month">대상월</label><select id="closing-close-month" class="closing-inline-select">' + monthOptions + '</select></div>' +
+          '<div class="closing-inline-controls" style="margin-top:8px">' +
+            '<label class="closing-inline-label" for="closing-close-month">대상월</label><select id="closing-close-month" class="closing-inline-select">' + monthOptions + '</select>' +
+            '<button type="button" class="soft-btn" id="closing-sales-sync-link">엑셀 연결</button>' +
+            '<button type="button" class="soft-btn" id="closing-sales-sync-import">엑셀에서 가져오기</button>' +
+            '<button type="button" class="soft-btn" id="closing-sales-sync-export">엑셀로 내보내기</button>' +
+            '<input type="file" id="closing-sales-sync-file" accept=".xlsx,.xls" style="display:none" />' +
+            '<span class="closing-inline-note">' + escapeHtml((closingExcelSync.sales && closingExcelSync.sales.name) || "연결된 파일 없음") + '</span>' +
+          '</div>' +
         '</div>' +
         '<div class="closing-card closing-card-wide">' +
           '<div class="closing-excel-sheet">' +
@@ -8013,7 +8218,14 @@
       '<div class="closing-page">' +
         '<div class="closing-card closing-card-wide">' +
           '<div class="closing-title">' + icon("folder") + ' 매입 업체별 마감 확인</div>' +
-          '<div class="closing-inline-controls" style="margin-top:8px"><label class="closing-inline-label" for="closing-close-month">대상월</label><select id="closing-close-month" class="closing-inline-select">' + monthOptions + '</select></div>' +
+          '<div class="closing-inline-controls" style="margin-top:8px">' +
+            '<label class="closing-inline-label" for="closing-close-month">대상월</label><select id="closing-close-month" class="closing-inline-select">' + monthOptions + '</select>' +
+            '<button type="button" class="soft-btn" id="closing-purchase-sync-link">엑셀 연결</button>' +
+            '<button type="button" class="soft-btn" id="closing-purchase-sync-import">엑셀에서 가져오기</button>' +
+            '<button type="button" class="soft-btn" id="closing-purchase-sync-export">엑셀로 내보내기</button>' +
+            '<input type="file" id="closing-purchase-sync-file" accept=".xlsx,.xls" style="display:none" />' +
+            '<span class="closing-inline-note">' + escapeHtml((closingExcelSync.purchase && closingExcelSync.purchase.name) || "연결된 파일 없음") + '</span>' +
+          '</div>' +
         '</div>' +
         '<div class="closing-card closing-card-wide">' +
           '<div class="closing-excel-sheet">' +
@@ -9027,6 +9239,82 @@
             scheduleLedgerDraftSave();
           });
         });
+        var salesLinkBtn = document.getElementById("closing-sales-sync-link");
+        if (salesLinkBtn) {
+          salesLinkBtn.addEventListener("click", function () {
+            pickClosingExcelHandle("sales")
+              .then(function () {
+                render();
+                showAppToast("매출 마감 엑셀 파일을 연결했어요.", "success");
+              })
+              .catch(function (err) {
+                if (err && /취소/.test(String(err.message || ""))) return;
+                showAppToast(err && err.message ? err.message : "엑셀 연결에 실패했어요.", "warning");
+              });
+          });
+        }
+        var salesImportBtn = document.getElementById("closing-sales-sync-import");
+        var salesImportFile = document.getElementById("closing-sales-sync-file");
+        if (salesImportBtn) {
+          salesImportBtn.addEventListener("click", function () {
+            if (closingExcelSync.sales && closingExcelSync.sales.handle) {
+              importClosingFromLinkedExcel("sales")
+                .then(function () {
+                  scheduleLedgerDraftSave();
+                  render();
+                  showAppToast("연결된 엑셀에서 매출 마감을 가져왔어요.", "success");
+                })
+                .catch(function (err) {
+                  showAppToast(err && err.message ? err.message : "엑셀 가져오기에 실패했어요.", "warning");
+                });
+              return;
+            }
+            if (salesImportFile) salesImportFile.click();
+          });
+        }
+        if (salesImportFile) {
+          salesImportFile.addEventListener("change", function () {
+            var file = salesImportFile.files && salesImportFile.files[0];
+            if (!file) return;
+            readFileAsArrayBuffer(file)
+              .then(function (buffer) {
+                var rows = parseSalesCloseRowsFromWorkbookBuffer(buffer);
+                setClosingSalesCloseRows(closingState.attendanceMonth, rows);
+                scheduleLedgerDraftSave();
+                render();
+                showAppToast("매출 마감 엑셀을 가져왔어요.", "success");
+              })
+              .catch(function (err) {
+                showAppToast(err && err.message ? err.message : "엑셀 가져오기에 실패했어요.", "warning");
+              })
+              .finally(function () {
+                salesImportFile.value = "";
+              });
+          });
+        }
+        var salesExportBtn = document.getElementById("closing-sales-sync-export");
+        if (salesExportBtn) {
+          salesExportBtn.addEventListener("click", function () {
+            if (closingExcelSync.sales && closingExcelSync.sales.handle) {
+              exportClosingToLinkedExcel("sales")
+                .then(function () {
+                  showAppToast("연결된 엑셀 파일로 저장했어요.", "success");
+                })
+                .catch(function (err) {
+                  showAppToast(err && err.message ? err.message : "엑셀 저장에 실패했어요.", "warning");
+                });
+              return;
+            }
+            try {
+              var rows = normalizeClosingSalesCloseRows(getClosingSalesCloseRows(closingState.attendanceMonth));
+              var wbBuffer = makeWorkbookBufferFromAoA(buildSalesCloseExportAoA(rows), closingState.attendanceMonth || "매출마감");
+              triggerExcelDownloadFromBuffer(wbBuffer, "매출마감_" + (closingState.attendanceMonth || "") + ".xlsx");
+              showAppToast("매출 마감 엑셀을 다운로드했어요.", "success");
+            } catch (err) {
+              showAppToast(err && err.message ? err.message : "엑셀 내보내기에 실패했어요.", "warning");
+            }
+          });
+        }
       } else if (state.closingSubTab === "purchaseclose") {
         var closeMonthSelectForPurchase = document.getElementById("closing-close-month");
         if (closeMonthSelectForPurchase) {
@@ -9053,6 +9341,82 @@
             scheduleLedgerDraftSave();
           });
         });
+        var purchaseLinkBtn = document.getElementById("closing-purchase-sync-link");
+        if (purchaseLinkBtn) {
+          purchaseLinkBtn.addEventListener("click", function () {
+            pickClosingExcelHandle("purchase")
+              .then(function () {
+                render();
+                showAppToast("매입 마감 엑셀 파일을 연결했어요.", "success");
+              })
+              .catch(function (err) {
+                if (err && /취소/.test(String(err.message || ""))) return;
+                showAppToast(err && err.message ? err.message : "엑셀 연결에 실패했어요.", "warning");
+              });
+          });
+        }
+        var purchaseImportBtn = document.getElementById("closing-purchase-sync-import");
+        var purchaseImportFile = document.getElementById("closing-purchase-sync-file");
+        if (purchaseImportBtn) {
+          purchaseImportBtn.addEventListener("click", function () {
+            if (closingExcelSync.purchase && closingExcelSync.purchase.handle) {
+              importClosingFromLinkedExcel("purchase")
+                .then(function () {
+                  scheduleLedgerDraftSave();
+                  render();
+                  showAppToast("연결된 엑셀에서 매입 마감을 가져왔어요.", "success");
+                })
+                .catch(function (err) {
+                  showAppToast(err && err.message ? err.message : "엑셀 가져오기에 실패했어요.", "warning");
+                });
+              return;
+            }
+            if (purchaseImportFile) purchaseImportFile.click();
+          });
+        }
+        if (purchaseImportFile) {
+          purchaseImportFile.addEventListener("change", function () {
+            var file = purchaseImportFile.files && purchaseImportFile.files[0];
+            if (!file) return;
+            readFileAsArrayBuffer(file)
+              .then(function (buffer) {
+                var rows = parsePurchaseCloseRowsFromWorkbookBuffer(buffer);
+                setClosingPurchaseCloseRows(closingState.attendanceMonth, rows);
+                scheduleLedgerDraftSave();
+                render();
+                showAppToast("매입 마감 엑셀을 가져왔어요.", "success");
+              })
+              .catch(function (err) {
+                showAppToast(err && err.message ? err.message : "엑셀 가져오기에 실패했어요.", "warning");
+              })
+              .finally(function () {
+                purchaseImportFile.value = "";
+              });
+          });
+        }
+        var purchaseExportBtn = document.getElementById("closing-purchase-sync-export");
+        if (purchaseExportBtn) {
+          purchaseExportBtn.addEventListener("click", function () {
+            if (closingExcelSync.purchase && closingExcelSync.purchase.handle) {
+              exportClosingToLinkedExcel("purchase")
+                .then(function () {
+                  showAppToast("연결된 엑셀 파일로 저장했어요.", "success");
+                })
+                .catch(function (err) {
+                  showAppToast(err && err.message ? err.message : "엑셀 저장에 실패했어요.", "warning");
+                });
+              return;
+            }
+            try {
+              var rows = normalizeClosingPurchaseCloseRows(getClosingPurchaseCloseRows(closingState.attendanceMonth));
+              var wbBuffer = makeWorkbookBufferFromAoA(buildPurchaseCloseExportAoA(rows), closingState.attendanceMonth || "매입마감");
+              triggerExcelDownloadFromBuffer(wbBuffer, "매입마감_" + (closingState.attendanceMonth || "") + ".xlsx");
+              showAppToast("매입 마감 엑셀을 다운로드했어요.", "success");
+            } catch (err) {
+              showAppToast(err && err.message ? err.message : "엑셀 내보내기에 실패했어요.", "warning");
+            }
+          });
+        }
       }
       return;
     }
