@@ -7943,7 +7943,6 @@
         '</td>';
       }
       return '<tr>' +
-        '<td class="closing-excel-center">' + escapeHtml(row.no || String(index + 1)) + '</td>' +
         divisionCell +
         '<td><input type="text" class="closing-excel-input closing-excel-center" data-sales-close-row="' + index + '" data-sales-close-field="company" value="' + escapeAttr(row.company || "") + '" /></td>' +
         '<td><input type="text" class="closing-excel-input center" data-sales-close-row="' + index + '" data-sales-close-field="closeDate" value="' + escapeAttr(row.closeDate || "") + '" /></td>' +
@@ -7964,10 +7963,9 @@
           '<div class="closing-excel-sheet">' +
             '<table class="closing-excel-table">' +
               '<thead>' +
-                '<tr><th colspan="9" class="closing-excel-title">마감내역서/세금계산서</th></tr>' +
+                '<tr><th colspan="8" class="closing-excel-title">마감내역서/세금계산서</th></tr>' +
                 '<tr>' +
-                  '<th style="width:64px">NO.</th>' +
-                  '<th style="width:70px"></th>' +
+                  '<th style="width:64px"></th>' +
                   '<th style="width:300px" class="closing-excel-head">업체명</th>' +
                   '<th style="width:110px" class="closing-excel-head">마감일</th>' +
                   '<th style="width:150px" class="closing-excel-head">매출액</th>' +
@@ -8001,7 +7999,6 @@
         '</td>';
       }
       return '<tr>' +
-        '<td class="closing-excel-center">' + escapeHtml(row.no || String(index + 1)) + '</td>' +
         divisionCell +
         '<td><input type="text" class="closing-excel-input closing-excel-center" data-purchase-close-row="' + index + '" data-purchase-close-field="company" value="' + escapeAttr(row.company || "") + '" /></td>' +
         '<td><input type="text" class="closing-excel-input center" data-purchase-close-row="' + index + '" data-purchase-close-field="closeIssueDate" value="' + escapeAttr(row.closeIssueDate || "") + '" /></td>' +
@@ -8023,12 +8020,11 @@
             '<table class="closing-excel-table">' +
               '<thead>' +
                 '<tr>' +
-                  '<th colspan="3" class="closing-excel-title">마감내역서/세금계산서</th>' +
+                  '<th colspan="2" class="closing-excel-title">마감내역서/세금계산서</th>' +
                   '<th colspan="6" class="closing-excel-banner">매입 업체 세금계산서 발행\n개인으로,법인으로 끊겼는지 잘 확인하기</th>' +
                 '</tr>' +
                 '<tr>' +
-                  '<th style="width:64px">NO.</th>' +
-                  '<th style="width:70px"></th>' +
+                  '<th style="width:64px"></th>' +
                   '<th style="width:300px" class="closing-excel-head">업체명</th>' +
                   '<th style="width:140px" class="closing-excel-head">발일/발행</th>' +
                   '<th style="width:220px" class="closing-excel-head">매입금액(공급가액)</th>' +
