@@ -938,6 +938,16 @@
     return num <= 0;
   }
 
+  function isOutsourceWeeklyAbsenceValue(value, hasWarning) {
+    var text = String(value || "").trim();
+    if (hasWarning && !text) return true;
+    if (!text) return false;
+    if (/결근/.test(text)) return true;
+    var num = parseCalcNumber(text);
+    if (num == null) return false;
+    return num <= 0;
+  }
+
   function getWeekdayLabelByDate(year, month, day) {
     var labels = ["일", "월", "화", "수", "목", "금", "토"];
     return labels[new Date(year, month - 1, day).getDay()];
@@ -1008,7 +1018,13 @@
           day,
           previousMonthInfo
         );
-        if (isOutsourceAbsenceValue(value)) {
+        var hasWarning = false;
+        if (day >= 1) {
+          var field = "d" + day;
+          var warningKey = groupStart + ":" + field;
+          hasWarning = !!(warnings && warnings[warningKey]);
+        }
+        if (isOutsourceWeeklyAbsenceValue(value, hasWarning)) {
           absentInWeek = true;
           break;
         }
@@ -1049,13 +1065,15 @@
     for (var i = 0; i < closingOutsourceMarkers.length; i++) {
       var row = block[i] || emptyClosingOutsourceRow("", closingOutsourceMarkers[i]);
       var timeTotal = calculateClosingOutsourceTimeTotal(row);
-      var paidHours = timeTotal + (i === 0 ? weeklyHolidayHours : 0);
-      var basePay = paidHours * hourlyWage;
+      var basePay = timeTotal * hourlyWage;
       var bonusPay = i === 0 ? perfectAttendancePay : 0;
+      if (i === 0) {
+        bonusPay += weeklyHolidayPay;
+      }
       var payAmount = basePay + bonusPay;
       groupTotal += payAmount;
       derivedRows.push({
-        timeTotal: paidHours,
+        timeTotal: timeTotal,
         basePay: basePay,
         bonusPay: bonusPay,
         payAmount: payAmount,
