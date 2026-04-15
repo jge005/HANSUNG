@@ -236,6 +236,82 @@
     sales: { handle: null, name: "", previewHtml: "" },
     purchase: { handle: null, name: "", previewHtml: "" },
   };
+  var closingHandleDbPromise = null;
+
+  function getClosingHandleDb() {
+    if (closingHandleDbPromise) return closingHandleDbPromise;
+    if (!window.indexedDB) {
+      closingHandleDbPromise = Promise.resolve(null);
+      return closingHandleDbPromise;
+    }
+    closingHandleDbPromise = new Promise(function (resolve) {
+      var request = window.indexedDB.open("ledger-file-handle-db", 1);
+      request.onupgradeneeded = function (event) {
+        var db = event.target.result;
+        if (!db.objectStoreNames.contains("handles")) {
+          db.createObjectStore("handles");
+        }
+      };
+      request.onsuccess = function () {
+        resolve(request.result);
+      };
+      request.onerror = function () {
+        resolve(null);
+      };
+    });
+    return closingHandleDbPromise;
+  }
+
+  async function saveClosingExcelHandle(kind, handle) {
+    if (!handle) return;
+    var db = await getClosingHandleDb();
+    if (!db) return;
+    await new Promise(function (resolve) {
+      try {
+        var tx = db.transaction("handles", "readwrite");
+        tx.objectStore("handles").put(handle, "closing:" + kind);
+        tx.oncomplete = function () { resolve(); };
+        tx.onerror = function () { resolve(); };
+      } catch (err) {
+        resolve();
+      }
+    });
+  }
+
+  async function loadClosingExcelHandle(kind) {
+    var db = await getClosingHandleDb();
+    if (!db) return null;
+    return new Promise(function (resolve) {
+      try {
+        var tx = db.transaction("handles", "readonly");
+        var req = tx.objectStore("handles").get("closing:" + kind);
+        req.onsuccess = function () { resolve(req.result || null); };
+        req.onerror = function () { resolve(null); };
+      } catch (err) {
+        resolve(null);
+      }
+    });
+  }
+
+  async function restoreClosingExcelHandles() {
+    var kinds = ["sales", "purchase"];
+    for (var i = 0; i < kinds.length; i++) {
+      var kind = kinds[i];
+      try {
+        var handle = await loadClosingExcelHandle(kind);
+        if (!handle) continue;
+        if (handle.queryPermission) {
+          var permission = await handle.queryPermission({ mode: "readwrite" });
+          if (permission === "denied") continue;
+        }
+        closingExcelSync[kind] = closingExcelSync[kind] || { handle: null, name: "", previewHtml: "" };
+        closingExcelSync[kind].handle = handle;
+        closingExcelSync[kind].name = handle.name || "";
+      } catch (err) {
+        // ignore broken stored handle
+      }
+    }
+  }
 
   var app = document.getElementById("app");
 
@@ -1909,6 +1985,21 @@
     return names.length ? names[0] : "";
   }
 
+  function pickWorkbookSheetNameByMonth(workbook, monthLabel) {
+    var names = workbook && workbook.SheetNames ? workbook.SheetNames : [];
+    if (!names.length) return "";
+    var monthNumber = parseClosingMonthNumber(monthLabel || closingState.attendanceMonth);
+    if (!monthNumber) return names[0];
+    var token = String(monthNumber) + "월";
+    for (var i = 0; i < names.length; i++) {
+      if (String(names[i] || "").trim() === token) return names[i];
+    }
+    for (var j = 0; j < names.length; j++) {
+      if (String(names[j] || "").indexOf(token) >= 0) return names[j];
+    }
+    return names[0];
+  }
+
   function getWorkbookSheetGrid(workbook, sheetName) {
     var name = sheetName || getWorkbookFirstSheetName(workbook);
     if (!name || !workbook || !workbook.Sheets || !workbook.Sheets[name]) return [];
@@ -1974,9 +2065,9 @@
     };
   }
 
-  function analyzeSalesCloseWorkbookBuffer(arrayBuffer) {
+  function analyzeSalesCloseWorkbookBuffer(arrayBuffer, monthLabel) {
     var workbook = readWorkbookFromArrayBuffer(arrayBuffer);
-    var sheetName = getWorkbookFirstSheetName(workbook);
+    var sheetName = pickWorkbookSheetNameByMonth(workbook, monthLabel);
     if (!sheetName) throw new Error("엑셀 시트를 찾지 못했습니다.");
     var grid = getWorkbookSheetGrid(workbook, sheetName);
     var headerMap = findSalesCloseHeaderMapFromGrid(grid);
@@ -2031,7 +2122,7 @@
     if (!slot.handle) throw new Error("먼저 '엑셀 연결'로 원본 파일을 연결해주세요.");
     var file = await slot.handle.getFile();
     var sourceBuffer = await file.arrayBuffer();
-    var analysis = analyzeSalesCloseWorkbookBuffer(sourceBuffer);
+    var analysis = analyzeSalesCloseWorkbookBuffer(sourceBuffer, closingState.attendanceMonth);
     var rowInfo = analysis.rowRefsByNo[String(no)];
     var ref = rowInfo && rowInfo.refs ? rowInfo.refs[field] : "";
     if (!ref) throw new Error("선택한 행의 원본 셀 좌표를 찾지 못했습니다.");
@@ -2045,8 +2136,9 @@
     var writable = await slot.handle.createWritable();
     await writable.write(wbBuffer);
     await writable.close();
-    var refreshed = analyzeSalesCloseWorkbookBuffer(wbBuffer);
+    var refreshed = analyzeSalesCloseWorkbookBuffer(wbBuffer, closingState.attendanceMonth);
     closingExcelSync.sales.previewHtml = refreshed.previewHtml;
+    closingExcelSync.sales.activeMonth = closingState.attendanceMonth;
     setSalesCloseSyncMeta({
       sheetName: refreshed.sheetName,
       rowRefsByNo: refreshed.rowRefsByNo,
@@ -2058,7 +2150,7 @@
   }
 
   function parseSalesCloseRowsFromWorkbookBuffer(arrayBuffer) {
-    var analysis = analyzeSalesCloseWorkbookBuffer(arrayBuffer);
+    var analysis = analyzeSalesCloseWorkbookBuffer(arrayBuffer, closingState.attendanceMonth);
     setSalesCloseSyncMeta({
       sheetName: analysis.sheetName,
       rowRefsByNo: analysis.rowRefsByNo,
@@ -2179,6 +2271,7 @@
     closingExcelSync[kind] = closingExcelSync[kind] || { handle: null, name: "" };
     closingExcelSync[kind].handle = handle;
     closingExcelSync[kind].name = handle.name || "";
+    saveClosingExcelHandle(kind, handle);
     return handle;
   }
 
@@ -2189,8 +2282,9 @@
     var file = await handle.getFile();
     var buffer = await file.arrayBuffer();
     if (kind === "sales") {
-      var salesAnalysis = analyzeSalesCloseWorkbookBuffer(buffer);
+      var salesAnalysis = analyzeSalesCloseWorkbookBuffer(buffer, closingState.attendanceMonth);
       closingExcelSync.sales.previewHtml = salesAnalysis.previewHtml;
+      closingExcelSync.sales.activeMonth = closingState.attendanceMonth;
       setSalesCloseSyncMeta({
         sheetName: salesAnalysis.sheetName,
         rowRefsByNo: salesAnalysis.rowRefsByNo,
@@ -2212,7 +2306,7 @@
     if (kind === "sales") {
       var sourceFile = await handle.getFile();
       var sourceBuffer = await sourceFile.arrayBuffer();
-      var analysis = analyzeSalesCloseWorkbookBuffer(sourceBuffer);
+      var analysis = analyzeSalesCloseWorkbookBuffer(sourceBuffer, closingState.attendanceMonth);
       var rowsForWrite = normalizeClosingSalesCloseRows(getClosingSalesCloseRows(closingState.attendanceMonth));
       for (var i = 0; i < rowsForWrite.length; i++) {
         var row = rowsForWrite[i] || {};
@@ -2233,8 +2327,9 @@
       var salesWritable = await handle.createWritable();
       await salesWritable.write(salesBuffer);
       await salesWritable.close();
-      var refreshedSales = analyzeSalesCloseWorkbookBuffer(salesBuffer);
+      var refreshedSales = analyzeSalesCloseWorkbookBuffer(salesBuffer, closingState.attendanceMonth);
       closingExcelSync.sales.previewHtml = refreshedSales.previewHtml;
+      closingExcelSync.sales.activeMonth = closingState.attendanceMonth;
       setSalesCloseSyncMeta({
         sheetName: refreshedSales.sheetName,
         rowRefsByNo: refreshedSales.rowRefsByNo,
@@ -8625,6 +8720,9 @@
       return '<option value="' + escapeAttr(option.value) + '"' + (option.value === closingState.attendanceMonth ? " selected" : "") + ">" + escapeHtml(option.label) + "</option>";
     }).join("");
     var previewHtml = (closingExcelSync.sales && closingExcelSync.sales.previewHtml) || "";
+    var salesSheetName = closingExcelSync.sales && closingExcelSync.sales.syncMeta ? closingExcelSync.sales.syncMeta.sheetName : "";
+    var salesFileLabel = (closingExcelSync.sales && closingExcelSync.sales.name) || "연결된 파일 없음";
+    if (salesSheetName) salesFileLabel += " / 시트: " + salesSheetName;
     return (
       '<div class="closing-page">' +
         '<div class="closing-card closing-card-wide">' +
@@ -8636,7 +8734,7 @@
             '<button type="button" class="soft-btn" id="closing-sales-sync-export">엑셀로 내보내기</button>' +
             '<button type="button" class="soft-btn" id="closing-sales-preview-refresh">원본 미리보기</button>' +
             '<input type="file" id="closing-sales-sync-file" accept=".xlsx,.xls" style="display:none" />' +
-            '<span class="closing-inline-note">' + escapeHtml((closingExcelSync.sales && closingExcelSync.sales.name) || "연결된 파일 없음") + '</span>' +
+            '<span class="closing-inline-note">' + escapeHtml(salesFileLabel) + '</span>' +
           '</div>' +
         '</div>' +
         '<div class="closing-card closing-card-wide">' +
@@ -9679,6 +9777,17 @@
             closingState.attendanceMonth = closeMonthSelectForSales.value || defaultClosingMonthLabel();
             ensureClosingAttendanceState();
             scheduleLedgerDraftSave();
+            if (closingExcelSync.sales && closingExcelSync.sales.handle) {
+              importClosingFromLinkedExcel("sales")
+                .then(function () {
+                  scheduleLedgerDraftSave();
+                  render();
+                })
+                .catch(function () {
+                  render();
+                });
+              return;
+            }
             render();
           });
         }
@@ -9740,8 +9849,9 @@
             if (!file) return;
             readFileAsArrayBuffer(file)
               .then(function (buffer) {
-                var analysis = analyzeSalesCloseWorkbookBuffer(buffer);
+                var analysis = analyzeSalesCloseWorkbookBuffer(buffer, closingState.attendanceMonth);
                 closingExcelSync.sales.previewHtml = analysis.previewHtml;
+                closingExcelSync.sales.activeMonth = closingState.attendanceMonth;
                 setSalesCloseSyncMeta({
                   sheetName: analysis.sheetName,
                   rowRefsByNo: analysis.rowRefsByNo,
@@ -9796,6 +9906,25 @@
               showAppToast(err && err.message ? err.message : "엑셀 내보내기에 실패했어요.", "warning");
             }
           });
+        }
+        if (
+          closingExcelSync.sales &&
+          closingExcelSync.sales.handle &&
+          closingExcelSync.sales.activeMonth !== closingState.attendanceMonth &&
+          !closingExcelSync.sales.syncingMonth
+        ) {
+          closingExcelSync.sales.syncingMonth = true;
+          importClosingFromLinkedExcel("sales")
+            .then(function () {
+              scheduleLedgerDraftSave();
+              render();
+            })
+            .catch(function () {
+              // ignore auto-sync error in background
+            })
+            .finally(function () {
+              closingExcelSync.sales.syncingMonth = false;
+            });
         }
         bindClosingSalesPreviewDirectEdit(app);
       } else if (state.closingSubTab === "purchaseclose") {
@@ -9963,6 +10092,12 @@
 
   bindFirestoreRetryListeners();
   loadLocalLedgerBackup();
-  render();
+  restoreClosingExcelHandles()
+    .catch(function () {
+      // ignore restore failure
+    })
+    .finally(function () {
+      render();
+    });
 })();
 
