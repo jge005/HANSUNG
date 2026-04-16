@@ -14,9 +14,16 @@
   var roleCards = [
     { key: "accounting", title: "경리", icon: "scroll" },
     { key: "manager", title: "실장", icon: "sheet" },
-    { key: "orders", title: "발주", icon: "folder" },
-    { key: "work", title: "작업", icon: "settings" },
+    { key: "orders", title: "관리", icon: "folder" },
+    { key: "work", title: "SCM", icon: "settings" },
   ];
+
+  function getRoleTitle(roleKey) {
+    for (var i = 0; i < roleCards.length; i++) {
+      if (roleCards[i] && roleCards[i].key === roleKey) return roleCards[i].title || roleKey;
+    }
+    return roleKey || "";
+  }
 
   var salesTabs = [
     { key: "manage", label: "매출관리", icon: "sheet" },
@@ -36,6 +43,12 @@
     { key: "attendance", label: "근무(급여)", icon: "sheet" },
     { key: "salesclose", label: "매출마감", icon: "scroll" },
     { key: "purchaseclose", label: "매입마감", icon: "folder" },
+  ];
+  var managerTabs = [
+    { key: "overview", label: "전체요약", icon: "sheet" },
+    { key: "due", label: "만료임박", icon: "scroll" },
+    { key: "expired", label: "만료됨", icon: "folder" },
+    { key: "recent", label: "최근스캔", icon: "clipboard" },
   ];
 
   var icons = {
@@ -61,6 +74,7 @@
     mainTab: null,
     subTab: "manage",
     closingSubTab: "attendance",
+    managerSubTab: "overview",
   };
 
   var DRAFT_ID_KEY = "ledgerDraftId";
@@ -104,6 +118,16 @@
     startMonth: "",
     endMonth: "",
     client: "",
+  };
+  var managerState = {
+    subTab: "overview",
+    docs: [],
+    undatedFolders: [],
+    folderLabel: "",
+    lastScanAt: "",
+    alertsEnabled: true,
+    alertLeadDays: 30,
+    notifiedMap: {},
   };
   var closingState = {
     attendanceMonth: "",
@@ -236,6 +260,10 @@
     sales: { handle: null, name: "", previewHtml: "" },
     purchase: { handle: null, name: "", previewHtml: "" },
   };
+  var closingProtectOriginalExcel = true;
+  var managerDocDirHandle = null;
+  var managerAlertTimer = null;
+  var managerScanInFlight = false;
   var closingHandleDbPromise = null;
 
   function getClosingHandleDb() {
@@ -311,6 +339,387 @@
         // ignore broken stored handle
       }
     }
+  }
+
+  function normalizeManagerDocs(rows) {
+    var source = Array.isArray(rows) ? rows : [];
+    return source.map(function (row) {
+      return {
+        key: String((row && row.key) || ""),
+        title: String((row && row.title) || ""),
+        latestFolder: String((row && row.latestFolder) || ""),
+        issuedAt: String((row && row.issuedAt) || ""),
+        expiresAt: String((row && row.expiresAt) || ""),
+        daysLeft: Number((row && row.daysLeft) || 0),
+        status: String((row && row.status) || "normal"),
+      };
+    });
+  }
+
+  function normalizeManagerUndatedFolders(rows) {
+    var source = Array.isArray(rows) ? rows : [];
+    return source.map(function (name) { return String(name || ""); }).filter(Boolean);
+  }
+
+  function normalizeManagerKey(name) {
+    return String(name || "").toLowerCase().replace(/\s+/g, "").replace(/[()[\]{}\-_,.]/g, "");
+  }
+
+  function parseManagerIssuedDateFromFolderName(folderName) {
+    var text = String(folderName || "").trim();
+    var m = text.match(/^(\d{4})-(\d{2})-(\d{2})\s*(.*)$/);
+    if (!m) return null;
+    var y = Number(m[1]);
+    var mo = Number(m[2]);
+    var d = Number(m[3]);
+    if (!isFinite(y) || !isFinite(mo) || !isFinite(d)) return null;
+    var dt = new Date(y, mo - 1, d);
+    if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+    return {
+      issuedAt: y + "-" + String(mo).padStart(2, "0") + "-" + String(d).padStart(2, "0"),
+      title: String(m[4] || "").trim() || text,
+    };
+  }
+
+  function addYearsIsoDate(iso, years) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(iso || ""))) return "";
+    var y = Number(iso.slice(0, 4));
+    var m = Number(iso.slice(5, 7));
+    var d = Number(iso.slice(8, 10));
+    var next = new Date(y + years, m - 1, d);
+    if (next.getMonth() !== m - 1) next = new Date(y + years, m, 0);
+    return next.getFullYear() + "-" + String(next.getMonth() + 1).padStart(2, "0") + "-" + String(next.getDate()).padStart(2, "0");
+  }
+
+  function calcDaysLeftFromIso(expireIso) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(expireIso || ""))) return 0;
+    var now = new Date();
+    var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    var target = new Date(Number(expireIso.slice(0, 4)), Number(expireIso.slice(5, 7)) - 1, Number(expireIso.slice(8, 10)));
+    return Math.round((target.getTime() - today.getTime()) / 86400000);
+  }
+
+  function getManagerDocStatus(daysLeft) {
+    if (daysLeft < 0) return "expired";
+    if (daysLeft <= 7) return "urgent";
+    if (daysLeft <= 30) return "due";
+    return "normal";
+  }
+
+  async function scanManagerHazardDocsFromHandle(handle) {
+    if (!handle) throw new Error("먼저 폴더를 연결해주세요.");
+    if (handle.kind !== "directory") throw new Error("폴더 핸들이 아닙니다.");
+    var grouped = {};
+    var undated = [];
+    for await (var entry of handle.values()) {
+      if (!entry || entry.kind !== "directory") continue;
+      var parsed = parseManagerIssuedDateFromFolderName(entry.name || "");
+      if (!parsed) {
+        undated.push(String(entry.name || ""));
+        continue;
+      }
+      var key = normalizeManagerKey(parsed.title) || normalizeManagerKey(entry.name || "");
+      if (!key) continue;
+      if (!grouped[key] || String(parsed.issuedAt) > String(grouped[key].issuedAt || "")) {
+        grouped[key] = {
+          key: key,
+          title: parsed.title,
+          latestFolder: String(entry.name || ""),
+          issuedAt: parsed.issuedAt,
+        };
+      }
+    }
+    var docs = Object.keys(grouped).map(function (key) {
+      var row = grouped[key];
+      var expiresAt = addYearsIsoDate(row.issuedAt, 2);
+      var daysLeft = calcDaysLeftFromIso(expiresAt);
+      return {
+        key: row.key,
+        title: row.title,
+        latestFolder: row.latestFolder,
+        issuedAt: row.issuedAt,
+        expiresAt: expiresAt,
+        daysLeft: daysLeft,
+        status: getManagerDocStatus(daysLeft),
+      };
+    }).sort(function (a, b) { return a.daysLeft - b.daysLeft; });
+    return {
+      docs: docs,
+      undatedFolders: undated.sort(),
+    };
+  }
+
+  async function saveManagerDirectoryHandle(handle) {
+    if (!handle) return;
+    var db = await getClosingHandleDb();
+    if (!db) return;
+    await new Promise(function (resolve) {
+      try {
+        var tx = db.transaction("handles", "readwrite");
+        tx.objectStore("handles").put(handle, "manager:hazard-docs");
+        tx.oncomplete = function () { resolve(); };
+        tx.onerror = function () { resolve(); };
+      } catch (err) {
+        resolve();
+      }
+    });
+  }
+
+  async function loadManagerDirectoryHandle() {
+    var db = await getClosingHandleDb();
+    if (!db) return null;
+    return new Promise(function (resolve) {
+      try {
+        var tx = db.transaction("handles", "readonly");
+        var req = tx.objectStore("handles").get("manager:hazard-docs");
+        req.onsuccess = function () { resolve(req.result || null); };
+        req.onerror = function () { resolve(null); };
+      } catch (err) {
+        resolve(null);
+      }
+    });
+  }
+
+  async function restoreManagerDirectoryHandle() {
+    try {
+      var handle = await loadManagerDirectoryHandle();
+      if (!handle) return;
+      if (handle.queryPermission) {
+        var perm = await handle.queryPermission({ mode: "read" });
+        if (perm === "denied") return;
+      }
+      managerDocDirHandle = handle;
+      managerState.folderLabel = handle.name || managerState.folderLabel || "";
+    } catch (err) {}
+  }
+
+  function managerStatusLabel(status) {
+    if (status === "expired") return "만료됨";
+    if (status === "urgent") return "긴급(7일 이내)";
+    if (status === "due") return "만료임박(30일)";
+    return "정상";
+  }
+
+  function managerStatusClass(status) {
+    if (status === "expired") return "manager-badge danger";
+    if (status === "urgent") return "manager-badge warn";
+    if (status === "due") return "manager-badge due";
+    return "manager-badge ok";
+  }
+
+  function formatManagerIsoDate(iso) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(iso || ""))) return "";
+    return iso.slice(0, 4) + "." + iso.slice(5, 7) + "." + iso.slice(8, 10);
+  }
+
+  function getManagerDocsByTab(tabKey) {
+    var docs = normalizeManagerDocs(managerState.docs);
+    if (tabKey === "due") return docs.filter(function (d) { return d.daysLeft >= 0 && d.daysLeft <= Number(managerState.alertLeadDays || 30); });
+    if (tabKey === "expired") return docs.filter(function (d) { return d.daysLeft < 0; });
+    if (tabKey === "recent") return docs.slice().sort(function (a, b) { return String(b.issuedAt).localeCompare(String(a.issuedAt)); });
+    return docs;
+  }
+
+  async function ensureManagerNotificationPermission() {
+    if (!("Notification" in window)) throw new Error("이 환경은 시스템 알림을 지원하지 않습니다.");
+    if (Notification.permission === "granted") return "granted";
+    if (Notification.permission === "denied") return "denied";
+    return Notification.requestPermission();
+  }
+
+  function buildManagerNotifyId(doc) {
+    return String((doc && doc.key) || "") + "|" + String((doc && doc.expiresAt) || "");
+  }
+
+  function maybeNotifyManagerDocs() {
+    if (!managerState.alertsEnabled) return;
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    var leadDays = Number(managerState.alertLeadDays || 30);
+    var docs = normalizeManagerDocs(managerState.docs).filter(function (doc) {
+      return doc.daysLeft <= leadDays;
+    }).sort(function (a, b) { return a.daysLeft - b.daysLeft; });
+    if (!docs.length) return;
+    var today = new Date();
+    var todayKey = today.getFullYear() + "-" + String(today.getMonth() + 1).padStart(2, "0") + "-" + String(today.getDate()).padStart(2, "0");
+    var sent = 0;
+    for (var i = 0; i < docs.length; i++) {
+      var doc = docs[i];
+      var id = buildManagerNotifyId(doc);
+      var stamp = managerState.notifiedMap[id] || "";
+      if (stamp === todayKey) continue;
+      var body = doc.daysLeft < 0
+        ? (doc.title + " 성적서가 만료되었습니다. 갱신본 요청이 필요합니다.")
+        : (doc.title + " 성적서가 " + doc.daysLeft + "일 후 만료됩니다. 업체 갱신본 요청이 필요합니다.");
+      try {
+        new Notification("유해물질 성적서 알림", { body: body, tag: "hazard-doc-" + id });
+        managerState.notifiedMap[id] = todayKey;
+        sent++;
+      } catch (err) {}
+      if (sent >= 3) break;
+    }
+    if (sent > 0) scheduleLedgerDraftSave();
+  }
+
+  function startManagerAlertLoop() {
+    if (managerAlertTimer) clearInterval(managerAlertTimer);
+    managerAlertTimer = setInterval(function () {
+      if (managerDocDirHandle && !managerScanInFlight) {
+        managerScanInFlight = true;
+        refreshManagerDocs({ toast: false })
+          .catch(function () {
+            // ignore background scan failures
+          })
+          .finally(function () {
+            managerScanInFlight = false;
+            maybeNotifyManagerDocs();
+          });
+        return;
+      }
+      maybeNotifyManagerDocs();
+    }, 10 * 60 * 1000);
+    maybeNotifyManagerDocs();
+  }
+
+  function stopManagerAlertLoop() {
+    if (managerAlertTimer) {
+      clearInterval(managerAlertTimer);
+      managerAlertTimer = null;
+    }
+  }
+
+  function formatManagerDateTime(isoText) {
+    if (!isoText) return "";
+    var dt = new Date(isoText);
+    if (!isFinite(dt.getTime())) return "";
+    return dt.getFullYear() +
+      "." + String(dt.getMonth() + 1).padStart(2, "0") +
+      "." + String(dt.getDate()).padStart(2, "0") +
+      " " + String(dt.getHours()).padStart(2, "0") +
+      ":" + String(dt.getMinutes()).padStart(2, "0");
+  }
+
+  async function refreshManagerDocs(options) {
+    options = options || {};
+    if (!managerDocDirHandle) throw new Error("먼저 유해물질 성적서 폴더를 연결해주세요.");
+    if (managerDocDirHandle.queryPermission) {
+      var permission = await managerDocDirHandle.queryPermission({ mode: "read" });
+      if (permission !== "granted" && managerDocDirHandle.requestPermission) {
+        permission = await managerDocDirHandle.requestPermission({ mode: "read" });
+      }
+      if (permission !== "granted") throw new Error("폴더 읽기 권한이 필요합니다.");
+    }
+    var scanned = await scanManagerHazardDocsFromHandle(managerDocDirHandle);
+    var nextDocs = normalizeManagerDocs(scanned.docs);
+    var nextUndated = normalizeManagerUndatedFolders(scanned.undatedFolders);
+    var prevSignature = JSON.stringify({
+      docs: normalizeManagerDocs(managerState.docs),
+      undated: normalizeManagerUndatedFolders(managerState.undatedFolders),
+      folder: String(managerState.folderLabel || ""),
+    });
+    var nextSignature = JSON.stringify({
+      docs: nextDocs,
+      undated: nextUndated,
+      folder: String((managerDocDirHandle && managerDocDirHandle.name) || managerState.folderLabel || ""),
+    });
+    var changed = prevSignature !== nextSignature;
+    managerState.docs = nextDocs;
+    managerState.undatedFolders = nextUndated;
+    managerState.lastScanAt = new Date().toISOString();
+    managerState.folderLabel = managerDocDirHandle.name || managerState.folderLabel || "";
+    maybeNotifyManagerDocs();
+    if (changed || options.persistScan) {
+      scheduleLedgerDraftSave();
+    }
+    if (options.toast) {
+      showAppToast("유해물질 성적서 폴더를 스캔했어요.", "success");
+    }
+  }
+
+  async function connectManagerHazardFolderAndScan() {
+    if (!window.showDirectoryPicker) {
+      throw new Error("이 브라우저에서는 폴더 연결을 지원하지 않습니다.");
+    }
+    var handle = await window.showDirectoryPicker({
+      mode: "read",
+      id: "hazard-docs-folder",
+    });
+    managerDocDirHandle = handle;
+    managerState.folderLabel = handle && handle.name ? handle.name : "";
+    await saveManagerDirectoryHandle(handle);
+    await refreshManagerDocs({ toast: true, persistScan: true });
+  }
+
+  function renderManagerDashboard() {
+    var activeSubTab = managerState.subTab || "overview";
+    var docs = getManagerDocsByTab(activeSubTab);
+    var allDocs = normalizeManagerDocs(managerState.docs);
+    var dueCount = allDocs.filter(function (doc) {
+      return doc.daysLeft >= 0 && doc.daysLeft <= Number(managerState.alertLeadDays || 30);
+    }).length;
+    var expiredCount = allDocs.filter(function (doc) { return doc.daysLeft < 0; }).length;
+    var urgentCount = allDocs.filter(function (doc) { return doc.daysLeft >= 0 && doc.daysLeft <= 7; }).length;
+    var docRowsHtml = docs.map(function (doc) {
+      var leftText = doc.daysLeft < 0 ? (Math.abs(doc.daysLeft) + "일 지남") : (doc.daysLeft + "일 남음");
+      return (
+        "<tr>" +
+        '<td class="mono">' + escapeHtml(formatManagerIsoDate(doc.issuedAt) || "-") + "</td>" +
+        '<td class="mono">' + escapeHtml(formatManagerIsoDate(doc.expiresAt) || "-") + "</td>" +
+        "<td>" + escapeHtml(doc.title || "-") + "</td>" +
+        "<td>" + escapeHtml(doc.latestFolder || "-") + "</td>" +
+        '<td><span class="' + managerStatusClass(doc.status) + '">' + escapeHtml(managerStatusLabel(doc.status)) + "</span></td>" +
+        '<td class="mono">' + escapeHtml(leftText) + "</td>" +
+        "</tr>"
+      );
+    }).join("");
+
+    var undatedHtml = (managerState.undatedFolders || []).slice(0, 12).map(function (name) {
+      return "<li>" + escapeHtml(name) + "</li>";
+    }).join("");
+
+    return (
+      '<div class="manager-page">' +
+      '<div class="manager-head-card">' +
+      '<div class="manager-title">' + icon("sheet") + "<strong>유해물질 성적서 만료 알림</strong></div>" +
+      '<div class="manager-head-meta">' +
+      "<span>연결 폴더: " + escapeHtml(managerState.folderLabel || "미연결") + "</span>" +
+      "<span>마지막 스캔: " + escapeHtml(formatManagerDateTime(managerState.lastScanAt) || "-") + "</span>" +
+      "</div>" +
+      '<div class="manager-head-actions">' +
+      '<button type="button" class="soft-btn" id="btn-manager-connect-folder">폴더 연결</button>' +
+      '<button type="button" class="soft-btn" id="btn-manager-rescan">다시 스캔</button>' +
+      '<button type="button" class="soft-btn" id="btn-manager-notify-perm">시스템 알림 권한</button>' +
+      '<label class="manager-inline-control"><input type="checkbox" id="manager-alerts-enabled" ' + (managerState.alertsEnabled ? "checked" : "") + "> 알림 사용</label>" +
+      '<label class="manager-inline-control">임박 기준 <input type="number" min="1" max="120" step="1" id="manager-alert-days" value="' + escapeAttr(String(Number(managerState.alertLeadDays || 30))) + '"> 일</label>' +
+      "</div>" +
+      "</div>" +
+
+      '<div class="manager-summary-row">' +
+      '<div class="manager-summary-card"><div class="manager-summary-label">전체 문서</div><div class="manager-summary-value">' + allDocs.length + "</div></div>" +
+      '<div class="manager-summary-card"><div class="manager-summary-label">만료 임박</div><div class="manager-summary-value warn">' + dueCount + "</div></div>" +
+      '<div class="manager-summary-card"><div class="manager-summary-label">만료됨</div><div class="manager-summary-value danger">' + expiredCount + "</div></div>" +
+      '<div class="manager-summary-card"><div class="manager-summary-label">긴급(7일 이내)</div><div class="manager-summary-value due">' + urgentCount + "</div></div>" +
+      "</div>" +
+
+      '<div class="tabs manager-tabs">' +
+      managerTabs.map(function (tab) {
+        return '<button type="button" class="sub-tab' + (activeSubTab === tab.key ? " active" : "") + '" data-manager-sub="' + tab.key + '">' + escapeHtml(tab.label) + "</button>";
+      }).join("") +
+      "</div>" +
+
+      '<div class="manager-table-card">' +
+      '<div class="manager-table-wrap">' +
+      '<table class="manager-table">' +
+      "<thead><tr><th>발급일</th><th>만료일</th><th>업체/문서명</th><th>기준 폴더</th><th>상태</th><th>남은기간</th></tr></thead>" +
+      "<tbody>" +
+      (docRowsHtml || '<tr><td colspan="6" class="manager-empty">해당 조건의 문서가 없습니다.</td></tr>') +
+      "</tbody></table></div></div>" +
+
+      '<div class="manager-undated-card">' +
+      '<div class="manager-undated-title">날짜 인식 실패 폴더 (형식: YYYY-MM-DD 폴더명)</div>' +
+      (undatedHtml ? ("<ul>" + undatedHtml + "</ul>") : '<div class="manager-empty small">없음</div>') +
+      "</div>" +
+      "</div>"
+    );
   }
 
   var app = document.getElementById("app");
@@ -2083,6 +2492,106 @@
     };
   }
 
+  function findPurchaseCloseHeaderMapFromGrid(grid) {
+    var safeGrid = Array.isArray(grid) ? grid : [];
+    for (var r = 0; r < safeGrid.length; r++) {
+      var row = safeGrid[r] || [];
+      var cols = {
+        no: -1,
+        division: -1,
+        company: -1,
+        closeIssueDate: -1,
+        supplyAmount: -1,
+        totalAmount: -1,
+        detailCheck: -1,
+        issueConfirm: -1,
+        note: -1,
+      };
+      var score = 0;
+      for (var c = 0; c < row.length; c++) {
+        var token = normalizeSalesCloseHeaderToken(row[c]);
+        if (!token) continue;
+        if (cols.no < 0 && (token === "NO" || token === "NO." || token.indexOf("NO") === 0)) { cols.no = c; score++; continue; }
+        if (cols.division < 0 && (token === "구분" || token.indexOf("구분") === 0)) { cols.division = c; score++; continue; }
+        if (cols.company < 0 && token.indexOf("업체명") >= 0) { cols.company = c; score++; continue; }
+        if (cols.closeIssueDate < 0 && (token.indexOf("발일/발행") >= 0 || token.indexOf("발일발행") >= 0 || token.indexOf("마감일") >= 0)) { cols.closeIssueDate = c; score++; continue; }
+        if (cols.supplyAmount < 0 && (token.indexOf("매입금액") >= 0 || token.indexOf("공급가액") >= 0)) { cols.supplyAmount = c; score++; continue; }
+        if (cols.totalAmount < 0 && token.indexOf("합계금액") >= 0) { cols.totalAmount = c; score++; continue; }
+        if (cols.detailCheck < 0 && token.indexOf("내역확인") >= 0) { cols.detailCheck = c; score++; continue; }
+        if (cols.issueConfirm < 0 && token.indexOf("발행확인") >= 0) { cols.issueConfirm = c; score++; continue; }
+        if (cols.note < 0 && token.indexOf("비고") >= 0) { cols.note = c; score++; continue; }
+      }
+      if (cols.no >= 0 && cols.company >= 0 && cols.supplyAmount >= 0 && cols.totalAmount >= 0 && cols.detailCheck >= 0 && cols.issueConfirm >= 0 && score >= 6) {
+        return { rowIndex: r, cols: cols };
+      }
+    }
+    return null;
+  }
+
+  function buildPurchaseCloseRowsAndRefsFromGrid(grid, headerMap) {
+    var rows = buildClosingPurchaseCloseSeedRows();
+    var rowRefsByNo = {};
+    var imported = 0;
+    var lastDivision = "";
+    var cols = headerMap && headerMap.cols ? headerMap.cols : {};
+    for (var r = (headerMap ? headerMap.rowIndex + 1 : 0); r < grid.length; r++) {
+      var row = grid[r] || [];
+      var noText = toTextCell(cols.no >= 0 ? row[cols.no] : "");
+      if (!/^\d+$/.test(noText)) continue;
+      var no = Number(noText);
+      if (!isFinite(no) || no < 1 || no > closingCloseTableRowCount) continue;
+      var target = rows[no - 1] || emptyClosingPurchaseCloseRow(String(no));
+      var division = cols.division >= 0 ? toTextCell(row[cols.division]) : "";
+      if (division) lastDivision = division;
+      target.no = String(no);
+      target.division = division || lastDivision || target.division || "";
+      target.company = cols.company >= 0 ? toTextCell(row[cols.company]) : "";
+      target.closeIssueDate = cols.closeIssueDate >= 0 ? toTextCell(row[cols.closeIssueDate]) : "";
+      target.supplyAmount = cols.supplyAmount >= 0 ? toTextCell(row[cols.supplyAmount]) : "";
+      target.totalAmount = cols.totalAmount >= 0 ? toTextCell(row[cols.totalAmount]) : "";
+      target.detailCheck = cols.detailCheck >= 0 ? toTextCell(row[cols.detailCheck]) : "";
+      target.issueConfirm = cols.issueConfirm >= 0 ? toTextCell(row[cols.issueConfirm]) : "";
+      target.note = cols.note >= 0 ? toTextCell(row[cols.note]) : "";
+      rows[no - 1] = target;
+      rowRefsByNo[String(no)] = {
+        no: String(no),
+        rowIndex: r,
+        refs: {
+          closeIssueDate: cols.closeIssueDate >= 0 ? window.XLSX.utils.encode_cell({ r: r, c: cols.closeIssueDate }) : "",
+          supplyAmount: cols.supplyAmount >= 0 ? window.XLSX.utils.encode_cell({ r: r, c: cols.supplyAmount }) : "",
+          totalAmount: cols.totalAmount >= 0 ? window.XLSX.utils.encode_cell({ r: r, c: cols.totalAmount }) : "",
+          detailCheck: cols.detailCheck >= 0 ? window.XLSX.utils.encode_cell({ r: r, c: cols.detailCheck }) : "",
+          issueConfirm: cols.issueConfirm >= 0 ? window.XLSX.utils.encode_cell({ r: r, c: cols.issueConfirm }) : "",
+          note: cols.note >= 0 ? window.XLSX.utils.encode_cell({ r: r, c: cols.note }) : "",
+        },
+      };
+      imported++;
+    }
+    if (!imported) throw new Error("매입 마감 양식에서 읽을 행을 찾지 못했습니다.");
+    return {
+      rows: normalizeClosingPurchaseCloseRows(rows),
+      rowRefsByNo: rowRefsByNo,
+    };
+  }
+
+  function analyzePurchaseCloseWorkbookBuffer(arrayBuffer, monthLabel) {
+    var workbook = readWorkbookFromArrayBuffer(arrayBuffer);
+    var sheetName = pickWorkbookSheetNameByMonth(workbook, monthLabel);
+    if (!sheetName) throw new Error("엑셀 시트를 찾지 못했습니다.");
+    var grid = getWorkbookSheetGrid(workbook, sheetName);
+    var headerMap = findPurchaseCloseHeaderMapFromGrid(grid);
+    if (!headerMap) throw new Error("매입 마감 헤더(NO/업체명/매입금액/합계금액/내역확인/발행확인)를 찾지 못했습니다.");
+    var parsed = buildPurchaseCloseRowsAndRefsFromGrid(grid, headerMap);
+    return {
+      workbook: workbook,
+      sheetName: sheetName,
+      previewHtml: getWorkbookSheetHtml(workbook, sheetName),
+      rows: parsed.rows,
+      rowRefsByNo: parsed.rowRefsByNo,
+      headerMap: headerMap,
+    };
+  }
+
   function setSalesCloseSyncMeta(meta) {
     closingExcelSync.sales = closingExcelSync.sales || { handle: null, name: "", previewHtml: "" };
     closingExcelSync.sales.syncMeta = meta || null;
@@ -2116,6 +2625,9 @@
   }
 
   async function writeSalesCloseFieldToLinkedExcel(no, field, value) {
+    if (closingProtectOriginalExcel) {
+      throw new Error("원본 보호 모드입니다. 원본 직접 수정은 잠시 비활성화되어 있어요.");
+    }
     var allowed = { amount: true, mailSent: true, mailReply: true, issueConfirm: true };
     if (!allowed[field]) throw new Error("지원하지 않는 편집 항목입니다.");
     var slot = closingExcelSync.sales || {};
@@ -2160,33 +2672,15 @@
   }
 
   function parsePurchaseCloseRowsFromWorkbookBuffer(arrayBuffer) {
-    var grid = getWorkbookFirstSheetGridFromBuffer(arrayBuffer);
-    var rows = buildClosingPurchaseCloseSeedRows();
-    var lastDivision = "";
-    var imported = 0;
-    for (var i = 0; i < grid.length; i++) {
-      var row = grid[i] || [];
-      var noText = toTextCell(row[0]);
-      if (!/^\d+$/.test(noText)) continue;
-      var no = Number(noText);
-      if (!isFinite(no) || no < 1 || no > closingCloseTableRowCount) continue;
-      var target = rows[no - 1] || emptyClosingPurchaseCloseRow(String(no));
-      var division = toTextCell(row[1]);
-      if (division) lastDivision = division;
-      target.no = String(no);
-      target.division = division || lastDivision || target.division || "";
-      target.company = toTextCell(row[2]);
-      target.closeIssueDate = toTextCell(row[3]);
-      target.supplyAmount = toTextCell(row[4]);
-      target.totalAmount = toTextCell(row[5]);
-      target.detailCheck = toTextCell(row[6]);
-      target.issueConfirm = toTextCell(row[7]);
-      target.note = toTextCell(row[8]);
-      rows[no - 1] = target;
-      imported++;
-    }
-    if (!imported) throw new Error("매입 마감 양식에서 읽을 행을 찾지 못했습니다.");
-    return normalizeClosingPurchaseCloseRows(rows);
+    var analysis = analyzePurchaseCloseWorkbookBuffer(arrayBuffer, closingState.attendanceMonth);
+    closingExcelSync.purchase = closingExcelSync.purchase || { handle: null, name: "", previewHtml: "" };
+    closingExcelSync.purchase.activeMonth = closingState.attendanceMonth;
+    closingExcelSync.purchase.syncMeta = {
+      sheetName: analysis.sheetName,
+      rowRefsByNo: analysis.rowRefsByNo,
+      headerMap: analysis.headerMap,
+    };
+    return analysis.rows;
   }
 
   function buildSalesCloseExportAoA(rows) {
@@ -2293,16 +2787,25 @@
       setClosingSalesCloseRows(closingState.attendanceMonth, salesAnalysis.rows);
       return salesAnalysis.rows.length;
     }
-    closingExcelSync[kind].previewHtml = getWorkbookFirstSheetHtmlFromBuffer(buffer);
-    var purchaseRows = parsePurchaseCloseRowsFromWorkbookBuffer(buffer);
-    setClosingPurchaseCloseRows(closingState.attendanceMonth, purchaseRows);
-    return purchaseRows.length;
+    var purchaseAnalysis = analyzePurchaseCloseWorkbookBuffer(buffer, closingState.attendanceMonth);
+    closingExcelSync.purchase.previewHtml = purchaseAnalysis.previewHtml;
+    closingExcelSync.purchase.activeMonth = closingState.attendanceMonth;
+    closingExcelSync.purchase.syncMeta = {
+      sheetName: purchaseAnalysis.sheetName,
+      rowRefsByNo: purchaseAnalysis.rowRefsByNo,
+      headerMap: purchaseAnalysis.headerMap,
+    };
+    setClosingPurchaseCloseRows(closingState.attendanceMonth, purchaseAnalysis.rows);
+    return purchaseAnalysis.rows.length;
   }
 
   async function exportClosingToLinkedExcel(kind) {
     var slot = closingExcelSync[kind] || {};
     var handle = slot.handle;
     if (!handle) throw new Error("먼저 엑셀 연결 버튼으로 파일을 선택해주세요.");
+    if (closingProtectOriginalExcel) {
+      throw new Error("원본 보호 모드입니다. '엑셀로 내보내기'로 복사본 저장만 사용해주세요.");
+    }
     if (kind === "sales") {
       var sourceFile = await handle.getFile();
       var sourceBuffer = await sourceFile.arrayBuffer();
@@ -2338,6 +2841,45 @@
       setClosingSalesCloseRows(closingState.attendanceMonth, refreshedSales.rows);
       scheduleLedgerDraftSave();
       return refreshedSales.rows.length;
+    }
+    if (kind === "purchase") {
+      var purchaseFile = await handle.getFile();
+      var purchaseBuffer = await purchaseFile.arrayBuffer();
+      var purchaseAnalysis = analyzePurchaseCloseWorkbookBuffer(purchaseBuffer, closingState.attendanceMonth);
+      var rowsForPurchaseWrite = normalizeClosingPurchaseCloseRows(getClosingPurchaseCloseRows(closingState.attendanceMonth));
+      for (var p = 0; p < rowsForPurchaseWrite.length; p++) {
+        var purchaseRow = rowsForPurchaseWrite[p] || {};
+        var purchaseNo = String(Number(purchaseRow.no || (p + 1)));
+        if (!/^\d+$/.test(purchaseNo)) continue;
+        var purchaseRowInfo = purchaseAnalysis.rowRefsByNo[purchaseNo];
+        if (!purchaseRowInfo || !purchaseRowInfo.refs) continue;
+        var purchaseSheet = purchaseAnalysis.workbook.Sheets[purchaseAnalysis.sheetName];
+        setSheetCellValueForSalesClose(purchaseSheet, purchaseRowInfo.refs.closeIssueDate, purchaseRow.closeIssueDate || "", false);
+        setSheetCellValueForSalesClose(purchaseSheet, purchaseRowInfo.refs.supplyAmount, purchaseRow.supplyAmount || "", true);
+        setSheetCellValueForSalesClose(purchaseSheet, purchaseRowInfo.refs.totalAmount, purchaseRow.totalAmount || "", true);
+        setSheetCellValueForSalesClose(purchaseSheet, purchaseRowInfo.refs.detailCheck, purchaseRow.detailCheck || "", false);
+        setSheetCellValueForSalesClose(purchaseSheet, purchaseRowInfo.refs.issueConfirm, purchaseRow.issueConfirm || "", false);
+        setSheetCellValueForSalesClose(purchaseSheet, purchaseRowInfo.refs.note, purchaseRow.note || "", false);
+      }
+      var nextPurchaseBuffer = window.XLSX.write(purchaseAnalysis.workbook, {
+        bookType: inferWorkbookBookType(slot.name || purchaseFile.name || ""),
+        type: "array",
+        cellStyles: true,
+      });
+      var purchaseWritable = await handle.createWritable();
+      await purchaseWritable.write(nextPurchaseBuffer);
+      await purchaseWritable.close();
+      var refreshedPurchase = analyzePurchaseCloseWorkbookBuffer(nextPurchaseBuffer, closingState.attendanceMonth);
+      closingExcelSync.purchase.previewHtml = refreshedPurchase.previewHtml;
+      closingExcelSync.purchase.activeMonth = closingState.attendanceMonth;
+      closingExcelSync.purchase.syncMeta = {
+        sheetName: refreshedPurchase.sheetName,
+        rowRefsByNo: refreshedPurchase.rowRefsByNo,
+        headerMap: refreshedPurchase.headerMap,
+      };
+      setClosingPurchaseCloseRows(closingState.attendanceMonth, refreshedPurchase.rows);
+      scheduleLedgerDraftSave();
+      return refreshedPurchase.rows.length;
     }
     var rows = kind === "sales"
       ? normalizeClosingSalesCloseRows(getClosingSalesCloseRows(closingState.attendanceMonth))
@@ -4513,6 +5055,16 @@
         workItems: cloneItems(trimmedWorkItems),
         workInfo: cloneWorkInfo(workState.info),
       },
+      manager: {
+        subTab: managerState.subTab || "overview",
+        docs: normalizeManagerDocs(managerState.docs),
+        undatedFolders: normalizeManagerUndatedFolders(managerState.undatedFolders),
+        folderLabel: String(managerState.folderLabel || ""),
+        lastScanAt: String(managerState.lastScanAt || ""),
+        alertsEnabled: managerState.alertsEnabled !== false,
+        alertLeadDays: Number(managerState.alertLeadDays || 30),
+        notifiedMap: Object.assign({}, managerState.notifiedMap || {}),
+      },
       closing: {
         attendanceMonth: closingState.attendanceMonth || defaultClosingMonthLabel(),
         attendanceView: closingState.attendanceView === "outsource" ? "outsource" : "employee",
@@ -4599,6 +5151,7 @@
     var salesData = data.sales && typeof data.sales === "object" ? data.sales : data;
     var purchaseData = data.purchase && typeof data.purchase === "object" ? data.purchase : null;
     var sharedData = data.shared && typeof data.shared === "object" ? data.shared : data;
+    var managerData = data.manager && typeof data.manager === "object" ? data.manager : null;
     var closingData = data.closing && typeof data.closing === "object" ? data.closing : null;
 
     if (Array.isArray(salesData.statusRows)) {
@@ -4708,6 +5261,20 @@
         endMonth: data.purchaseManageState.endMonth || "",
         client: data.purchaseManageState.client || "",
       };
+    }
+
+    if (managerData) {
+      managerState.subTab = managerData.subTab || managerState.subTab || "overview";
+      managerState.docs = normalizeManagerDocs(managerData.docs);
+      managerState.undatedFolders = normalizeManagerUndatedFolders(managerData.undatedFolders);
+      managerState.folderLabel = String(managerData.folderLabel || managerState.folderLabel || "");
+      managerState.lastScanAt = String(managerData.lastScanAt || "");
+      managerState.alertsEnabled = managerData.alertsEnabled !== false;
+      managerState.alertLeadDays = Math.max(1, Math.min(120, Number(managerData.alertLeadDays || 30)));
+      managerState.notifiedMap = managerData.notifiedMap && typeof managerData.notifiedMap === "object"
+        ? Object.assign({}, managerData.notifiedMap)
+        : {};
+      state.managerSubTab = managerState.subTab;
     }
 
     if (closingData) {
@@ -8626,6 +9193,7 @@
   }
 
   function bindClosingSalesPreviewDirectEdit(appRoot) {
+    if (closingProtectOriginalExcel) return;
     var host = appRoot ? appRoot.querySelector(".closing-excel-preview-host") : null;
     if (!host) return;
     var table = host.querySelector("table");
@@ -8735,6 +9303,7 @@
             '<button type="button" class="soft-btn" id="closing-sales-preview-refresh">원본 미리보기</button>' +
             '<input type="file" id="closing-sales-sync-file" accept=".xlsx,.xls" style="display:none" />' +
             '<span class="closing-inline-note">' + escapeHtml(salesFileLabel) + '</span>' +
+            (closingProtectOriginalExcel ? '<span class="closing-inline-note" style="color:#b45309">원본 보호 모드(직접쓰기 잠금)</span>' : '') +
           '</div>' +
         '</div>' +
         '<div class="closing-card closing-card-wide">' +
@@ -8753,6 +9322,9 @@
       return '<option value="' + escapeAttr(option.value) + '"' + (option.value === closingState.attendanceMonth ? " selected" : "") + ">" + escapeHtml(option.label) + "</option>";
     }).join("");
     var previewHtml = (closingExcelSync.purchase && closingExcelSync.purchase.previewHtml) || "";
+    var purchaseSheetName = closingExcelSync.purchase && closingExcelSync.purchase.syncMeta ? closingExcelSync.purchase.syncMeta.sheetName : "";
+    var purchaseFileLabel = (closingExcelSync.purchase && closingExcelSync.purchase.name) || "연결된 파일 없음";
+    if (purchaseSheetName) purchaseFileLabel += " / 시트: " + purchaseSheetName;
     return (
       '<div class="closing-page">' +
         '<div class="closing-card closing-card-wide">' +
@@ -8764,7 +9336,8 @@
             '<button type="button" class="soft-btn" id="closing-purchase-sync-export">엑셀로 내보내기</button>' +
             '<button type="button" class="soft-btn" id="closing-purchase-preview-refresh">원본 미리보기</button>' +
             '<input type="file" id="closing-purchase-sync-file" accept=".xlsx,.xls" style="display:none" />' +
-            '<span class="closing-inline-note">' + escapeHtml((closingExcelSync.purchase && closingExcelSync.purchase.name) || "연결된 파일 없음") + '</span>' +
+            '<span class="closing-inline-note">' + escapeHtml(purchaseFileLabel) + '</span>' +
+            (closingProtectOriginalExcel ? '<span class="closing-inline-note" style="color:#b45309">원본 보호 모드(직접쓰기 잠금)</span>' : '') +
           '</div>' +
         '</div>' +
         '<div class="closing-card closing-card-wide">' +
@@ -8885,6 +9458,16 @@
     saveLedgerDraftToFirebase();
   }
 
+  function renderTopBar() {
+    return (
+      '<div class="top-bar">' +
+      '<button type="button" class="soft-btn" id="btn-back">' +
+      icons.arrowLeft +
+      " 이전</button>" +
+      '<button type="button" class="soft-btn" id="btn-out">로그아웃</button></div>'
+    );
+  }
+
   /* ========== App render ========== */
   function render() {
     if (!state.entered) {
@@ -8944,18 +9527,103 @@
       return;
     }
 
-    if (state.role !== "accounting") {
-      app.innerHTML =
-        '<div class="shell-bg prep">' + state.role + " 화면 준비중</div>";
+    if (state.role === "manager") {
+      managerState.subTab = managerState.subTab || state.managerSubTab || "overview";
+      app.innerHTML = renderTopBar() + '<div class="content">' + renderManagerDashboard() + "</div>";
+      wireTopBar();
+      var wasManagerLoaded = ledgerState.loadedFromFirebase;
+      ensureLedgerLoadedFromFirebase().then(function () {
+        if (!wasManagerLoaded && state.role === "manager") render();
+      });
+      if (managerDocDirHandle && !normalizeManagerDocs(managerState.docs).length && !managerState.lastScanAt) {
+        refreshManagerDocs({ toast: false }).then(function () {
+          if (state.role === "manager") render();
+        }).catch(function () {
+          // ignore background first scan failure
+        });
+      }
+      app.querySelectorAll("[data-manager-sub]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          managerState.subTab = btn.getAttribute("data-manager-sub") || "overview";
+          state.managerSubTab = managerState.subTab;
+          scheduleLedgerDraftSave();
+          render();
+        });
+      });
+      var connectBtn = document.getElementById("btn-manager-connect-folder");
+      if (connectBtn) {
+        connectBtn.addEventListener("click", function () {
+          connectManagerHazardFolderAndScan()
+            .then(function () {
+              render();
+            })
+            .catch(function (err) {
+              if (err && /abort|취소/i.test(String(err.message || ""))) return;
+              showAppToast(err && err.message ? err.message : "폴더 연결에 실패했어요.", "warning");
+            });
+        });
+      }
+      var rescanBtn = document.getElementById("btn-manager-rescan");
+      if (rescanBtn) {
+        rescanBtn.addEventListener("click", function () {
+          refreshManagerDocs({ toast: true, persistScan: true })
+            .then(function () {
+              render();
+            })
+            .catch(function (err) {
+              showAppToast(err && err.message ? err.message : "폴더 스캔에 실패했어요.", "warning");
+            });
+        });
+      }
+      var permBtn = document.getElementById("btn-manager-notify-perm");
+      if (permBtn) {
+        permBtn.addEventListener("click", function () {
+          ensureManagerNotificationPermission()
+            .then(function (perm) {
+              if (perm === "granted") {
+                showAppToast("시스템 알림이 허용되었습니다.", "success");
+                maybeNotifyManagerDocs();
+              } else if (perm === "denied") {
+                showAppToast("브라우저 설정에서 알림을 허용해주세요.", "warning");
+              } else {
+                showAppToast("알림 권한을 확인해주세요.", "warning");
+              }
+            })
+            .catch(function (err) {
+              showAppToast(err && err.message ? err.message : "알림 권한 요청에 실패했어요.", "warning");
+            });
+        });
+      }
+      var alertsEnabledEl = document.getElementById("manager-alerts-enabled");
+      if (alertsEnabledEl) {
+        alertsEnabledEl.addEventListener("change", function () {
+          managerState.alertsEnabled = !!alertsEnabledEl.checked;
+          scheduleLedgerDraftSave();
+          maybeNotifyManagerDocs();
+        });
+      }
+      var alertDaysEl = document.getElementById("manager-alert-days");
+      if (alertDaysEl) {
+        alertDaysEl.addEventListener("change", function () {
+          var next = Math.max(1, Math.min(120, Number(alertDaysEl.value || 30)));
+          alertDaysEl.value = String(next);
+          managerState.alertLeadDays = next;
+          scheduleLedgerDraftSave();
+          render();
+        });
+      }
       return;
     }
 
-    var top =
-      '<div class="top-bar">' +
-      '<button type="button" class="soft-btn" id="btn-back">' +
-      icons.arrowLeft +
-      " 이전</button>" +
-      '<button type="button" class="soft-btn" id="btn-out">로그아웃</button></div>';
+    if (state.role !== "accounting") {
+      app.innerHTML =
+        renderTopBar() +
+        '<div class="content"><div class="shell-bg prep">' + getRoleTitle(state.role) + " 화면 준비중</div></div>";
+      wireTopBar();
+      return;
+    }
+
+    var top = renderTopBar();
 
     app.className = "";
 
@@ -9888,6 +10556,17 @@
         if (salesExportBtn) {
           salesExportBtn.addEventListener("click", function () {
             if (closingExcelSync.sales && closingExcelSync.sales.handle) {
+              if (closingProtectOriginalExcel) {
+                try {
+                  var safeRows = normalizeClosingSalesCloseRows(getClosingSalesCloseRows(closingState.attendanceMonth));
+                  var safeBuffer = makeWorkbookBufferFromAoA(buildSalesCloseExportAoA(safeRows), closingState.attendanceMonth || "매출마감");
+                  triggerExcelDownloadFromBuffer(safeBuffer, "매출마감_복사본_" + (closingState.attendanceMonth || "") + ".xlsx");
+                  showAppToast("원본 보호 모드: 복사본 파일로 저장했어요.", "warning");
+                } catch (err) {
+                  showAppToast(err && err.message ? err.message : "엑셀 내보내기에 실패했어요.", "warning");
+                }
+                return;
+              }
               exportClosingToLinkedExcel("sales")
                 .then(function () {
                   showAppToast("연결된 엑셀 파일로 저장했어요.", "success");
@@ -9935,6 +10614,17 @@
             closingState.attendanceMonth = closeMonthSelectForPurchase.value || defaultClosingMonthLabel();
             ensureClosingAttendanceState();
             scheduleLedgerDraftSave();
+            if (closingExcelSync.purchase && closingExcelSync.purchase.handle) {
+              importClosingFromLinkedExcel("purchase")
+                .then(function () {
+                  scheduleLedgerDraftSave();
+                  render();
+                })
+                .catch(function () {
+                  render();
+                });
+              return;
+            }
             render();
           });
         }
@@ -9996,9 +10686,15 @@
             if (!file) return;
             readFileAsArrayBuffer(file)
               .then(function (buffer) {
-                closingExcelSync.purchase.previewHtml = getWorkbookFirstSheetHtmlFromBuffer(buffer);
-                var rows = parsePurchaseCloseRowsFromWorkbookBuffer(buffer);
-                setClosingPurchaseCloseRows(closingState.attendanceMonth, rows);
+                var analysis = analyzePurchaseCloseWorkbookBuffer(buffer, closingState.attendanceMonth);
+                closingExcelSync.purchase.previewHtml = analysis.previewHtml;
+                closingExcelSync.purchase.activeMonth = closingState.attendanceMonth;
+                closingExcelSync.purchase.syncMeta = {
+                  sheetName: analysis.sheetName,
+                  rowRefsByNo: analysis.rowRefsByNo,
+                  headerMap: analysis.headerMap,
+                };
+                setClosingPurchaseCloseRows(closingState.attendanceMonth, analysis.rows);
                 scheduleLedgerDraftSave();
                 render();
                 showAppToast("매입 마감 엑셀을 가져왔어요.", "success");
@@ -10029,6 +10725,17 @@
         if (purchaseExportBtn) {
           purchaseExportBtn.addEventListener("click", function () {
             if (closingExcelSync.purchase && closingExcelSync.purchase.handle) {
+              if (closingProtectOriginalExcel) {
+                try {
+                  var safePurchaseRows = normalizeClosingPurchaseCloseRows(getClosingPurchaseCloseRows(closingState.attendanceMonth));
+                  var safePurchaseBuffer = makeWorkbookBufferFromAoA(buildPurchaseCloseExportAoA(safePurchaseRows), closingState.attendanceMonth || "매입마감");
+                  triggerExcelDownloadFromBuffer(safePurchaseBuffer, "매입마감_복사본_" + (closingState.attendanceMonth || "") + ".xlsx");
+                  showAppToast("원본 보호 모드: 복사본 파일로 저장했어요.", "warning");
+                } catch (err) {
+                  showAppToast(err && err.message ? err.message : "엑셀 내보내기에 실패했어요.", "warning");
+                }
+                return;
+              }
               exportClosingToLinkedExcel("purchase")
                 .then(function () {
                   showAppToast("연결된 엑셀 파일로 저장했어요.", "success");
@@ -10047,6 +10754,25 @@
               showAppToast(err && err.message ? err.message : "엑셀 내보내기에 실패했어요.", "warning");
             }
           });
+        }
+        if (
+          closingExcelSync.purchase &&
+          closingExcelSync.purchase.handle &&
+          closingExcelSync.purchase.activeMonth !== closingState.attendanceMonth &&
+          !closingExcelSync.purchase.syncingMonth
+        ) {
+          closingExcelSync.purchase.syncingMonth = true;
+          importClosingFromLinkedExcel("purchase")
+            .then(function () {
+              scheduleLedgerDraftSave();
+              render();
+            })
+            .catch(function () {
+              // ignore auto-sync error in background
+            })
+            .finally(function () {
+              closingExcelSync.purchase.syncingMonth = false;
+            });
         }
       }
       return;
@@ -10092,12 +10818,26 @@
 
   bindFirestoreRetryListeners();
   loadLocalLedgerBackup();
-  restoreClosingExcelHandles()
-    .catch(function () {
+  Promise.all([
+    restoreClosingExcelHandles().catch(function () {
       // ignore restore failure
-    })
-    .finally(function () {
-      render();
-    });
+    }),
+    restoreManagerDirectoryHandle().catch(function () {
+      // ignore restore failure
+    }),
+  ]).finally(function () {
+    startManagerAlertLoop();
+    render();
+    if (managerDocDirHandle) {
+      refreshManagerDocs({ toast: false })
+        .then(function () {
+          maybeNotifyManagerDocs();
+          if (state.role === "manager") render();
+        })
+        .catch(function () {
+          // ignore background scan failure
+        });
+    }
+  });
 })();
 
