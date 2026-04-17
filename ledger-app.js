@@ -13,8 +13,8 @@
 
   var roleCards = [
     { key: "accounting", title: "경리", icon: "scroll" },
-    { key: "manager", title: "실장", icon: "sheet" },
-    { key: "orders", title: "관리", icon: "folder" },
+    { key: "manager", title: "관리/분석", icon: "sheet" },
+    { key: "orders", title: "발주", icon: "folder" },
     { key: "work", title: "SCM", icon: "settings" },
   ];
 
@@ -50,6 +50,8 @@
     { key: "expired", label: "만료됨", icon: "folder" },
     { key: "recent", label: "최근스캔", icon: "clipboard" },
     { key: "certsheet", label: "증명서시트", icon: "sheet" },
+    { key: "sales-analytics", label: "매출분석", icon: "scroll" },
+    { key: "purchase-analytics", label: "매입분석", icon: "folder" },
   ];
 
   var icons = {
@@ -660,6 +662,113 @@
     return docs;
   }
 
+  function parseMonthLabelNumber(label) {
+    var text = String(label || "");
+    var m = text.match(/^(\d+)\s*월$/);
+    if (!m) return null;
+    var n = Number(m[1]);
+    return isFinite(n) ? n : null;
+  }
+
+  function getSortedMonthLabelsFromMap(sourceMap) {
+    var src = sourceMap && typeof sourceMap === "object" ? sourceMap : {};
+    return Object.keys(src).filter(function (label) {
+      return parseMonthLabelNumber(label) != null;
+    }).sort(function (a, b) {
+      return parseMonthLabelNumber(a) - parseMonthLabelNumber(b);
+    });
+  }
+
+  function parseMoneyCellToNumber(value) {
+    var num = parseCalcNumber(value);
+    return num == null ? 0 : num;
+  }
+
+  function buildManagerMonthlyCompanyAmountMap(kind) {
+    var byMonth = kind === "purchase"
+      ? (closingState.purchaseCloseRowsByMonth || {})
+      : (closingState.salesCloseRowsByMonth || {});
+    var labels = getSortedMonthLabelsFromMap(byMonth);
+    var monthMap = {};
+    labels.forEach(function (monthLabel) {
+      var rows = kind === "purchase"
+        ? normalizeClosingPurchaseCloseRows(byMonth[monthLabel])
+        : normalizeClosingSalesCloseRows(byMonth[monthLabel]);
+      var companyMap = {};
+      rows.forEach(function (row) {
+        var company = String((row && row.company) || "").trim();
+        if (!company) return;
+        var amount = kind === "purchase"
+          ? parseMoneyCellToNumber(row && row.supplyAmount)
+          : parseMoneyCellToNumber(row && row.amount);
+        if (!amount) return;
+        companyMap[company] = (companyMap[company] || 0) + amount;
+      });
+      monthMap[monthLabel] = companyMap;
+    });
+    return { labels: labels, monthMap: monthMap };
+  }
+
+  function buildManagerDeltaRows(kind) {
+    var info = buildManagerMonthlyCompanyAmountMap(kind);
+    var labels = info.labels;
+    var monthMap = info.monthMap;
+    var rows = [];
+    labels.forEach(function (monthLabel, monthIndex) {
+      var current = monthMap[monthLabel] || {};
+      var prev = monthIndex > 0 ? (monthMap[labels[monthIndex - 1]] || {}) : {};
+      Object.keys(current).forEach(function (company) {
+        var amount = current[company] || 0;
+        var prevAmount = prev[company] || 0;
+        var delta = amount - prevAmount;
+        var deltaRate = prevAmount > 0 ? (delta / prevAmount) * 100 : null;
+        rows.push({
+          month: monthLabel,
+          company: company,
+          amount: amount,
+          prevAmount: prevAmount,
+          delta: delta,
+          deltaRate: deltaRate,
+        });
+      });
+    });
+    return rows;
+  }
+
+  function renderManagerDeltaTable(kind) {
+    var rows = buildManagerDeltaRows(kind);
+    var sorted = rows.slice().sort(function (a, b) {
+      var am = parseMonthLabelNumber(a.month) || 0;
+      var bm = parseMonthLabelNumber(b.month) || 0;
+      if (am !== bm) return bm - am;
+      return Math.abs(b.delta) - Math.abs(a.delta);
+    });
+    var topRows = sorted.slice(0, 200);
+    var body = topRows.map(function (row) {
+      var rateText = row.deltaRate == null ? "-" : (Math.round(row.deltaRate * 100) / 100).toLocaleString("ko-KR") + "%";
+      var deltaClass = row.delta > 0 ? "warn" : (row.delta < 0 ? "ok" : "");
+      return (
+        "<tr>" +
+        "<td>" + escapeHtml(row.month) + "</td>" +
+        "<td>" + escapeHtml(row.company) + "</td>" +
+        '<td class="mono right">' + escapeHtml(formatDisplayNumber(row.amount)) + "</td>" +
+        '<td class="mono right">' + escapeHtml(formatDisplayNumber(row.prevAmount)) + "</td>" +
+        '<td class="mono right ' + deltaClass + '">' + escapeHtml(formatDisplayNumber(row.delta)) + "</td>" +
+        '<td class="mono right ' + deltaClass + '">' + escapeHtml(rateText) + "</td>" +
+        "</tr>"
+      );
+    }).join("");
+    return (
+      '<div class="manager-table-card">' +
+      '<div class="manager-table-wrap">' +
+      '<table class="manager-table">' +
+      "<thead><tr><th>월</th><th>업체명</th><th>금액</th><th>전월 금액</th><th>증감액</th><th>증감률</th></tr></thead>" +
+      "<tbody>" +
+      (body || '<tr><td colspan="6" class="manager-empty">분석할 데이터가 없습니다. 마감 탭에서 먼저 월별 데이터를 불러와주세요.</td></tr>') +
+      "</tbody></table></div></div>"
+    );
+  }
+
   async function ensureManagerNotificationPermission() {
     if (!("Notification" in window)) throw new Error("이 환경은 시스템 알림을 지원하지 않습니다.");
     if (Notification.permission === "granted") return "granted";
@@ -946,6 +1055,8 @@
       "<tbody>" +
       (certRowsHtml || '<tr><td colspan="6" class="manager-empty">증명서를 추가해주세요.</td></tr>') +
       "</tbody></table></div></div>";
+    var salesAnalyticsPanelHtml = renderManagerDeltaTable("sales");
+    var purchaseAnalyticsPanelHtml = renderManagerDeltaTable("purchase");
 
     return (
       '<div class="manager-page">' +
@@ -985,21 +1096,24 @@
       (
         activeSubTab === "certsheet"
           ? certSheetPanelHtml
-          : (
-            '<div class="manager-table-card">' +
-            '<div class="manager-table-wrap">' +
-            '<table class="manager-table">' +
-            "<thead><tr><th>구분</th><th>발급일</th><th>만료일</th><th>업체/문서명</th><th>기준 폴더</th><th>상태</th><th>남은기간</th></tr></thead>" +
-            "<tbody>" +
-            (docRowsHtml || '<tr><td colspan="7" class="manager-empty">해당 조건의 문서가 없습니다.</td></tr>') +
-            "</tbody></table></div></div>"
-          )
+          : activeSubTab === "sales-analytics"
+            ? salesAnalyticsPanelHtml
+            : activeSubTab === "purchase-analytics"
+              ? purchaseAnalyticsPanelHtml
+              : (
+                '<div class="manager-table-card">' +
+                '<div class="manager-table-wrap">' +
+                '<table class="manager-table">' +
+                "<thead><tr><th>구분</th><th>발급일</th><th>만료일</th><th>업체/문서명</th><th>기준 폴더</th><th>상태</th><th>남은기간</th></tr></thead>" +
+                "<tbody>" +
+                (docRowsHtml || '<tr><td colspan="7" class="manager-empty">해당 조건의 문서가 없습니다.</td></tr>') +
+                "</tbody></table></div></div>" +
+                '<div class="manager-undated-card">' +
+                '<div class="manager-undated-title">날짜 인식 실패 폴더 (형식: YYYY-MM-DD 폴더명)</div>' +
+                (undatedHtml ? ("<ul>" + undatedHtml + "</ul>") : '<div class="manager-empty small">없음</div>') +
+                "</div>"
+              )
       ) +
-
-      '<div class="manager-undated-card">' +
-      '<div class="manager-undated-title">날짜 인식 실패 폴더 (형식: YYYY-MM-DD 폴더명)</div>' +
-      (undatedHtml ? ("<ul>" + undatedHtml + "</ul>") : '<div class="manager-empty small">없음</div>') +
-      "</div>" +
       "</div>"
     );
   }
