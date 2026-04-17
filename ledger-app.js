@@ -133,6 +133,7 @@
   var managerState = {
     mainTab: "docs",
     subTab: "overview",
+    analyticsBaseMonth: "",
     docs: [],
     undatedFolders: [],
     folderLabel: "",
@@ -3367,6 +3368,105 @@
     return "";
   }
 
+  function isLikelyMealNameText(text) {
+    var value = String(text || "").trim();
+    if (!value) return false;
+    if (value.length > 40) return false;
+    if (/^\d+$/.test(value)) return false;
+    if (/^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$/.test(value)) return false;
+    if (/^\d{1,2}[-/.]\d{1,2}$/.test(value)) return false;
+    var token = normalizeMealHeaderToken(value);
+    if (
+      token.indexOf("일자") >= 0 ||
+      token.indexOf("날짜") >= 0 ||
+      token.indexOf("이름") >= 0 ||
+      token.indexOf("성명") >= 0 ||
+      token.indexOf("사원") >= 0 ||
+      token.indexOf("직원") >= 0 ||
+      token.indexOf("조식") >= 0 ||
+      token.indexOf("중식") >= 0 ||
+      token.indexOf("석식") >= 0 ||
+      token.indexOf("식수") >= 0 ||
+      token.indexOf("합계") >= 0
+    ) return false;
+    if (/[ㄱ-ㅎㅏ-ㅣ가-힣A-Za-z]/.test(value)) return true;
+    return false;
+  }
+
+  function parseMealRowsByLoosePattern(grid, monthLabel, sourceLabel) {
+    var safeGrid = Array.isArray(grid) ? grid : [];
+    var monthMatch = String(monthLabel || "").match(/^(\d+)월$/);
+    var monthNumber = monthMatch ? Number(monthMatch[1]) : null;
+    var rows = [];
+    var lastDay = null;
+    for (var r = 0; r < safeGrid.length; r++) {
+      var row = safeGrid[r] || [];
+      if (!row || !row.length) continue;
+
+      var day = null;
+      var name = "";
+      var mealType = "";
+      var numericCells = [];
+
+      for (var c = 0; c < row.length; c++) {
+        var cellText = toTextCell(row[c]);
+        if (!cellText) continue;
+        var parsedDay = parseMealDayValue(cellText, monthNumber);
+        if (parsedDay && day == null) day = parsedDay;
+        if (!name && isLikelyMealNameText(cellText)) name = cellText;
+        if (!mealType) mealType = parseMealTypeToken(cellText);
+        var num = parseCalcNumber(cellText);
+        if (num != null) {
+          numericCells.push({ col: c, value: num });
+        }
+      }
+
+      if (day == null) {
+        day = lastDay;
+      } else {
+        lastDay = day;
+      }
+      if (!day || !name) continue;
+
+      var breakfast = 0;
+      var lunch = 0;
+      var dinner = 0;
+
+      if (mealType) {
+        var oneCount = numericCells.length ? parseMealCountValue(numericCells[0].value) : 1;
+        if (mealType === "breakfast") breakfast = oneCount;
+        else if (mealType === "lunch") lunch = oneCount;
+        else if (mealType === "dinner") dinner = oneCount;
+      } else {
+        var smallNums = numericCells
+          .map(function (n) { return parseMealCountValue(n.value); })
+          .filter(function (n) { return n > 0 && n <= 10; });
+        if (smallNums.length >= 3) {
+          breakfast = smallNums[0] || 0;
+          lunch = smallNums[1] || 0;
+          dinner = smallNums[2] || 0;
+        } else if (smallNums.length === 1) {
+          lunch = smallNums[0];
+        } else if (smallNums.length === 2) {
+          lunch = smallNums[0];
+          dinner = smallNums[1];
+        }
+      }
+
+      if (!breakfast && !lunch && !dinner) continue;
+      rows.push({
+        day: day,
+        dateText: monthNumber ? (monthNumber + "월 " + day + "일") : String(day) + "일",
+        name: name,
+        breakfast: breakfast,
+        lunch: lunch,
+        dinner: dinner,
+        source: String(sourceLabel || ""),
+      });
+    }
+    return rows;
+  }
+
   function findMealHeaderMapFromGrid(grid) {
     var safeGrid = Array.isArray(grid) ? grid : [];
     for (var r = 0; r < Math.min(safeGrid.length, 60); r++) {
@@ -3417,15 +3517,29 @@
     var monthMatch = String(monthLabel || "").match(/^(\d+)월$/);
     var monthNumber = monthMatch ? Number(monthMatch[1]) : null;
     var headerMap = findMealHeaderMapFromGrid(grid);
-    if (!headerMap) return [];
+    if (!headerMap) {
+      return parseMealRowsByLoosePattern(grid, monthLabel, sourceLabel);
+    }
     var cols = headerMap.cols || {};
     var records = [];
+    var lastDay = null;
     for (var r = headerMap.rowIndex + 1; r < grid.length; r++) {
       var row = grid[r] || [];
       var name = toTextCell(cols.name >= 0 ? row[cols.name] : "");
+      if (!name) {
+        for (var nc = 0; nc < row.length; nc++) {
+          var maybeName = toTextCell(row[nc]);
+          if (isLikelyMealNameText(maybeName)) {
+            name = maybeName;
+            break;
+          }
+        }
+      }
       if (!name) continue;
       var day = parseMealDayValue(cols.date >= 0 ? row[cols.date] : "", monthNumber);
+      if (!day) day = lastDay;
       if (!day) continue;
+      lastDay = day;
       var breakfast = 0;
       var lunch = 0;
       var dinner = 0;
@@ -6067,6 +6181,7 @@
       manager: {
         mainTab: managerState.mainTab === "closing" ? "closing" : "docs",
         subTab: managerState.subTab || "overview",
+        analyticsBaseMonth: String(managerState.analyticsBaseMonth || ""),
         docs: normalizeManagerDocs(managerState.docs),
         undatedFolders: normalizeManagerUndatedFolders(managerState.undatedFolders),
         folderLabel: String(managerState.folderLabel || ""),
@@ -6287,6 +6402,7 @@
     if (managerData) {
       managerState.mainTab = managerData.mainTab === "closing" ? "closing" : "docs";
       managerState.subTab = managerData.subTab || managerState.subTab || "overview";
+      managerState.analyticsBaseMonth = String(managerData.analyticsBaseMonth || managerState.analyticsBaseMonth || "");
       managerState.docs = normalizeManagerDocs(managerData.docs).filter(function (doc) {
         return doc.sourceType !== "cert";
       });
