@@ -1,0 +1,86 @@
+﻿{
+    "headers":  {
+                    "daily":  {
+                                  "M":  "간식",
+                                  "E":  "사원이름",
+                                  "D":  "사원번호",
+                                  "J":  "중식",
+                                  "P":  "",
+                                  "B":  "인증일시",
+                                  "I":  "조식",
+                                  "K":  "석식",
+                                  "N":  "야식2",
+                                  "C":  "인증번호",
+                                  "L":  "야식"
+                              },
+                    "summary":  {
+                                    "L":  "합계",
+                                    "G":  "중식",
+                                    "F":  "조식",
+                                    "B":  "사원번호",
+                                    "I":  "야식",
+                                    "K":  "야식2",
+                                    "H":  "석식",
+                                    "C":  "사원이름",
+                                    "J":  "간식",
+                                    "A":  "인증번호"
+                                },
+                    "count":  {
+                                  "G":  "합계",
+                                  "F":  "수기",
+                                  "B":  "구  분",
+                                  "C":  "요일",
+                                  "E":  "석식",
+                                  "D":  "중식"
+                              }
+                },
+    "counts":  {
+                   "dailyRows":  813,
+                   "summaryRows":  42,
+                   "countRows":  31
+               },
+    "totals":  {
+                   "daily":  {
+                                 "Breakfast":  0,
+                                 "Lunch":  802,
+                                 "Dinner":  11,
+                                 "Night":  0,
+                                 "Snack":  0,
+                                 "Night2":  0,
+                                 "Total":  813
+                             },
+                   "summary":  {
+                                   "Breakfast":  0,
+                                   "Lunch":  802,
+                                   "Dinner":  11,
+                                   "Night":  0,
+                                   "Snack":  0,
+                                   "Night2":  0,
+                                   "Total":  813
+                               },
+                   "count":  {
+                                 "Lunch":  802,
+                                 "Dinner":  11,
+                                 "Manual":  62,
+                                 "Total":  875,
+                                 "WithoutManual":  813
+                             }
+               },
+    "checks":  {
+                   "dailyVsSummary":  true,
+                   "dailyVsCountLunchDinner":  true,
+                   "countFormula":  true,
+                   "countMinusManualEqualsDaily":  true
+               },
+    "mismatches":  {
+                       "date":  [
+
+                                ],
+                       "person":  [
+
+                                  ],
+                       "countFormula":  [
+
+                                        ]
+                   }
+}

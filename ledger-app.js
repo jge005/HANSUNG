@@ -954,16 +954,16 @@
     var amountMax = amountSeries.reduce(function (m, v) { return v > m ? v : m; }, 0);
     if (amountMax <= 0) amountMax = 1;
 
-    var width = Math.max(560, monthLabels.length * 82 + 90);
-    var height = 196;
+    var width = Math.max(960, monthLabels.length * 120 + 180);
+    var height = 320;
     var left = 22;
     var right = 18;
-    var top = 14;
-    var bottom = 34;
+    var top = 18;
+    var bottom = 44;
     var plotW = Math.max(100, width - left - right);
     var plotH = Math.max(90, height - top - bottom);
     var step = monthLabels.length > 1 ? (plotW / (monthLabels.length - 1)) : 0;
-    var barW = Math.min(16, Math.max(8, Math.floor(plotW / (monthLabels.length * 2.2))));
+    var barW = Math.min(34, Math.max(14, Math.floor(plotW / (monthLabels.length * 1.55))));
 
     var gridLines = [];
     for (var g = 0; g <= 4; g++) {
@@ -1040,7 +1040,7 @@
     var prevTotal = parseMoneyCellToNumber(monthTotals[prevMonth]);
     var totalDelta = latestTotal - prevTotal;
     var totalRate = prevTotal > 0 ? (totalDelta / prevTotal) * 100 : null;
-    var topRows = (trend.rows || []).slice(0, 18).map(function (row) {
+    var topRows = (trend.rows || []).map(function (row) {
       var rateText = row.deltaRate == null ? "-" : (Math.round(row.deltaRate * 100) / 100).toLocaleString("ko-KR") + "%";
       var deltaClass = row.delta > 0 ? "warn" : (row.delta < 0 ? "ok" : "");
       return (
@@ -1069,13 +1069,13 @@
       "</div>" +
       '<div class="manager-table-card">' + comboChartHtml + "</div>" +
       '<div class="manager-table-card">' +
-      '<div class="manager-table-wrap">' +
+      '<div class="manager-table-wrap manager-trend-table-wrap">' +
       '<table class="manager-table manager-trend-table">' +
-      "<thead><tr><th style=\"width:220px\">업체명</th><th>월별 추이</th><th style=\"width:120px\">당월</th><th style=\"width:120px\">전월</th><th style=\"width:120px\">증감</th><th style=\"width:110px\">증감률</th></tr></thead>" +
+      "<thead><tr><th style=\"width:260px\">업체명</th><th style=\"min-width:520px\">월별 추이</th><th style=\"width:140px\">당월</th><th style=\"width:140px\">전월</th><th style=\"width:140px\">증감</th><th style=\"width:120px\">증감률</th></tr></thead>" +
       "<tbody>" +
       (topRows || '<tr><td colspan="6" class="manager-empty">표시할 업체 데이터가 없습니다.</td></tr>') +
       "</tbody></table></div>" +
-      '<div class="manager-head-meta" style="margin-top:8px;margin-bottom:0"><span>월 축: ' + escapeHtml(labels.join(" / ")) + "</span><span>상위 18개 업체 기준</span></div>" +
+      '<div class="manager-head-meta" style="margin-top:8px;margin-bottom:0"><span>월 축: ' + escapeHtml(labels.join(" / ")) + "</span><span>전체 업체 기준</span></div>" +
       "</div>"
     );
   }
@@ -1408,11 +1408,7 @@
         activeSubTab === "purchase-analytics"
           ? renderManagerTrendPanel("purchase", normalizedBaseMonth)
           : renderManagerTrendPanel("sales", normalizedBaseMonth)
-      ) +
-      '<div class="manager-head-card">' +
-      '<div class="manager-title">' + icon("sheet") + "<strong>업체별 증감 상세</strong></div>" +
-      "</div>" +
-      renderManagerDeltaTable(activeSubTab === "purchase-analytics" ? "purchase" : "sales", normalizedBaseMonth);
+      );
 
     return (
       '<div class="manager-page">' +
