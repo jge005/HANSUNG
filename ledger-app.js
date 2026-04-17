@@ -348,6 +348,7 @@
         key: String((row && row.key) || ""),
         title: String((row && row.title) || ""),
         latestFolder: String((row && row.latestFolder) || ""),
+        missingHint: String((row && row.missingHint) || ""),
         issuedAt: String((row && row.issuedAt) || ""),
         expiresAt: String((row && row.expiresAt) || ""),
         daysLeft: Number((row && row.daysLeft) || 0),
@@ -406,6 +407,29 @@
     return "normal";
   }
 
+  function extractManagerMissingHint(text) {
+    var source = String(text || "");
+    var found = [];
+    var m;
+    var parenRe = /[\(\[（]([^)\]）]*?부족[^)\]）]*)[\)\]）]/g;
+    while ((m = parenRe.exec(source))) {
+      var token = String(m[1] || "").replace(/\s+/g, " ").trim();
+      if (token) found.push(token);
+    }
+    var looseRe = /([A-Za-z0-9가-힣\/&+\-]+\s*부족)/g;
+    while ((m = looseRe.exec(source))) {
+      var token2 = String(m[1] || "").replace(/\s+/g, " ").trim();
+      if (token2) found.push(token2);
+    }
+    var unique = [];
+    found.forEach(function (item) {
+      if (!item) return;
+      if (unique.indexOf(item) >= 0) return;
+      unique.push(item);
+    });
+    return unique.join(", ");
+  }
+
   async function scanManagerHazardDocsFromHandle(handle) {
     if (!handle) throw new Error("먼저 폴더를 연결해주세요.");
     if (handle.kind !== "directory") throw new Error("폴더 핸들이 아닙니다.");
@@ -425,6 +449,7 @@
           key: key,
           title: parsed.title,
           latestFolder: String(entry.name || ""),
+          missingHint: extractManagerMissingHint(String(entry.name || "") + " " + String(parsed.title || "")),
           issuedAt: parsed.issuedAt,
         };
       }
@@ -437,6 +462,7 @@
         key: row.key,
         title: row.title,
         latestFolder: row.latestFolder,
+        missingHint: row.missingHint || "",
         issuedAt: row.issuedAt,
         expiresAt: expiresAt,
         daysLeft: daysLeft,
@@ -535,7 +561,11 @@
     options = options || {};
     var force = !!options.force;
     var withToastFallback = !!options.withToastFallback;
-    if (!managerState.alertsEnabled) return;
+    var ignoreEnabled = !!options.ignoreEnabled;
+    if (!managerState.alertsEnabled && !ignoreEnabled) {
+      if (withToastFallback) showAppToast("현재 '알림 사용'이 꺼져 있습니다.", "warning");
+      return;
+    }
     var leadDays = Number(managerState.alertLeadDays || 30);
     var docs = normalizeManagerDocs(managerState.docs).filter(function (doc) {
       return doc.daysLeft <= leadDays;
@@ -563,6 +593,9 @@
       var body = doc.daysLeft < 0
         ? (doc.title + " 성적서가 만료되었습니다. 갱신본 요청이 필요합니다.")
         : (doc.title + " 성적서가 " + doc.daysLeft + "일 후 만료됩니다. 업체 갱신본 요청이 필요합니다.");
+      if (doc.missingHint) {
+        body += " 다음 갱신본 요청 시 '" + doc.missingHint + "'도 같이 포함해서 받아주세요.";
+      }
       try {
         new Notification("유해물질 성적서 알림", { body: body, tag: "hazard-doc-" + id });
         managerState.notifiedMap[id] = todayKey;
@@ -9642,8 +9675,9 @@
       var testNotifyBtn = document.getElementById("btn-manager-test-notify");
       if (testNotifyBtn) {
         testNotifyBtn.addEventListener("click", function () {
+          showAppToast("알림 테스트를 실행합니다.", "success");
           function runTest() {
-            maybeNotifyManagerDocs({ force: true, withToastFallback: true });
+            maybeNotifyManagerDocs({ force: true, withToastFallback: true, ignoreEnabled: true });
           }
           if (!("Notification" in window) || Notification.permission === "granted") {
             runTest();
