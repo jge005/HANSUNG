@@ -929,7 +929,7 @@
       display: flex;
       align-items: center;
       gap: 8px;
-      font-size: 16px;
+      font-size: 14px;
       color: var(--text-dark);
       margin-bottom: 8px;
     }
@@ -937,7 +937,7 @@
       display: flex;
       gap: 12px;
       flex-wrap: wrap;
-      font-size: 12px;
+      font-size: 11px;
       color: #6d6387;
       margin-bottom: 10px;
     }
@@ -978,19 +978,20 @@
     .manager-summary-row {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 12px;
+      gap: 9px;
     }
     .manager-summary-label {
-      font-size: 12px;
+      font-size: 11px;
       color: #8b82a3;
       margin-bottom: 4px;
       font-weight: 700;
     }
     .manager-summary-value {
-      font-size: 24px;
+      font-size: 15px;
       line-height: 1.2;
       color: #40375f;
       font-weight: 700;
+      word-break: break-all;
     }
     .manager-summary-value.warn { color: #b7791f; }
     .manager-summary-value.ok { color: #2f855a; }
@@ -1015,9 +1016,10 @@
     .manager-table th,
     .manager-table td {
       border: 1px solid #efe5f8;
-      padding: 8px 10px;
+      padding: 6px 7px;
       vertical-align: middle;
       word-break: break-word;
+      font-size: 11px;
     }
     .manager-table th {
       background: #f8f3ff;
@@ -1026,19 +1028,19 @@
     }
     .manager-trend-table th,
     .manager-trend-table td {
-      padding: 6px 6px;
-      font-size: 11px;
+      padding: 5px 5px;
+      font-size: 10.5px;
     }
     .manager-trend-cell {
-      min-width: 170px;
+      min-width: 140px;
     }
     .manager-trend-bars {
       width: 100%;
-      min-height: 30px;
+      min-height: 22px;
     }
     .manager-trend-bars svg {
       width: 100%;
-      height: 30px;
+      height: 22px;
       overflow: hidden;
       display: block;
     }
@@ -1057,14 +1059,14 @@
     .manager-trend-line {
       fill: none;
       stroke: #4f46e5;
-      stroke-width: 1.5;
+      stroke-width: 1.1;
       stroke-linecap: round;
       stroke-linejoin: round;
     }
     .manager-trend-bar {
       fill: #d9d8fe;
       stroke: #8e87dc;
-      stroke-width: 0.6;
+      stroke-width: 0.35;
     }
     .manager-trend-bar.up {
       fill: #cddff8;
@@ -1077,7 +1079,7 @@
     .manager-trend-dot {
       fill: #4f46e5;
       stroke: #fff;
-      stroke-width: 0.8;
+      stroke-width: 0.4;
     }
     .manager-trend-month-label {
       font-size: 7px;
@@ -1092,7 +1094,7 @@
       gap: 14px;
       align-items: center;
       justify-content: center;
-      font-size: 11px;
+      font-size: 10px;
       color: #5e557b;
       margin-bottom: 4px;
       font-weight: 600;
@@ -1104,8 +1106,8 @@
     }
     .manager-main-legend-item i {
       display: inline-block;
-      width: 26px;
-      height: 9px;
+      width: 20px;
+      height: 7px;
       border-radius: 999px;
     }
     .manager-main-legend-item i.line {
@@ -1116,10 +1118,10 @@
     .manager-main-legend-item i.line::after {
       content: "";
       position: absolute;
-      width: 8px;
-      height: 8px;
+      width: 5px;
+      height: 5px;
       right: -2px;
-      top: -2.5px;
+      top: -1px;
       border-radius: 50%;
       background: #f35f79;
     }
@@ -1128,11 +1130,11 @@
     }
     .manager-main-chart-wrap {
       width: 100%;
-      height: 196px;
+      height: 160px;
       border: 1px solid #eadff7;
       border-radius: 10px;
       background: linear-gradient(180deg, #fcfaff 0%, #f8f4ff 100%);
-      padding: 6px 8px 2px;
+      padding: 4px 6px 1px;
     }
     .manager-main-chart-wrap svg {
       width: 100%;
@@ -1151,7 +1153,7 @@
     .manager-main-axis-title,
     .manager-main-axis-label {
       fill: #7a7196;
-      font-size: 10px;
+      font-size: 9px;
       font-weight: 600;
     }
     .manager-main-axis-title {
@@ -1160,7 +1162,7 @@
     }
     .manager-main-month-label {
       fill: #756c92;
-      font-size: 10px;
+      font-size: 9px;
       font-weight: 600;
     }
     .manager-main-bar {
@@ -1171,14 +1173,14 @@
     .manager-main-line {
       fill: none;
       stroke: #f35f79;
-      stroke-width: 2.6;
+      stroke-width: 1.6;
       stroke-linecap: round;
       stroke-linejoin: round;
     }
     .manager-main-dot {
       fill: #f35f79;
       stroke: #fff;
-      stroke-width: 1.2;
+      stroke-width: 0.5;
     }
     .manager-main-chart-empty {
       padding: 18px;

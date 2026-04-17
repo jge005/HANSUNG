@@ -896,7 +896,7 @@
     var innerTop = 3;
     var innerBottom = 4;
     var usableHeight = height - innerTop - innerBottom;
-    var barW = 5;
+    var barW = 3;
     var step = values.length > 1 ? Math.max(11, Math.floor((width - 12) / values.length)) : 13;
     var linePoints = [];
     var bars = [];
@@ -911,7 +911,7 @@
       var title = formatManagerDeltaTitle(labels && labels[i], v, prev);
       var barClass = v >= prev ? "manager-trend-bar up" : "manager-trend-bar down";
       bars.push(
-        '<rect x="' + x + '" y="' + y + '" width="' + barW + '" height="' + h + '" class="' + barClass + '" rx="3" ry="3">' +
+        '<rect x="' + x + '" y="' + y + '" width="' + barW + '" height="' + h + '" class="' + barClass + '" rx="1.2" ry="1.2">' +
           "<title>" + escapeHtml(title) + "</title>" +
         "</rect>"
       );
@@ -928,7 +928,7 @@
       var cy = height - innerBottom - ch;
       var ctitle = formatManagerDeltaTitle(labels && labels[j], cv, cp);
       circles.push(
-        '<circle cx="' + cx + '" cy="' + cy + '" r="1.9" class="manager-trend-dot">' +
+        '<circle cx="' + cx + '" cy="' + cy + '" r="0.95" class="manager-trend-dot">' +
           "<title>" + escapeHtml(ctitle) + "</title>" +
         "</circle>"
       );
@@ -963,7 +963,7 @@
     var plotW = Math.max(100, width - left - right);
     var plotH = Math.max(90, height - top - bottom);
     var step = monthLabels.length > 1 ? (plotW / (monthLabels.length - 1)) : 0;
-    var barW = Math.min(28, Math.max(12, Math.floor(plotW / (monthLabels.length * 1.85))));
+    var barW = Math.min(10, Math.max(5, Math.floor(plotW / (monthLabels.length * 3.2))));
 
     var gridLines = [];
     for (var g = 0; g <= 4; g++) {
@@ -986,13 +986,13 @@
       var title = formatManagerDeltaTitle(monthLabels[i], amount, prevAmount);
 
       bars.push(
-        '<rect x="' + bx + '" y="' + by + '" width="' + barW + '" height="' + barH + '" class="manager-main-bar" rx="6" ry="6">' +
+        '<rect x="' + bx + '" y="' + by + '" width="' + barW + '" height="' + barH + '" class="manager-main-bar" rx="3" ry="3">' +
           "<title>" + escapeHtml(title) + "</title>" +
         "</rect>"
       );
       points.push({ x: x, y: ly, title: title });
       dots.push(
-        '<circle cx="' + x + '" cy="' + ly + '" r="4.2" class="manager-main-dot">' +
+        '<circle cx="' + x + '" cy="' + ly + '" r="2.1" class="manager-main-dot">' +
           "<title>" + escapeHtml(title) + "</title>" +
         "</circle>"
       );
@@ -3510,7 +3510,10 @@
     if (/^(O|○|Y|YES|가능|식사)$/i.test(text)) return 1;
     if (/^(X|N|NO|미식)$/i.test(text)) return 0;
     var num = parseCalcNumber(text);
-    return num == null ? 0 : num;
+    if (num == null) return 0;
+    // 식수 카운트로 보기 어려운 큰 숫자(사번/사원번호 등)는 제외
+    if (num > 5000) return 0;
+    return num;
   }
 
   function parseMealDayValue(value, monthNumber) {
@@ -3600,6 +3603,9 @@
     if (/^\d+$/.test(value)) return false;
     if (/^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$/.test(value)) return false;
     if (/^\d{1,2}[-/.]\d{1,2}$/.test(value)) return false;
+    if (/^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\s*(오전|오후)\s*\d{1,2}:\d{1,2}(?::\d{1,2})?$/i.test(value)) return false;
+    if (/^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\s*\d{1,2}:\d{1,2}(?::\d{1,2})?$/i.test(value)) return false;
+    if (/^\d{1,2}:\d{1,2}(?::\d{1,2})?$/.test(value)) return false;
     var token = normalizeMealHeaderToken(value);
     if (
       token.indexOf("일자") >= 0 ||
@@ -3674,14 +3680,17 @@
       var dinner = 0;
 
       if (mealType) {
-        var oneCount = numericCells.length ? parseMealCountValue(numericCells[0].value) : 1;
+        var numericCandidates = numericCells
+          .map(function (n) { return parseMealCountValue(n.value); })
+          .filter(function (n) { return n > 0 && n <= 200; });
+        var oneCount = numericCandidates.length ? numericCandidates[0] : 1;
         if (mealType === "breakfast") breakfast = oneCount;
         else if (mealType === "lunch") lunch = oneCount;
         else if (mealType === "dinner") dinner = oneCount;
       } else {
         var smallNums = numericCells
           .map(function (n) { return parseMealCountValue(n.value); })
-          .filter(function (n) { return n > 0; });
+          .filter(function (n) { return n > 0 && n <= 200; });
         if (smallNums.length >= 3) {
           breakfast = smallNums[0] || 0;
           lunch = smallNums[1] || 0;
@@ -3744,7 +3753,7 @@
           var info = dayCols[i];
           var raw = row[info.col];
           var cnt = parseMealCountValue(raw);
-          if (!(cnt > 0)) continue;
+          if (!(cnt > 0 && cnt <= 200)) continue;
           rows.push({
             day: info.day,
             dateText: monthNumber ? (monthNumber + "월 " + info.day + "일") : String(info.day) + "일",
