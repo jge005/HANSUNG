@@ -2210,9 +2210,9 @@
     base.files.summary = String(files.summary || "");
     base.files.daily = String(files.daily || "");
     base.files.count = String(files.count || "");
-    base.sources.summary = normalizeClosingMealRows(sources.summary, 450);
-    base.sources.daily = normalizeClosingMealRows(sources.daily, 450);
-    base.sources.count = normalizeClosingMealRows(sources.count, 450);
+    base.sources.summary = normalizeClosingMealRows(sources.summary, 5000);
+    base.sources.daily = normalizeClosingMealRows(sources.daily, 5000);
+    base.sources.count = normalizeClosingMealRows(sources.count, 5000);
     base.rows = normalizeClosingMealRows(next.rows, 1200);
     base.issues = normalizeClosingMealIssues(next.issues).slice(0, 600);
     base.updatedAt = String(next.updatedAt || "");
@@ -11124,7 +11124,16 @@
     var totalBreakfast = 0;
     var totalLunch = 0;
     var totalDinner = 0;
-    (mealData.rows || []).forEach(function (row) {
+    var sourceDailyRows = normalizeClosingMealRows(mealData.sources && mealData.sources.daily);
+    var summaryTargetRows = sourceDailyRows.filter(function (row) {
+      return Number(row.day || 0) > 0 && row.name && row.name !== "__DAY_TOTAL__";
+    });
+    if (!summaryTargetRows.length) {
+      summaryTargetRows = (mealData.rows || []).filter(function (row) {
+        return Number(row.day || 0) > 0 && row.name && row.name !== "__DAY_TOTAL__";
+      });
+    }
+    summaryTargetRows.forEach(function (row) {
       totalBreakfast += parseMealCountValue(row.breakfast);
       totalLunch += parseMealCountValue(row.lunch);
       totalDinner += parseMealCountValue(row.dinner);
@@ -11140,19 +11149,6 @@
         '</tr>'
       );
     }).join("");
-    var dataRows = (mealData.rows || []).slice(0, 180).map(function (row) {
-      var displayName = row.name === "__DAY_TOTAL__" ? "일자합계" : row.name;
-      return (
-        '<tr>' +
-          '<td class="center">' + escapeHtml(String(row.day || "")) + '</td>' +
-          '<td>' + escapeHtml(displayName || "") + '</td>' +
-          '<td class="right">' + escapeHtml(formatDisplayNumber(row.breakfast || 0)) + '</td>' +
-          '<td class="right">' + escapeHtml(formatDisplayNumber(row.lunch || 0)) + '</td>' +
-          '<td class="right">' + escapeHtml(formatDisplayNumber(row.dinner || 0)) + '</td>' +
-        '</tr>'
-      );
-    }).join("");
-
     return (
       '<div class="closing-page">' +
         '<div class="closing-card closing-sheet-card">' +
@@ -11184,7 +11180,7 @@
             '<div class="closing-rule-item"><strong>검증 3:</strong> 월 식수 × 단가(6,500원) 정산 확인</div>' +
           '</div>' +
           '<div class="closing-matrix-summarybar" style="margin-top:10px">' +
-            '<div class="closing-matrix-badge">행수 <strong>' + escapeHtml(String((mealData.rows || []).length)) + '</strong></div>' +
+            '<div class="closing-matrix-badge">행수 <strong>' + escapeHtml(String(summaryTargetRows.length)) + '</strong></div>' +
             '<div class="closing-matrix-badge">조식 <strong>' + escapeHtml(formatDisplayNumber(totalBreakfast)) + '</strong></div>' +
             '<div class="closing-matrix-badge">중식 <strong>' + escapeHtml(formatDisplayNumber(totalLunch)) + '</strong></div>' +
             '<div class="closing-matrix-badge">석식 <strong>' + escapeHtml(formatDisplayNumber(totalDinner)) + '</strong></div>' +
@@ -11201,18 +11197,6 @@
               '</tbody>' +
             '</table>' +
           '</div>' +
-        '</div>' +
-        '<div class="closing-card closing-card-wide">' +
-          '<div class="closing-title">' + icon("sheet") + ' 식대 데이터 미리보기</div>' +
-          '<div class="closing-table-simple-wrap">' +
-            '<table class="closing-table-simple">' +
-              '<thead><tr><th class="center" style="width:70px">일자</th><th style="width:180px">이름</th><th class="right">조식</th><th class="right">중식</th><th class="right">석식</th></tr></thead>' +
-              '<tbody>' +
-                (dataRows || '<tr><td colspan="5" class="center muted">업로드된 데이터가 없습니다.</td></tr>') +
-              '</tbody>' +
-            '</table>' +
-          '</div>' +
-          ((mealData.rows || []).length > 180 ? '<div class="closing-copy">미리보기는 180행까지만 표시됩니다.</div>' : '') +
         '</div>' +
       '</div>'
     );
