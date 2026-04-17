@@ -134,7 +134,7 @@
   };
   var orderState = {
     rows: [],
-    colWidths: orderSheetColumns.map(function (col) { return Number(col.width || 100); }),
+    colWidths: [],
     rowHeights: [],
   };
   var manageState = {
