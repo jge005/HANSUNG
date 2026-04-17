@@ -703,6 +703,26 @@
     return num == null ? 0 : num;
   }
 
+  var MANAGER_VINA_USD_TO_KRW_RATE = 1397;
+
+  function normalizeManagerCompanyToken(name) {
+    return String(name || "").replace(/\s+/g, "").toUpperCase();
+  }
+
+  function isManagerDaeyoungVinaCompany(name) {
+    var token = normalizeManagerCompanyToken(name);
+    return token.indexOf("대영VINA") >= 0 || token.indexOf("DAEYOUNGVINA") >= 0;
+  }
+
+  function convertManagerAmountByCompany(kind, company, amount) {
+    var num = parseMoneyCellToNumber(amount);
+    if (!num) return 0;
+    if (kind === "sales" && isManagerDaeyoungVinaCompany(company)) {
+      return num * MANAGER_VINA_USD_TO_KRW_RATE;
+    }
+    return num;
+  }
+
   function buildManagerMonthlyCompanyAmountMap(kind) {
     var byMonth = kind === "purchase"
       ? (closingState.purchaseCloseRowsByMonth || {})
@@ -717,9 +737,10 @@
       rows.forEach(function (row) {
         var company = String((row && row.company) || "").trim();
         if (!company) return;
-        var amount = kind === "purchase"
+        var rawAmount = kind === "purchase"
           ? parseMoneyCellToNumber(row && row.supplyAmount)
           : parseMoneyCellToNumber(row && row.amount);
+        var amount = convertManagerAmountByCompany(kind, company, rawAmount);
         if (!amount) return;
         companyMap[company] = (companyMap[company] || 0) + amount;
       });
