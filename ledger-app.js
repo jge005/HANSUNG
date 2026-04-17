@@ -4385,6 +4385,25 @@
     return false;
   }
 
+  function findClosingLookupByNameAndDay(lookup, nameToken, day) {
+    if (!lookup || !nameToken || !day) return null;
+    var exact = lookup[nameToken] && lookup[nameToken][day];
+    if (exact) return exact;
+    var keys = Object.keys(lookup);
+    for (var i = 0; i < keys.length; i++) {
+      var key = keys[i];
+      if (!key) continue;
+      if (
+        (nameToken.length >= 2 && key.indexOf(nameToken) >= 0) ||
+        (key.length >= 2 && nameToken.indexOf(key) >= 0)
+      ) {
+        var found = lookup[key] && lookup[key][day];
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
   function analyzeClosingMealData(monthLabel, mealData) {
     var data = normalizeClosingMealMonthData(mealData);
     var dailyRowsRaw = normalizeClosingMealRows(data.sources && data.sources.daily);
@@ -4669,15 +4688,6 @@
       });
     }
     if (monthCountFileCount > 0) {
-      var unitPrice = 6500;
-      var calculatedAmount = monthCountFileCount * unitPrice;
-      issues.push({
-        level: "info",
-        type: "count_price_check",
-        day: 0,
-        name: "식수정산",
-        message: "월 식수 " + monthCountFileCount + "식 × 단가 " + formatDisplayNumber(unitPrice) + "원 = " + formatDisplayNumber(calculatedAmount) + "원",
-      });
       if (monthDailyLunchDinnerCount !== monthCountWithoutManual) {
         issues.push({
           level: "warning",
@@ -4696,8 +4706,8 @@
       var baseKey = row.day + "|" + normalizeClosingSearchText(row.name);
       var nameToken = normalizeClosingSearchText(row.name);
       var isEmployeeName = hasClosingEmployeeNameMatch(nameToken, employeeNameSet);
-      var att = attendanceLookup[nameToken] && attendanceLookup[nameToken][row.day];
-      var empMarker = employeeMarkerLookup[nameToken] && employeeMarkerLookup[nameToken][row.day];
+      var att = findClosingLookupByNameAndDay(attendanceLookup, nameToken, row.day);
+      var empMarker = findClosingLookupByNameAndDay(employeeMarkerLookup, nameToken, row.day);
       if (!att && empMarker) {
         var isAbsent = parseMealCountValue(empMarker.absent) > 0;
         att = {
@@ -11279,6 +11289,7 @@
     var totalBreakfast = 0;
     var totalLunch = 0;
     var totalDinner = 0;
+    var totalManual = 0;
     var sourceDailyRows = normalizeClosingMealRows(mealData.sources && mealData.sources.daily);
     var summaryTargetRows = sourceDailyRows.filter(function (row) {
       return Number(row.day || 0) > 0 && row.name && row.name !== "__DAY_TOTAL__";
@@ -11292,6 +11303,11 @@
       totalBreakfast += parseMealCountValue(row.breakfast);
       totalLunch += parseMealCountValue(row.lunch);
       totalDinner += parseMealCountValue(row.dinner);
+    });
+    normalizeClosingMealRows(mealData.sources && mealData.sources.count).forEach(function (row) {
+      if (Number(row.day || 0) > 0 && row.name === "__DAY_TOTAL__") {
+        totalManual += parseMealCountValue(row.manual);
+      }
     });
     var dismissedSet = {};
     (mealData.dismissedIssueKeys || []).forEach(function (key) {
@@ -11348,6 +11364,7 @@
             '<div class="closing-matrix-badge">조식 <strong>' + escapeHtml(formatDisplayNumber(totalBreakfast)) + '</strong></div>' +
             '<div class="closing-matrix-badge">중식 <strong>' + escapeHtml(formatDisplayNumber(totalLunch)) + '</strong></div>' +
             '<div class="closing-matrix-badge">석식 <strong>' + escapeHtml(formatDisplayNumber(totalDinner)) + '</strong></div>' +
+            '<div class="closing-matrix-badge">수기 <strong>' + escapeHtml(formatDisplayNumber(totalManual)) + '</strong></div>' +
             '<div class="closing-matrix-badge strong">이상치 <strong>' + escapeHtml(String(visibleIssues.length)) + '</strong></div>' +
           '</div>' +
         '</div>' +
