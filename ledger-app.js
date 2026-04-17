@@ -867,44 +867,79 @@
     return String(monthLabel || "") + " 금액 " + formatDisplayNumber(value || 0) + " / 전달대비 " + sign + formatDisplayNumber(delta) + " (" + rateText + ")";
   }
 
+  function buildManagerSmoothPath(points) {
+    if (!Array.isArray(points) || !points.length) return "";
+    if (points.length === 1) return "M " + points[0].x + " " + points[0].y;
+    var d = "M " + points[0].x + " " + points[0].y;
+    for (var i = 1; i < points.length; i++) {
+      var p0 = points[i - 1];
+      var p1 = points[i];
+      var midX = (p0.x + p1.x) / 2;
+      d += " Q " + midX + " " + p0.y + ", " + p1.x + " " + p1.y;
+    }
+    return d;
+  }
+
   function renderManagerTrendBars(series, labels) {
     var values = Array.isArray(series) ? series : [];
     if (!values.length) return '<div class="manager-trend-bars"></div>';
     var max = values.reduce(function (m, v) { return v > m ? v : m; }, 0);
     if (max <= 0) max = 1;
-    var width = Math.max(100, values.length * 18 + 16);
-    var height = 64;
-    var innerTop = 6;
-    var innerBottom = 8;
+    var width = Math.max(140, values.length * 22 + 28);
+    var height = 86;
+    var innerTop = 10;
+    var innerBottom = 20;
     var usableHeight = height - innerTop - innerBottom;
-    var barW = 9;
-    var step = values.length > 1 ? Math.max(14, Math.floor((width - 16) / values.length)) : 18;
+    var barW = 10;
+    var step = values.length > 1 ? Math.max(18, Math.floor((width - 20) / values.length)) : 24;
     var points = [];
+    var linePoints = [];
     var bars = [];
+    var monthLabels = [];
+    var guides = [
+      innerTop + Math.round(usableHeight * 0.25),
+      innerTop + Math.round(usableHeight * 0.5),
+      innerTop + Math.round(usableHeight * 0.75),
+    ];
     for (var i = 0; i < values.length; i++) {
       var v = values[i] || 0;
       var prev = i > 0 ? (values[i - 1] || 0) : 0;
-      var x = 8 + i * step;
+      var x = 10 + i * step;
       var h = Math.max(2, Math.round((v / max) * usableHeight));
       var y = height - innerBottom - h;
-      points.push((x + Math.floor(barW / 2)) + "," + y);
+      var cx = x + Math.floor(barW / 2);
+      points.push(cx + "," + y);
+      linePoints.push({ x: cx, y: y });
       var title = formatManagerDeltaTitle(labels && labels[i], v, prev);
+      var barClass = v >= prev ? "manager-trend-bar up" : "manager-trend-bar down";
       bars.push(
-        '<rect x="' + x + '" y="' + y + '" width="' + barW + '" height="' + h + '" class="manager-trend-bar">' +
+        '<rect x="' + x + '" y="' + y + '" width="' + barW + '" height="' + h + '" class="' + barClass + '" rx="3" ry="3">' +
           "<title>" + escapeHtml(title) + "</title>" +
         "</rect>"
       );
+      if (labels && labels[i] && (i === values.length - 1 || i === 0 || i % 2 === 0)) {
+        monthLabels.push(
+          '<text x="' + cx + '" y="' + (height - 5) + '" text-anchor="middle" class="manager-trend-month-label">' + escapeHtml(labels[i]) + "</text>"
+        );
+      }
+    }
+    var smoothPath = buildManagerSmoothPath(linePoints);
+    var areaPath = "";
+    if (linePoints.length) {
+      var last = linePoints[linePoints.length - 1];
+      var first = linePoints[0];
+      areaPath = smoothPath + " L " + last.x + " " + (height - innerBottom) + " L " + first.x + " " + (height - innerBottom) + " Z";
     }
     var circles = [];
     for (var j = 0; j < values.length; j++) {
       var cv = values[j] || 0;
       var cp = j > 0 ? (values[j - 1] || 0) : 0;
-      var cx = 8 + j * step + Math.floor(barW / 2);
+      var cx = 10 + j * step + Math.floor(barW / 2);
       var ch = Math.max(2, Math.round((cv / max) * usableHeight));
       var cy = height - innerBottom - ch;
       var ctitle = formatManagerDeltaTitle(labels && labels[j], cv, cp);
       circles.push(
-        '<circle cx="' + cx + '" cy="' + cy + '" r="2.3" class="manager-trend-dot">' +
+        '<circle cx="' + cx + '" cy="' + cy + '" r="2.8" class="manager-trend-dot">' +
           "<title>" + escapeHtml(ctitle) + "</title>" +
         "</circle>"
       );
@@ -912,9 +947,15 @@
     return (
       '<div class="manager-trend-bars">' +
       '<svg viewBox="0 0 ' + width + " " + height + '" preserveAspectRatio="none" aria-hidden="true">' +
-      '<polyline class="manager-trend-line" points="' + points.join(" ") + '" />' +
+      '<rect x="2" y="2" width="' + (width - 4) + '" height="' + (height - 4) + '" class="manager-trend-bg" rx="8" ry="8" />' +
+      guides.map(function (gy) {
+        return '<line x1="8" y1="' + gy + '" x2="' + (width - 8) + '" y2="' + gy + '" class="manager-trend-guide" />';
+      }).join("") +
+      (areaPath ? '<path class="manager-trend-area" d="' + areaPath + '" />' : "") +
+      (smoothPath ? '<path class="manager-trend-line" d="' + smoothPath + '" />' : ('<polyline class="manager-trend-line" points="' + points.join(" ") + '" />')) +
       bars.join("") +
       circles.join("") +
+      monthLabels.join("") +
       "</svg>" +
       "</div>"
     );
@@ -3408,32 +3449,36 @@
   function parseMealDayValue(value, monthNumber) {
     var text = String(value == null ? "" : value).trim();
     if (!text) return null;
+    var compact = text.replace(/\s+/g, "");
+    var sanitized = compact
+      .replace(/\([^)]*\)/g, "")
+      .replace(/（[^）]*）/g, "");
     var month = Number(monthNumber || 0);
     var m;
-    m = text.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+    m = sanitized.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:\D.*)?$/);
     if (m) {
       var matchedMonth = Number(m[2]);
       var matchedDay = Number(m[3]);
       if ((!month || matchedMonth === month) && matchedDay >= 1 && matchedDay <= 31) return matchedDay;
     }
-    m = text.match(/^(\d{1,2})[-/.](\d{1,2})$/);
+    m = sanitized.match(/^(\d{1,2})[-/.](\d{1,2})(?:\D.*)?$/);
     if (m) {
       var slashMonth = Number(m[1]);
       var slashDay = Number(m[2]);
       if ((!month || slashMonth === month) && slashDay >= 1 && slashDay <= 31) return slashDay;
     }
-    m = text.match(/^(\d{1,2})\s*월\s*(\d{1,2})\s*일?$/);
+    m = sanitized.match(/^(\d{1,2})월(\d{1,2})일?(?:\D.*)?$/);
     if (m) {
       var koreanMonth = Number(m[1]);
       var koreanDay = Number(m[2]);
       if ((!month || koreanMonth === month) && koreanDay >= 1 && koreanDay <= 31) return koreanDay;
     }
-    m = text.match(/^(\d{1,2})일$/);
+    m = sanitized.match(/^(\d{1,2})일(?:\D.*)?$/);
     if (m) {
       var onlyDay = Number(m[1]);
       if (onlyDay >= 1 && onlyDay <= 31) return onlyDay;
     }
-    var numeric = Number(text);
+    var numeric = Number(sanitized);
     if (isFinite(numeric) && numeric > 20000 && numeric < 80000 && window.XLSX && window.XLSX.SSF && window.XLSX.SSF.parse_date_code) {
       var parsedDate = window.XLSX.SSF.parse_date_code(Math.floor(numeric));
       if (parsedDate && parsedDate.m && parsedDate.d) {
@@ -3532,7 +3577,7 @@
       } else {
         var smallNums = numericCells
           .map(function (n) { return parseMealCountValue(n.value); })
-          .filter(function (n) { return n > 0 && n <= 10; });
+          .filter(function (n) { return n > 0; });
         if (smallNums.length >= 3) {
           breakfast = smallNums[0] || 0;
           lunch = smallNums[1] || 0;
@@ -3595,7 +3640,7 @@
           var info = dayCols[i];
           var raw = row[info.col];
           var cnt = parseMealCountValue(raw);
-          if (!(cnt > 0 && cnt <= 20)) continue;
+          if (!(cnt > 0)) continue;
           rows.push({
             day: info.day,
             dateText: monthNumber ? (monthNumber + "월 " + info.day + "일") : String(info.day) + "일",
@@ -3729,6 +3774,13 @@
       }
     }
     if (!best || !best.rows.length) {
+      if (sourceLabel === "summary" || sourceLabel === "daily") {
+        return {
+          sheetName: names[0] || "",
+          rows: [],
+          summaryOnly: true,
+        };
+      }
       throw new Error("식대 파일에서 날짜/이름/식수 데이터를 찾지 못했습니다.");
     }
     return best;
