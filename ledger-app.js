@@ -945,6 +945,104 @@
     );
   }
 
+  function renderManagerMainComboChart(labels, values) {
+    var monthLabels = Array.isArray(labels) ? labels.slice() : [];
+    var amountSeries = Array.isArray(values) ? values.slice() : [];
+    if (!monthLabels.length || !amountSeries.length) {
+      return '<div class="manager-main-chart-empty">차트 데이터가 없습니다.</div>';
+    }
+
+    var rates = amountSeries.map(function (value, idx) {
+      if (idx === 0) return 0;
+      var prev = amountSeries[idx - 1] || 0;
+      if (prev <= 0) return 0;
+      return ((value - prev) / prev) * 100;
+    });
+
+    var amountMax = amountSeries.reduce(function (m, v) { return v > m ? v : m; }, 0);
+    if (amountMax <= 0) amountMax = 1;
+    var rateMin = rates.reduce(function (m, v) { return v < m ? v : m; }, rates[0] || 0);
+    var rateMax = rates.reduce(function (m, v) { return v > m ? v : m; }, rates[0] || 0);
+    if (rateMin === rateMax) {
+      rateMin -= 1;
+      rateMax += 1;
+    }
+
+    var width = Math.max(560, monthLabels.length * 82 + 90);
+    var height = 228;
+    var left = 22;
+    var right = 46;
+    var top = 20;
+    var bottom = 36;
+    var plotW = Math.max(100, width - left - right);
+    var plotH = Math.max(90, height - top - bottom);
+    var step = monthLabels.length > 1 ? (plotW / (monthLabels.length - 1)) : 0;
+    var barW = Math.min(28, Math.max(12, Math.floor(plotW / (monthLabels.length * 1.85))));
+
+    var gridLines = [];
+    var axisLabels = [];
+    for (var g = 0; g <= 4; g++) {
+      var gy = top + (plotH * g / 4);
+      var gv = rateMax - ((rateMax - rateMin) * g / 4);
+      gridLines.push('<line x1="' + left + '" y1="' + gy + '" x2="' + (left + plotW) + '" y2="' + gy + '" class="manager-main-grid" />');
+      axisLabels.push('<text x="' + (left + plotW + 8) + '" y="' + (gy + 3.5) + '" class="manager-main-axis-label">' + escapeHtml((Math.round(gv * 10) / 10).toLocaleString("ko-KR")) + '</text>');
+    }
+
+    var bars = [];
+    var points = [];
+    var dots = [];
+    var xLabels = [];
+    for (var i = 0; i < amountSeries.length; i++) {
+      var amount = amountSeries[i] || 0;
+      var prevAmount = i > 0 ? (amountSeries[i - 1] || 0) : 0;
+      var rate = rates[i] || 0;
+      var x = monthLabels.length > 1 ? (left + i * step) : (left + plotW / 2);
+      var barH = Math.max(2, Math.round((amount / amountMax) * plotH));
+      var by = top + plotH - barH;
+      var bx = Math.round(x - barW / 2);
+      var ly = top + ((rateMax - rate) / (rateMax - rateMin)) * plotH;
+      var title = formatManagerDeltaTitle(monthLabels[i], amount, prevAmount);
+
+      bars.push(
+        '<rect x="' + bx + '" y="' + by + '" width="' + barW + '" height="' + barH + '" class="manager-main-bar" rx="6" ry="6">' +
+          "<title>" + escapeHtml(title) + "</title>" +
+        "</rect>"
+      );
+      points.push({ x: x, y: ly, title: title });
+      dots.push(
+        '<circle cx="' + x + '" cy="' + ly + '" r="4.2" class="manager-main-dot">' +
+          "<title>" + escapeHtml(title) + "</title>" +
+        "</circle>"
+      );
+
+      var labelText = monthLabels[i];
+      xLabels.push('<text x="' + x + '" y="' + (top + plotH + 20) + '" text-anchor="middle" class="manager-main-month-label">' + escapeHtml(labelText) + '</text>');
+    }
+
+    var linePath = buildManagerSmoothPath(points.map(function (p) { return { x: p.x, y: p.y }; }));
+
+    return (
+      '<div class="manager-main-chart">' +
+        '<div class="manager-main-legend">' +
+          '<span class="manager-main-legend-item"><i class="line"></i>증감률(%)</span>' +
+          '<span class="manager-main-legend-item"><i class="bar"></i>월 합계</span>' +
+        '</div>' +
+        '<div class="manager-main-chart-wrap">' +
+          '<svg viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none" aria-hidden="true">' +
+            gridLines.join("") +
+            '<line x1="' + left + '" y1="' + (top + plotH) + '" x2="' + (left + plotW) + '" y2="' + (top + plotH) + '" class="manager-main-axis" />' +
+            bars.join("") +
+            (linePath ? '<path class="manager-main-line" d="' + linePath + '" />' : "") +
+            dots.join("") +
+            xLabels.join("") +
+            axisLabels.join("") +
+            '<text x="' + (left + plotW + 8) + '" y="' + (top - 6) + '" class="manager-main-axis-title">증감률</text>' +
+          '</svg>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
   function renderManagerTrendPanel(kind, baseMonthLabel) {
     var trend = buildManagerCompanyTrendRows(kind, baseMonthLabel);
     var labels = trend.labels || [];
@@ -979,6 +1077,8 @@
     var kindLabel = kind === "purchase" ? "매입" : "매출";
     var totalRateText = totalRate == null ? "-" : (Math.round(totalRate * 100) / 100).toLocaleString("ko-KR") + "%";
     var totalDeltaClass = totalDelta > 0 ? "warn" : (totalDelta < 0 ? "ok" : "");
+    var monthTotalSeries = labels.map(function (label) { return parseMoneyCellToNumber(monthTotals[label]); });
+    var comboChartHtml = renderManagerMainComboChart(labels, monthTotalSeries);
 
     return (
       '<div class="manager-summary-row">' +
@@ -987,6 +1087,7 @@
       '<div class="manager-summary-card"><div class="manager-summary-label">전월 합계</div><div class="manager-summary-value">' + escapeHtml(formatDisplayNumber(prevTotal)) + "</div></div>" +
       '<div class="manager-summary-card"><div class="manager-summary-label">증감(%)</div><div class="manager-summary-value ' + totalDeltaClass + '">' + escapeHtml(formatDisplayNumber(totalDelta)) + " / " + escapeHtml(totalRateText) + "</div></div>" +
       "</div>" +
+      '<div class="manager-table-card">' + comboChartHtml + "</div>" +
       '<div class="manager-table-card">' +
       '<div class="manager-table-wrap">' +
       '<table class="manager-table manager-trend-table">' +
