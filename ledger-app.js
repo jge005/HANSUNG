@@ -14,6 +14,7 @@
   var roleCards = [
     { key: "accounting", title: "경리", icon: "scroll" },
     { key: "manager", title: "관리/분석", icon: "sheet" },
+    { key: "ai", title: "AI", icon: "settings" },
     { key: "orders", title: "발주", icon: "folder" },
     { key: "work", title: "SCM", icon: "settings" },
   ];
@@ -55,6 +56,7 @@
     { key: "expired", label: "만료됨", icon: "folder" },
     { key: "recent", label: "최근스캔", icon: "clipboard" },
     { key: "certsheet", label: "증명서시트", icon: "sheet" },
+    { key: "aihub", label: "AI지식", icon: "settings" },
   ];
   var managerCloseTabs = [
     { key: "sales-analytics", label: "매출분석", icon: "scroll" },
@@ -87,6 +89,7 @@
     closingSubTab: "attendance",
     managerMainTab: "docs",
     managerSubTab: "overview",
+    aiEdgeOpen: false,
   };
 
   var DRAFT_ID_KEY = "ledgerDraftId";
@@ -167,6 +170,11 @@
     alertsEnabled: true,
     alertLeadDays: 30,
     notifiedMap: {},
+    aiKnowledgeDocs: [],
+    aiEndpoint: "",
+    aiLastQuestion: "",
+    aiLastAnswer: "",
+    aiLastContexts: [],
   };
   var closingState = {
     attendanceMonth: "",
@@ -434,6 +442,270 @@
         note: note,
       };
     });
+  }
+
+  function normalizeManagerAiKnowledgeDocs(rows) {
+    var MAX_TEXT = 12000;
+    return (Array.isArray(rows) ? rows : []).map(function (row) {
+      var src = row && typeof row === "object" ? row : {};
+      var id = String(src.id || ("doc_" + Math.random().toString(36).slice(2, 10)));
+      var name = String(src.name || "").trim();
+      var sourceType = String(src.sourceType || "").trim().toLowerCase();
+      if (!sourceType) sourceType = "unknown";
+      var text = String(src.text || "");
+      if (text.length > MAX_TEXT) text = text.slice(0, MAX_TEXT);
+      return {
+        id: id,
+        name: name,
+        sourceType: sourceType,
+        text: text,
+        excerpt: String(src.excerpt || "").slice(0, 600),
+        unresolved: Array.isArray(src.unresolved) ? src.unresolved.slice(0, 10).map(function (v) { return String(v || ""); }) : [],
+        createdAt: String(src.createdAt || src.updatedAt || new Date().toISOString()),
+        updatedAt: String(src.updatedAt || src.createdAt || new Date().toISOString()),
+        size: Number(src.size || text.length || 0),
+      };
+    }).filter(function (row) {
+      return !!row.name;
+    });
+  }
+
+  function normalizeManagerAiContexts(rows) {
+    return (Array.isArray(rows) ? rows : []).map(function (row) {
+      var src = row && typeof row === "object" ? row : {};
+      return {
+        id: String(src.id || ""),
+        name: String(src.name || ""),
+        score: Number(src.score || 0),
+        snippet: String(src.snippet || "").slice(0, 800),
+      };
+    }).filter(function (row) { return !!row.name; });
+  }
+
+  function detectManagerKnowledgeSourceType(fileName) {
+    var name = String(fileName || "").toLowerCase();
+    if (/\.xlsx?$/.test(name)) return "excel";
+    if (/\.csv$/.test(name)) return "csv";
+    if (/\.pdf$/.test(name)) return "pdf";
+    if (/\.(png|jpg|jpeg|bmp|gif|webp|tiff?)$/.test(name)) return "image";
+    if (/\.(txt|md|json|log|rtf)$/.test(name)) return "text";
+    return "unknown";
+  }
+
+  function buildManagerKnowledgeExcerpt(text, queryTokens) {
+    var source = String(text || "");
+    if (!source) return "";
+    var tokens = Array.isArray(queryTokens) ? queryTokens.filter(Boolean) : [];
+    var lower = source.toLowerCase();
+    var start = 0;
+    for (var i = 0; i < tokens.length; i++) {
+      var idx = lower.indexOf(String(tokens[i] || "").toLowerCase());
+      if (idx >= 0) {
+        start = Math.max(0, idx - 60);
+        break;
+      }
+    }
+    var excerpt = source.slice(start, start + 240).replace(/\s+/g, " ").trim();
+    return excerpt;
+  }
+
+  function tokenizeManagerQuery(text) {
+    return String(text || "")
+      .toLowerCase()
+      .split(/[^a-z0-9가-힣]+/g)
+      .map(function (v) { return String(v || "").trim(); })
+      .filter(function (v) { return v.length >= 2; });
+  }
+
+  function scoreManagerKnowledgeDoc(doc, tokens) {
+    var hay = (String(doc.name || "") + " " + String(doc.text || "")).toLowerCase();
+    var score = 0;
+    tokens.forEach(function (token) {
+      if (!token) return;
+      var from = 0;
+      while (true) {
+        var idx = hay.indexOf(token, from);
+        if (idx < 0) break;
+        score += 1;
+        from = idx + token.length;
+        if (score > 400) break;
+      }
+      if (score > 400) return;
+    });
+    return score;
+  }
+
+  function searchManagerKnowledge(question, limit) {
+    var docs = normalizeManagerAiKnowledgeDocs(managerState.aiKnowledgeDocs);
+    var tokens = tokenizeManagerQuery(question);
+    if (!tokens.length) return [];
+    var ranked = docs.map(function (doc) {
+      return { doc: doc, score: scoreManagerKnowledgeDoc(doc, tokens) };
+    }).filter(function (entry) { return entry.score > 0; });
+    ranked.sort(function (a, b) {
+      if (b.score !== a.score) return b.score - a.score;
+      return String(b.doc.updatedAt || "").localeCompare(String(a.doc.updatedAt || ""));
+    });
+    return ranked.slice(0, Math.max(1, Number(limit || 6))).map(function (entry) {
+      return {
+        id: entry.doc.id,
+        name: entry.doc.name,
+        score: entry.score,
+        snippet: buildManagerKnowledgeExcerpt(entry.doc.text, tokens),
+        sourceType: entry.doc.sourceType,
+      };
+    });
+  }
+
+  function summarizeManagerKnowledgeForPrompt(hits) {
+    return (Array.isArray(hits) ? hits : []).map(function (hit, idx) {
+      var block =
+        "[" + (idx + 1) + "] " + String(hit.name || "문서") + "\n" +
+        "source: " + String(hit.sourceType || "-") + "\n" +
+        "snippet: " + String(hit.snippet || "-");
+      return block;
+    }).join("\n\n");
+  }
+
+  function readManagerKnowledgeFile(file) {
+    if (!file) return Promise.resolve({ text: "", unresolved: ["empty_file"] });
+    var sourceType = detectManagerKnowledgeSourceType(file.name || "");
+    if (sourceType === "excel" && window.XLSX && typeof file.arrayBuffer === "function") {
+      return file.arrayBuffer().then(function (buffer) {
+        try {
+          var wb = window.XLSX.read(buffer, { type: "array" });
+          var lines = [];
+          (wb.SheetNames || []).forEach(function (sheetName) {
+            var ws = wb.Sheets[sheetName];
+            if (!ws) return;
+            var rows = window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+            lines.push("# " + sheetName);
+            rows.forEach(function (row) {
+              if (!Array.isArray(row)) return;
+              var line = row.map(function (v) { return String(v == null ? "" : v).trim(); }).join("\t").trim();
+              if (line) lines.push(line);
+            });
+          });
+          return { text: String(lines.join("\n")).slice(0, 12000), unresolved: [] };
+        } catch (err) {
+          return { text: "", unresolved: ["excel_parse_failed"] };
+        }
+      });
+    }
+    if (sourceType === "image") {
+      if (window.Tesseract && typeof window.Tesseract.recognize === "function") {
+        return window.Tesseract
+          .recognize(file, "kor+eng")
+          .then(function (result) {
+            var text = result && result.data && result.data.text ? String(result.data.text) : "";
+            return { text: text.slice(0, 12000), unresolved: text ? [] : ["ocr_empty"] };
+          })
+          .catch(function () {
+            return { text: "", unresolved: ["ocr_failed"] };
+          });
+      }
+      return Promise.resolve({ text: "", unresolved: ["ocr_unavailable"] });
+    }
+    if (typeof file.text === "function") {
+      return file.text().then(function (text) {
+        return { text: String(text || "").slice(0, 12000), unresolved: [] };
+      });
+    }
+    return Promise.resolve({ text: "", unresolved: ["text_reader_unavailable"] });
+  }
+
+  async function addManagerKnowledgeFiles(fileList) {
+    var files = Array.isArray(fileList) ? fileList : Array.from(fileList || []);
+    if (!files.length) return { added: 0, unresolved: 0 };
+    var docs = normalizeManagerAiKnowledgeDocs(managerState.aiKnowledgeDocs);
+    var added = 0;
+    var unresolvedCount = 0;
+    for (var i = 0; i < files.length; i++) {
+      var file = files[i];
+      var sourceType = detectManagerKnowledgeSourceType(file && file.name);
+      var parsed = await readManagerKnowledgeFile(file);
+      var text = String((parsed && parsed.text) || "").trim();
+      var unresolved = parsed && Array.isArray(parsed.unresolved) ? parsed.unresolved.slice() : [];
+      if (unresolved.length) unresolvedCount += 1;
+      var doc = {
+        id: "know_" + Date.now().toString(36) + "_" + String(i),
+        name: String((file && file.name) || ("문서_" + (i + 1))),
+        sourceType: sourceType,
+        text: text,
+        excerpt: buildManagerKnowledgeExcerpt(text, []),
+        unresolved: unresolved,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        size: Number((file && file.size) || text.length || 0),
+      };
+      var replaced = false;
+      for (var j = 0; j < docs.length; j++) {
+        if (docs[j].name === doc.name) {
+          docs[j] = Object.assign({}, docs[j], doc, { id: docs[j].id || doc.id, createdAt: docs[j].createdAt || doc.createdAt });
+          replaced = true;
+          break;
+        }
+      }
+      if (!replaced) {
+        docs.push(doc);
+        added += 1;
+      }
+    }
+    if (docs.length > 120) docs = docs.slice(docs.length - 120);
+    managerState.aiKnowledgeDocs = normalizeManagerAiKnowledgeDocs(docs);
+    scheduleLedgerDraftSave();
+    return { added: added, unresolved: unresolvedCount };
+  }
+
+  async function askManagerKnowledge(question) {
+    var q = String(question || "").trim();
+    if (!q) throw new Error("질문을 입력해주세요.");
+    var hits = searchManagerKnowledge(q, 8);
+    managerState.aiLastQuestion = q;
+    managerState.aiLastContexts = normalizeManagerAiContexts(hits);
+    if (!hits.length) {
+      managerState.aiLastAnswer = "지식 문서에서 관련 근거를 찾지 못했어요. 문서를 먼저 업로드하거나 질문 키워드를 바꿔주세요.";
+      scheduleLedgerDraftSave();
+      return { answer: managerState.aiLastAnswer, contexts: managerState.aiLastContexts, mode: "local_no_context" };
+    }
+    var endpoint = String(managerState.aiEndpoint || "").trim();
+    if (endpoint) {
+      try {
+        var payload = {
+          question: q,
+          contexts: hits.map(function (hit) {
+            return {
+              name: hit.name,
+              sourceType: hit.sourceType,
+              snippet: hit.snippet,
+            };
+          }),
+          promptHint:
+            "답변은 한국어로. 근거 문서명과 핵심 근거를 함께 제시. 모르면 모른다고 말할 것.",
+        };
+        var res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          var data = await res.json();
+          var answer = String((data && (data.answer || data.output || data.text)) || "").trim();
+          if (answer) {
+            managerState.aiLastAnswer = answer;
+            scheduleLedgerDraftSave();
+            return { answer: answer, contexts: managerState.aiLastContexts, mode: "server_ai" };
+          }
+        }
+      } catch (err) {
+      }
+    }
+    var localAnswer =
+      "AI 서버가 아직 연결되지 않아 로컬 근거 요약으로 답변할게.\n\n" +
+      summarizeManagerKnowledgeForPrompt(hits.slice(0, 5));
+    managerState.aiLastAnswer = localAnswer;
+    scheduleLedgerDraftSave();
+    return { answer: localAnswer, contexts: managerState.aiLastContexts, mode: "local_fallback" };
   }
 
   function normalizeManagerKey(name) {
@@ -1431,23 +1703,90 @@
       (certRowsHtml || '<tr><td colspan="6" class="manager-empty">증명서를 추가해주세요.</td></tr>') +
       "</tbody></table></div></div>";
 
+    var aiDocs = normalizeManagerAiKnowledgeDocs(managerState.aiKnowledgeDocs);
+    var aiContexts = normalizeManagerAiContexts(managerState.aiLastContexts);
+    var aiContextRowsHtml = aiContexts.map(function (row, idx) {
+      return (
+        "<tr>" +
+        "<td>" + (idx + 1) + "</td>" +
+        "<td>" + escapeHtml(row.name || "-") + "</td>" +
+        "<td class=\"mono\">" + escapeHtml(formatDisplayNumber(Math.round(row.score || 0))) + "</td>" +
+        "<td>" + escapeHtml(row.snippet || "-") + "</td>" +
+        "</tr>"
+      );
+    }).join("");
+    var aiDocsRowsHtml = aiDocs.slice().sort(function (a, b) {
+      return String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""));
+    }).slice(0, 40).map(function (row) {
+      return (
+        "<tr>" +
+        "<td>" + escapeHtml(row.name || "-") + "</td>" +
+        "<td>" + escapeHtml(row.sourceType || "-") + "</td>" +
+        "<td class=\"mono\">" + escapeHtml(formatDisplayNumber(Math.round(Number(row.size || 0)))) + "</td>" +
+        "<td>" + escapeHtml((row.unresolved || []).join(", ") || "-") + "</td>" +
+        "<td class=\"mono\">" + escapeHtml(formatManagerDateTime(row.updatedAt) || "-") + "</td>" +
+        "</tr>"
+      );
+    }).join("");
+    var aiHubPanelHtml =
+      '<div class="manager-table-card">' +
+        '<div class="manager-head-actions" style="padding:0 0 10px 0;gap:8px;flex-wrap:wrap">' +
+          '<input type="text" class="field" id="manager-ai-endpoint" placeholder="AI 서버 URL (예: https://.../askCompanyAI)" value="' + escapeAttr(String(managerState.aiEndpoint || "")) + '" style="max-width:520px" />' +
+          '<input type="file" id="manager-ai-upload" class="field" multiple style="max-width:360px;padding:6px 10px;height:36px" accept=".xlsx,.xls,.csv,.txt,.md,.json,.pdf,.png,.jpg,.jpeg,.bmp,.gif,.webp" />' +
+          '<button type="button" class="soft-btn" id="btn-manager-ai-upload">문서 업로드</button>' +
+        "</div>" +
+        '<div class="manager-head-actions" style="padding:0 0 8px 0;gap:8px;align-items:flex-start">' +
+          '<textarea id="manager-ai-question" class="field" style="min-height:72px;resize:vertical;max-width:900px" placeholder="회사 데이터 기준으로 물어보세요. 예) 4월 매출 급감 업체와 근거 문서 알려줘">' + escapeHtml(String(managerState.aiLastQuestion || "")) + "</textarea>" +
+          '<button type="button" class="soft-btn" id="btn-manager-ai-ask">질문하기</button>' +
+        "</div>" +
+        '<div class="sub" id="manager-ai-answer" style="white-space:pre-wrap;line-height:1.45;border:1px solid #eadff6;border-radius:12px;padding:10px;background:#fff">' +
+          escapeHtml(String(managerState.aiLastAnswer || "아직 답변이 없습니다.")) +
+        "</div>" +
+      "</div>" +
+      '<div class="manager-table-card">' +
+        '<div class="manager-summary-row" style="padding:0 0 10px 0">' +
+          '<div class="manager-summary-card"><div class="manager-summary-label">지식 문서 수</div><div class="manager-summary-value">' + escapeHtml(formatDisplayNumber(aiDocs.length)) + "</div></div>" +
+          '<div class="manager-summary-card"><div class="manager-summary-label">마지막 근거 수</div><div class="manager-summary-value">' + escapeHtml(formatDisplayNumber(aiContexts.length)) + "</div></div>" +
+        "</div>" +
+        '<div class="manager-table-wrap">' +
+          '<table class="manager-table">' +
+            "<thead><tr><th>#</th><th>근거 문서</th><th>점수</th><th>스니펫</th></tr></thead>" +
+            "<tbody>" +
+              (aiContextRowsHtml || '<tr><td colspan="4" class="manager-empty">질문하면 관련 근거가 여기에 표시됩니다.</td></tr>') +
+            "</tbody>" +
+          "</table>" +
+        "</div>" +
+      "</div>" +
+      '<div class="manager-table-card">' +
+        '<div class="manager-table-wrap">' +
+          '<table class="manager-table">' +
+            "<thead><tr><th>문서명</th><th>유형</th><th>크기</th><th>미해결</th><th>업데이트</th></tr></thead>" +
+            "<tbody>" +
+              (aiDocsRowsHtml || '<tr><td colspan="5" class="manager-empty">업로드된 문서가 없습니다.</td></tr>') +
+            "</tbody>" +
+          "</table>" +
+        "</div>" +
+      "</div>";
+
     var docsContentHtml =
       (
         activeSubTab === "certsheet"
           ? certSheetPanelHtml
-          : (
-            '<div class="manager-table-card">' +
-            '<div class="manager-table-wrap">' +
-            '<table class="manager-table">' +
-            "<thead><tr><th>구분</th><th>발급일</th><th>만료일</th><th>업체/문서명</th><th>기준 폴더</th><th>상태</th><th>남은기간</th></tr></thead>" +
-            "<tbody>" +
-            (docRowsHtml || '<tr><td colspan="7" class="manager-empty">해당 조건의 문서가 없습니다.</td></tr>') +
-            "</tbody></table></div></div>" +
-            '<div class="manager-undated-card">' +
-            '<div class="manager-undated-title">날짜 인식 실패 폴더 (형식: YYYY-MM-DD 폴더명)</div>' +
-            (undatedHtml ? ("<ul>" + undatedHtml + "</ul>") : '<div class="manager-empty small">없음</div>') +
-            "</div>"
-          )
+          : activeSubTab === "aihub"
+            ? aiHubPanelHtml
+            : (
+              '<div class="manager-table-card">' +
+              '<div class="manager-table-wrap">' +
+              '<table class="manager-table">' +
+              "<thead><tr><th>구분</th><th>발급일</th><th>만료일</th><th>업체/문서명</th><th>기준 폴더</th><th>상태</th><th>남은기간</th></tr></thead>" +
+              "<tbody>" +
+              (docRowsHtml || '<tr><td colspan="7" class="manager-empty">해당 조건의 문서가 없습니다.</td></tr>') +
+              "</tbody></table></div></div>" +
+              '<div class="manager-undated-card">' +
+              '<div class="manager-undated-title">날짜 인식 실패 폴더 (형식: YYYY-MM-DD 폴더명)</div>' +
+              (undatedHtml ? ("<ul>" + undatedHtml + "</ul>") : '<div class="manager-empty small">없음</div>') +
+              "</div>"
+            )
       );
 
     var analyticsMonthOptions = getManagerAnalyticsMonthOptions();
@@ -6159,7 +6498,13 @@
 
   function writeExtractedOrdersToSheet(extraction, mode) {
     if (!extraction || !Array.isArray(extraction.items) || !extraction.items.length) {
-      showAppToast("추출된 품목이 없어요. 원문 텍스트를 확인해주세요.", "warning");
+      var modeHint =
+        extraction &&
+        extraction.meta &&
+        extraction.meta.mode
+          ? " (mode: " + String(extraction.meta.mode) + ")"
+          : "";
+      showAppToast("추출된 품목이 없어요. 문서형식/시트선택/OCR 상태를 확인해주세요." + modeHint, "warning");
       return;
     }
     var mappedRows = mapExtractionItemsToOrderRows(extraction);
@@ -6204,11 +6549,26 @@
     var conf = extraction.confidence && typeof extraction.confidence.overall === "number"
       ? extraction.confidence.overall
       : 0;
+    var mode = extraction && extraction.meta && extraction.meta.mode ? String(extraction.meta.mode) : "-";
+    var selectedSheet =
+      extraction &&
+      extraction.meta &&
+      extraction.meta.selected_sheet
+        ? String(extraction.meta.selected_sheet)
+        : extraction &&
+          extraction.parsed &&
+          extraction.parsed.sheetName
+          ? String(extraction.parsed.sheetName)
+          : "-";
     resultEl.textContent =
       "고객사: " +
       customer +
       " / 품목: " +
       count +
+      " / 시트: " +
+      selectedSheet +
+      " / 모드: " +
+      mode +
       " / confidence: " +
       conf.toFixed(2) +
       " / 미해결: " +
@@ -7776,6 +8136,11 @@
         alertsEnabled: managerState.alertsEnabled !== false,
         alertLeadDays: Number(managerState.alertLeadDays || 30),
         notifiedMap: Object.assign({}, managerState.notifiedMap || {}),
+        aiEndpoint: String(managerState.aiEndpoint || ""),
+        aiKnowledgeDocs: normalizeManagerAiKnowledgeDocs(managerState.aiKnowledgeDocs || []),
+        aiLastQuestion: String(managerState.aiLastQuestion || ""),
+        aiLastAnswer: String(managerState.aiLastAnswer || ""),
+        aiLastContexts: normalizeManagerAiContexts(managerState.aiLastContexts || []),
       },
       closing: {
         attendanceMonth: closingState.attendanceMonth || defaultClosingMonthLabel(),
@@ -8047,6 +8412,11 @@
       managerState.notifiedMap = managerData.notifiedMap && typeof managerData.notifiedMap === "object"
         ? Object.assign({}, managerData.notifiedMap)
         : {};
+      managerState.aiEndpoint = String(managerData.aiEndpoint || "");
+      managerState.aiKnowledgeDocs = normalizeManagerAiKnowledgeDocs(managerData.aiKnowledgeDocs || []);
+      managerState.aiLastQuestion = String(managerData.aiLastQuestion || "");
+      managerState.aiLastAnswer = String(managerData.aiLastAnswer || "");
+      managerState.aiLastContexts = normalizeManagerAiContexts(managerData.aiLastContexts || []);
       var hazardDocs = normalizeManagerDocs(managerState.docs).filter(function (doc) {
         return doc.sourceType !== "certsheet";
       });
@@ -12783,6 +13153,193 @@
     );
   }
 
+  function ensureAiEdgeStyles() {
+    if (document.getElementById("ai-edge-style")) return;
+    var styleEl = document.createElement("style");
+    styleEl.id = "ai-edge-style";
+    styleEl.textContent =
+      ".ai-edge-toggle{position:fixed;right:0;top:50%;transform:translateY(-50%);z-index:1900;border:1px solid var(--border);border-right:none;border-radius:10px 0 0 10px;background:var(--lav);color:var(--ink);padding:10px 8px;min-width:32px;writing-mode:vertical-rl;text-orientation:mixed;letter-spacing:.04em;font-weight:700;cursor:pointer}" +
+      ".ai-edge-panel{position:fixed;right:-420px;top:50%;transform:translateY(-50%);width:390px;max-width:calc(100vw - 20px);height:min(84vh,760px);background:var(--card);border:1px solid var(--border);border-right:none;border-radius:14px 0 0 14px;box-shadow:0 10px 34px rgba(0,0,0,.18);z-index:1899;transition:right .2s ease;display:flex;flex-direction:column}" +
+      ".ai-edge-panel.open{right:0}" +
+      ".ai-edge-head{padding:12px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;font-weight:700}" +
+      ".ai-edge-body{padding:12px;display:grid;gap:8px;overflow:auto}" +
+      ".ai-edge-close{padding:4px 8px;border:1px solid var(--border);border-radius:8px;background:#fff;cursor:pointer}" +
+      ".ai-workspace{padding:14px}" +
+      ".ai-workspace .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:12px}" +
+      ".ai-answer{white-space:pre-wrap;background:#fff;border:1px solid var(--border);border-radius:10px;padding:10px;min-height:76px}" +
+      ".ai-grid-table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--border)}" +
+      ".ai-grid-table th,.ai-grid-table td{border:1px solid var(--border);padding:6px 8px;vertical-align:top;text-align:left;font-size:12px}" +
+      "@media (max-width:860px){.ai-edge-panel{width:calc(100vw - 14px)}.ai-edge-toggle{padding:8px 7px}}";
+    document.head.appendChild(styleEl);
+  }
+
+  function renderAiControls(prefix) {
+    var aiDocs = normalizeManagerAiKnowledgeDocs(managerState.aiKnowledgeDocs);
+    var aiContexts = normalizeManagerAiContexts(managerState.aiLastContexts);
+    var ctxRows = aiContexts.length
+      ? aiContexts
+          .map(function (ctx, idx) {
+            return (
+              "<tr>" +
+              "<td>" + (idx + 1) + "</td>" +
+              "<td>" + escapeHtml(ctx.name || "-") + "</td>" +
+              "<td>" + escapeHtml((ctx.snippet || "").slice(0, 180) || "-") + "</td>" +
+              "</tr>"
+            );
+          })
+          .join("")
+      : '<tr><td colspan="3">근거 없음</td></tr>';
+    var docRows = aiDocs.length
+      ? aiDocs
+          .map(function (doc, idx) {
+            var unresolved = Array.isArray(doc.unresolved) ? doc.unresolved.join(", ") : "";
+            return (
+              "<tr>" +
+              "<td>" + (idx + 1) + "</td>" +
+              "<td>" + escapeHtml(doc.name || "-") + "</td>" +
+              "<td>" + escapeHtml(doc.sourceType || "-") + "</td>" +
+              "<td>" + escapeHtml(unresolved || "-") + "</td>" +
+              "</tr>"
+            );
+          })
+          .join("")
+      : '<tr><td colspan="4">업로드한 문서가 없습니다.</td></tr>';
+    return (
+      '<div class="stack">' +
+      '<label>AI 서버 URL</label>' +
+      '<input type="text" class="field" id="' + prefix + '-endpoint" value="' + escapeAttr(String(managerState.aiEndpoint || "")) + '" placeholder="예: https://.../askCompanyAI" />' +
+      "</div>" +
+      '<div class="stack">' +
+      "<label>문서 업로드</label>" +
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+      '<input type="file" id="' + prefix + '-upload" multiple accept=".txt,.md,.csv,.xlsx,.xls,.pdf,.png,.jpg,.jpeg" />' +
+      '<button type="button" class="soft-btn" id="btn-' + prefix + '-upload">업로드</button>' +
+      '<span style="font-size:12px;color:var(--muted)">현재 ' + formatDisplayNumber(aiDocs.length) + "건</span>" +
+      "</div></div>" +
+      '<div class="stack">' +
+      "<label>질문</label>" +
+      '<textarea class="field" id="' + prefix + '-question" style="min-height:72px;resize:vertical" placeholder="예: 이번 달 매출 급감 업체 근거까지 알려줘">' + escapeHtml(String(managerState.aiLastQuestion || "")) + "</textarea>" +
+      '<div><button type="button" class="primary-btn" id="btn-' + prefix + '-ask">질문하기</button></div>' +
+      "</div>" +
+      '<div class="stack"><label>답변</label><div class="ai-answer" id="' + prefix + '-answer">' + escapeHtml(String(managerState.aiLastAnswer || "아직 답변이 없습니다.")) + "</div></div>" +
+      '<div class="stack"><label>근거 문맥</label><table class="ai-grid-table"><thead><tr><th>#</th><th>문서</th><th>근거</th></tr></thead><tbody>' + ctxRows + "</tbody></table></div>" +
+      '<div class="stack"><label>문서 목록</label><table class="ai-grid-table"><thead><tr><th>#</th><th>문서명</th><th>유형</th><th>미해결</th></tr></thead><tbody>' + docRows + "</tbody></table></div>"
+    );
+  }
+
+  function bindAiControls(prefix, rerenderAfterDone) {
+    var endpointEl = document.getElementById(prefix + "-endpoint");
+    if (endpointEl) {
+      endpointEl.addEventListener("change", function () {
+        managerState.aiEndpoint = String(endpointEl.value || "").trim();
+        scheduleLedgerDraftSave();
+      });
+    }
+    var uploadBtn = document.getElementById("btn-" + prefix + "-upload");
+    if (uploadBtn) {
+      uploadBtn.addEventListener("click", function () {
+        var fileEl = document.getElementById(prefix + "-upload");
+        var files = fileEl && fileEl.files ? Array.from(fileEl.files) : [];
+        if (!files.length) {
+          showAppToast("먼저 문서를 선택해주세요.", "warning");
+          return;
+        }
+        addManagerKnowledgeFiles(files)
+          .then(function (result) {
+            showAppToast(
+              "문서 업로드 완료 (" + formatDisplayNumber(result.added || 0) + "건, 미해결 " + formatDisplayNumber(result.unresolved || 0) + "건)",
+              "success"
+            );
+            if (rerenderAfterDone) render();
+          })
+          .catch(function (err) {
+            showAppToast(err && err.message ? err.message : "문서 업로드에 실패했어요.", "warning");
+          });
+      });
+    }
+    var askBtn = document.getElementById("btn-" + prefix + "-ask");
+    var questionEl = document.getElementById(prefix + "-question");
+    function runAsk() {
+      if (!questionEl) return;
+      var q = String(questionEl.value || "").trim();
+      if (!q) {
+        showAppToast("질문을 입력해주세요.", "warning");
+        return;
+      }
+      managerState.aiLastQuestion = q;
+      askManagerKnowledge(q)
+        .then(function () {
+          showAppToast("질문 분석을 완료했어요.", "success");
+          if (rerenderAfterDone) render();
+        })
+        .catch(function (err) {
+          showAppToast(err && err.message ? err.message : "질문 처리에 실패했어요.", "warning");
+        });
+    }
+    if (askBtn) askBtn.addEventListener("click", runAsk);
+    if (questionEl) {
+      questionEl.addEventListener("keydown", function (event) {
+        if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+          event.preventDefault();
+          runAsk();
+        }
+      });
+    }
+  }
+
+  function renderAiWorkspacePage() {
+    return (
+      '<div class="ai-workspace">' +
+      '<div class="card">' +
+      '<div class="section-title">' + icon("settings") + " AI 어시스턴트</div>" +
+      '<div class="sub" style="margin-bottom:10px">문서를 업로드하고 질문하면, 업로드한 문서 근거 기반으로 답변해요.</div>' +
+      renderAiControls("ai-tab") +
+      "</div></div>"
+    );
+  }
+
+  function renderGlobalAiEdgePanel() {
+    ensureAiEdgeStyles();
+    var openClass = state.aiEdgeOpen ? " open" : "";
+    return (
+      '<button type="button" class="ai-edge-toggle" id="btn-ai-edge-toggle">' + (state.aiEdgeOpen ? "AI 닫기" : "AI") + "</button>" +
+      '<aside class="ai-edge-panel' + openClass + '" id="ai-edge-panel">' +
+      '<div class="ai-edge-head"><span>' + icon("settings") + ' AI 빠른질문</span><button type="button" class="ai-edge-close" id="btn-ai-edge-close">닫기</button></div>' +
+      '<div class="ai-edge-body">' + renderAiControls("edge-ai") + "</div>" +
+      "</aside>"
+    );
+  }
+
+  function mountGlobalAiEdgePanel() {
+    if (!state.entered) return;
+    var old = document.getElementById("global-ai-edge-root");
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+    var root = document.createElement("div");
+    root.id = "global-ai-edge-root";
+    root.innerHTML = renderGlobalAiEdgePanel();
+    app.appendChild(root);
+    var toggleBtn = document.getElementById("btn-ai-edge-toggle");
+    var closeBtn = document.getElementById("btn-ai-edge-close");
+    function openEdge(open) {
+      state.aiEdgeOpen = open !== false;
+      var panel = document.getElementById("ai-edge-panel");
+      if (!panel) return;
+      panel.classList.toggle("open", state.aiEdgeOpen);
+      if (toggleBtn) toggleBtn.textContent = state.aiEdgeOpen ? "AI 닫기" : "AI";
+    }
+    if (toggleBtn) {
+      toggleBtn.addEventListener("click", function () {
+        openEdge(!state.aiEdgeOpen);
+      });
+    }
+    if (closeBtn) {
+      closeBtn.addEventListener("click", function () {
+        openEdge(false);
+      });
+    }
+    bindAiControls("edge-ai", true);
+  }
+
   /* ========== App render ========== */
   function render() {
     if (!state.entered) {
@@ -12839,6 +13396,7 @@
           render();
         });
       });
+      mountGlobalAiEdgePanel();
       return;
     }
 
@@ -13045,6 +13603,74 @@
             });
         });
       }
+      var aiEndpointEl = document.getElementById("manager-ai-endpoint");
+      if (aiEndpointEl) {
+        aiEndpointEl.addEventListener("change", function () {
+          managerState.aiEndpoint = String(aiEndpointEl.value || "").trim();
+          scheduleLedgerDraftSave();
+        });
+      }
+      var aiUploadBtn = document.getElementById("btn-manager-ai-upload");
+      if (aiUploadBtn) {
+        aiUploadBtn.addEventListener("click", function () {
+          var fileEl = document.getElementById("manager-ai-upload");
+          var files = fileEl && fileEl.files ? Array.from(fileEl.files) : [];
+          if (!files.length) {
+            showAppToast("먼저 문서를 선택해주세요.", "warning");
+            return;
+          }
+          addManagerKnowledgeFiles(files)
+            .then(function (result) {
+              showAppToast(
+                "문서 업로드 완료 (" + formatDisplayNumber(result.added || 0) + "건, 미해결 " + formatDisplayNumber(result.unresolved || 0) + "건)",
+                "success"
+              );
+              render();
+            })
+            .catch(function (err) {
+              showAppToast(err && err.message ? err.message : "문서 업로드에 실패했어요.", "warning");
+            });
+        });
+      }
+      var aiAskBtn = document.getElementById("btn-manager-ai-ask");
+      var aiQuestionEl = document.getElementById("manager-ai-question");
+      function runAskManagerAi() {
+        if (!aiQuestionEl) return;
+        var q = String(aiQuestionEl.value || "").trim();
+        if (!q) {
+          showAppToast("질문을 입력해주세요.", "warning");
+          return;
+        }
+        managerState.aiLastQuestion = q;
+        askManagerKnowledge(q)
+          .then(function () {
+            showAppToast("질문 분석을 완료했어요.", "success");
+            render();
+          })
+          .catch(function (err) {
+            showAppToast(err && err.message ? err.message : "질문 처리에 실패했어요.", "warning");
+          });
+      }
+      if (aiAskBtn) {
+        aiAskBtn.addEventListener("click", runAskManagerAi);
+      }
+      if (aiQuestionEl) {
+        aiQuestionEl.addEventListener("keydown", function (event) {
+          if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+            event.preventDefault();
+            runAskManagerAi();
+          }
+        });
+      }
+      mountGlobalAiEdgePanel();
+      return;
+    }
+
+    if (state.role === "ai") {
+      app.innerHTML = renderTopBar() + '<div class="content">' + renderAiWorkspacePage() + "</div>";
+      wireTopBar();
+      bindAiControls("ai-tab", true);
+      mountGlobalAiEdgePanel();
       return;
     }
 
@@ -13234,6 +13860,7 @@
           });
         });
       }
+      mountGlobalAiEdgePanel();
       return;
     }
 
@@ -13242,6 +13869,7 @@
         renderTopBar() +
         '<div class="content"><div class="shell-bg prep">' + getRoleTitle(state.role) + " 화면 준비중</div></div>";
       wireTopBar();
+      mountGlobalAiEdgePanel();
       return;
     }
 
@@ -13265,6 +13893,7 @@
         "</div></div>";
 
       wireTopBar();
+      mountGlobalAiEdgePanel();
       app.querySelectorAll(".main-card").forEach(function (b) {
         b.addEventListener("click", function () {
           state.mainTab = b.getAttribute("data-main");
@@ -13727,6 +14356,7 @@
         });
         attachClientGridWhenNeeded(document.getElementById("client-grid-host"));
       }
+      mountGlobalAiEdgePanel();
       return;
     }
 
@@ -14493,6 +15123,7 @@
             });
         }
       }
+      mountGlobalAiEdgePanel();
       return;
     }
 
@@ -14502,6 +15133,7 @@
       (state.mainTab === "purchase" ? "매입" : "마감") +
       "</div></div>";
     wireTopBar();
+    mountGlobalAiEdgePanel();
   }
 
   function wireTopBar() {

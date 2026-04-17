@@ -818,7 +818,7 @@
         map[key] = c;
         score += 1;
       }
-      if ((map.name != null) && (map.qty != null || map.due != null || map.code != null)) {
+      if ((map.name != null || map.code != null) && (map.qty != null || map.due != null || map.spec != null)) {
         if (!best || score > best.score) best = { headerRow: r, colMap: map, score: score };
       }
     }
@@ -870,26 +870,50 @@
   }
 
   function parseExcelOrderSheet(workbook) {
-    var bestSheet = null;
-    var bestRows = [];
-    var bestCount = -1;
+    var best = null;
     (workbook.SheetNames || []).forEach(function (name) {
       var ws = workbook.Sheets[name];
       if (!ws) return;
       var rows = global.XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
-      var count = 0;
+      var header = detectHeaderSection(rows);
+      var table = detectItemTable(rows);
+      var items = parseOrderItems(rows, table);
+      var nonEmptyRows = 0;
       for (var i = 0; i < rows.length; i++) {
-        if (Array.isArray(rows[i]) && rows[i].some(function (v) { return toCleanString(v) !== ""; })) count += 1;
+        if (Array.isArray(rows[i]) && rows[i].some(function (v) { return toCleanString(v) !== ""; })) nonEmptyRows += 1;
       }
-      if (count > bestCount) {
-        bestCount = count;
-        bestSheet = name;
-        bestRows = rows;
+      var score = 0;
+      if (table) score += (table.score || 0) * 10;
+      score += Math.min(items.length, 200) * 5;
+      if (header && header.orderDate) score += 8;
+      if (header && header.customerName) score += 5;
+      score += Math.min(nonEmptyRows, 200) * 0.02;
+      if (!best || score > best.score) {
+        best = {
+          sheetName: name,
+          rows: rows,
+          header: header,
+          table: table,
+          items: items,
+          score: score,
+        };
       }
     });
-    var header = detectHeaderSection(bestRows);
-    var table = detectItemTable(bestRows);
-    var items = parseOrderItems(bestRows, table);
+
+    var bestRows = best && best.rows ? best.rows : [];
+    var header = best && best.header ? best.header : { orderDate: null, customerName: "" };
+    var table = best && best.table ? best.table : null;
+    var items = best && Array.isArray(best.items) ? best.items : [];
+    var lines = [];
+    bestRows.forEach(function (row) {
+      if (!Array.isArray(row)) return;
+      var line = row.map(function (v) { return toCleanString(v); }).join("\t").trim();
+      if (line) lines.push(line);
+    });
+    var rawText = normalizeExtractedText(lines.join("\n"));
+    if (!items.length && rawText) {
+      items = parseItems(rawText);
+    }
     var firstDue = null;
     for (var k = 0; k < items.length; k++) {
       if (items[k].due_date) {
@@ -897,21 +921,24 @@
         break;
       }
     }
-    var lines = [];
-    bestRows.forEach(function (row) {
-      if (!Array.isArray(row)) return;
-      var line = row.map(function (v) { return toCleanString(v); }).join("\t").trim();
-      if (line) lines.push(line);
-    });
+    var unresolved = [];
+    if (!table) unresolved.push("item_table_not_detected");
+    if (!items.length) unresolved.push("order_items");
     return {
-      sheetName: bestSheet || "",
-      raw_text: normalizeExtractedText(lines.join("\n")),
+      sheetName: best && best.sheetName ? best.sheetName : "",
+      raw_text: rawText,
       customer_name: header.customerName || "",
       order_date: parseOrderDate(header),
       requested_ship_date: firstDue,
       due_date: firstDue,
       order_items: items,
-      unresolved_fields: [],
+      unresolved_fields: unresolved,
+      parse_debug: {
+        selected_sheet: best && best.sheetName ? best.sheetName : "",
+        table_header_row: table ? table.headerRow : -1,
+        table_col_map: table ? table.colMap : {},
+        item_count: items.length,
+      },
     };
   }
 
@@ -922,7 +949,16 @@
     return file.arrayBuffer().then(function (buffer) {
       var wb = global.XLSX.read(buffer, { type: "array" });
       var parsed = parseExcelOrderSheet(wb);
-      return { source_type: "excel", raw_text: parsed.raw_text || "", parsed: parsed, meta: { mode: "excel_structured" } };
+      return {
+        source_type: "excel",
+        raw_text: parsed.raw_text || "",
+        parsed: parsed,
+        meta: {
+          mode: "excel_structured",
+          selected_sheet: parsed.sheetName || "",
+          item_count: parsed.order_items ? parsed.order_items.length : 0,
+        },
+      };
     });
   }
 
@@ -936,8 +972,33 @@
   }
 
   function extractTextFromImage(file) {
-    // placeholder for OCR path
-    return Promise.resolve({ source_type: "image", raw_text: "", parsed: null, meta: { mode: "ocr_placeholder" } });
+    if (global.Tesseract && typeof global.Tesseract.recognize === "function" && file) {
+      return global.Tesseract
+        .recognize(file, "kor+eng")
+        .then(function (result) {
+          var text = result && result.data && result.data.text ? String(result.data.text) : "";
+          return {
+            source_type: "image",
+            raw_text: normalizeExtractedText(text),
+            parsed: null,
+            meta: { mode: "ocr_tesseract" },
+          };
+        })
+        .catch(function () {
+          return {
+            source_type: "image",
+            raw_text: "",
+            parsed: null,
+            meta: { mode: "ocr_failed" },
+          };
+        });
+    }
+    return Promise.resolve({
+      source_type: "image",
+      raw_text: "",
+      parsed: null,
+      meta: { mode: "ocr_unavailable" },
+    });
   }
 
   function extractTextFromText(fileOrText) {
@@ -1038,7 +1099,11 @@
       original_ship_date: normalizeDate(parsed.requested_ship_date || parsed.due_date),
       candidates: [],
     } : parseDates(rawText);
-    var items = parsed && Array.isArray(parsed.order_items) ? parsed.order_items.map(function (r) { return normalizeOrderItem(r, null); }) : parseItems(rawText);
+    var parsedItems =
+      parsed && Array.isArray(parsed.order_items)
+        ? parsed.order_items.map(function (r) { return normalizeOrderItem(r, null); })
+        : [];
+    var items = parsedItems.length ? parsedItems : parseItems(rawText);
     var urgent = parseUrgency(rawText);
     var scheduleChange = parseScheduleChange(rawText, dates.current_ship_date);
     var unresolved = [];
@@ -1083,7 +1148,7 @@
   function runExtractionFromInput(input, context) {
     var ctx = isObject(context) ? context : {};
     return extractRawText(input).then(function (rawResult) {
-      return buildNormalizedOrder({
+      var normalized = buildNormalizedOrder({
         source_type: rawResult.source_type,
         input_method: ctx.input_method || "auto_upload",
         received_channel: ctx.received_channel || (rawResult.source_type === "phone" ? "phone" : "file_upload"),
@@ -1093,6 +1158,11 @@
         parsed: rawResult.parsed || null,
         file: input && input.file ? input.file : input,
       });
+      if (normalized && typeof normalized === "object") {
+        normalized.meta = rawResult && rawResult.meta ? rawResult.meta : {};
+        normalized.parsed = rawResult && rawResult.parsed ? rawResult.parsed : null;
+      }
+      return normalized;
     });
   }
 
