@@ -2167,6 +2167,7 @@
       },
       rows: [],
       issues: [],
+      dismissedIssueKeys: [],
       updatedAt: "",
     };
   }
@@ -2236,8 +2237,19 @@
     base.sources.count = normalizeClosingMealRows(sources.count, 5000);
     base.rows = normalizeClosingMealRows(next.rows, 1200);
     base.issues = normalizeClosingMealIssues(next.issues).slice(0, 600);
+    base.dismissedIssueKeys = Array.isArray(next.dismissedIssueKeys)
+      ? next.dismissedIssueKeys.map(function (key) { return String(key || ""); }).filter(Boolean)
+      : [];
     base.updatedAt = String(next.updatedAt || "");
     return base;
+  }
+
+  function buildClosingMealIssueKey(issue, index) {
+    var day = Number(issue && issue.day || 0) || 0;
+    var type = String(issue && issue.type || "");
+    var name = String(issue && issue.name || "");
+    var msg = String(issue && issue.message || "");
+    return [String(index), String(day), type, name, msg].join("|");
   }
 
   function getClosingMealData(monthLabel) {
@@ -4676,18 +4688,6 @@
         });
       }
     }
-    countRows.forEach(function (row) {
-      if (String(row.source || "").indexOf(":manual") >= 0) {
-        issues.push({
-          level: "warning",
-          type: "manual_count_present",
-          day: row.day || 0,
-          name: "일자합계",
-          message: (row.day || "-") + "일 식수에 수기 입력이 포함되어 수동 확인이 필요합니다.",
-        });
-      }
-    });
-
     var attendanceLookup = buildClosingAttendanceLookupByMonth(monthLabel);
     var employeeMarkerLookup = buildClosingEmployeeMarkerLookupByMonth(monthLabel);
     var employeeNameSet = buildClosingEmployeeNameSetByMonth(monthLabel);
@@ -4727,13 +4727,14 @@
           issues.push({ level: "warning", type: "lunch_halfday", day: row.day, name: row.name, message: "반일 근무(오전퇴근/오후출근 추정)인데 중식이 입력됨" });
         }
       }
-      if (row.dinner > 0 && (!att || overtimeHours <= 0) && !(isEmployeeName && !att)) {
+      if (row.dinner > 0 && (!att || overtimeHours <= 0)) {
         issues.push({ level: "warning", type: "dinner_without_overtime", day: row.day, name: row.name, message: "연장/야근 기록 없이 석식이 입력됨" });
       }
     });
 
     data.rows = normalizeClosingMealRows(rows, 1200);
     data.issues = normalizeClosingMealIssues(issues).slice(0, 600);
+    data.dismissedIssueKeys = [];
     // 업로드한 원본 소스(summary/daily/count)는 유지해야
     // "분석 실행" 버튼 재실행 시에도 동일 데이터로 다시 검증할 수 있다.
     data.updatedAt = new Date().toISOString();
@@ -11292,11 +11293,20 @@
       totalLunch += parseMealCountValue(row.lunch);
       totalDinner += parseMealCountValue(row.dinner);
     });
-    var issueRows = (mealData.issues || []).map(function (issue) {
+    var dismissedSet = {};
+    (mealData.dismissedIssueKeys || []).forEach(function (key) {
+      dismissedSet[String(key || "")] = true;
+    });
+    var visibleIssues = (mealData.issues || []).filter(function (issue, index) {
+      return !dismissedSet[buildClosingMealIssueKey(issue, index)];
+    });
+    var issueRows = visibleIssues.map(function (issue, index) {
       var issueDay = Number(issue.day || 0);
       var displayDay = issueDay > 0 ? String(issueDay) : "-";
+      var issueKey = buildClosingMealIssueKey(issue, (mealData.issues || []).indexOf(issue));
       return (
         '<tr>' +
+          '<td class="center"><input type="checkbox" data-meal-issue-dismiss="' + escapeAttr(issueKey) + '" /></td>' +
           '<td class="center">' + escapeHtml(displayDay) + '</td>' +
           '<td>' + escapeHtml(issue.name || "") + '</td>' +
           '<td>' + escapeHtml(issue.message || "") + '</td>' +
@@ -11338,16 +11348,16 @@
             '<div class="closing-matrix-badge">조식 <strong>' + escapeHtml(formatDisplayNumber(totalBreakfast)) + '</strong></div>' +
             '<div class="closing-matrix-badge">중식 <strong>' + escapeHtml(formatDisplayNumber(totalLunch)) + '</strong></div>' +
             '<div class="closing-matrix-badge">석식 <strong>' + escapeHtml(formatDisplayNumber(totalDinner)) + '</strong></div>' +
-            '<div class="closing-matrix-badge strong">이상치 <strong>' + escapeHtml(String((mealData.issues || []).length)) + '</strong></div>' +
+            '<div class="closing-matrix-badge strong">이상치 <strong>' + escapeHtml(String(visibleIssues.length)) + '</strong></div>' +
           '</div>' +
         '</div>' +
         '<div class="closing-card closing-card-wide">' +
           '<div class="closing-title">' + icon("scroll") + ' 이상치 체크 결과</div>' +
           '<div class="closing-table-simple-wrap">' +
             '<table class="closing-table-simple">' +
-              '<thead><tr><th class="center" style="width:70px">일자</th><th style="width:180px">이름</th><th>내용</th></tr></thead>' +
+              '<thead><tr><th class="center" style="width:70px">체크</th><th class="center" style="width:70px">일자</th><th style="width:180px">이름</th><th>내용</th></tr></thead>' +
               '<tbody>' +
-                (issueRows || '<tr><td colspan="3" class="center muted">이상치가 없습니다.</td></tr>') +
+                (issueRows || '<tr><td colspan="4" class="center muted">이상치가 없습니다.</td></tr>') +
               '</tbody>' +
             '</table>' +
           '</div>' +
@@ -13118,6 +13128,19 @@
             showAppToast("식대 대조 분석을 다시 실행했어요. 이상치 " + analyzed.issues.length + "건", analyzed.issues.length ? "warning" : "success");
           });
         }
+        app.querySelectorAll('[data-meal-issue-dismiss]').forEach(function (checkbox) {
+          checkbox.addEventListener("change", function () {
+            var key = String(checkbox.getAttribute("data-meal-issue-dismiss") || "");
+            if (!key || !checkbox.checked) return;
+            var mealData = getClosingMealData(closingState.attendanceMonth);
+            var list = Array.isArray(mealData.dismissedIssueKeys) ? mealData.dismissedIssueKeys.slice() : [];
+            if (list.indexOf(key) < 0) list.push(key);
+            mealData.dismissedIssueKeys = list;
+            setClosingMealData(closingState.attendanceMonth, mealData);
+            scheduleLedgerDraftSave();
+            render();
+          });
+        });
       } else if (state.closingSubTab === "salesclose") {
         var closeMonthSelectForSales = document.getElementById("closing-close-month");
         if (closeMonthSelectForSales) {
