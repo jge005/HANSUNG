@@ -885,26 +885,20 @@
     if (!values.length) return '<div class="manager-trend-bars"></div>';
     var max = values.reduce(function (m, v) { return v > m ? v : m; }, 0);
     if (max <= 0) max = 1;
-    var width = Math.max(140, values.length * 22 + 28);
-    var height = 86;
-    var innerTop = 10;
-    var innerBottom = 20;
+    var width = Math.max(96, values.length * 15 + 14);
+    var height = 38;
+    var innerTop = 4;
+    var innerBottom = 5;
     var usableHeight = height - innerTop - innerBottom;
-    var barW = 10;
-    var step = values.length > 1 ? Math.max(18, Math.floor((width - 20) / values.length)) : 24;
+    var barW = 5;
+    var step = values.length > 1 ? Math.max(11, Math.floor((width - 12) / values.length)) : 13;
     var points = [];
     var linePoints = [];
     var bars = [];
-    var monthLabels = [];
-    var guides = [
-      innerTop + Math.round(usableHeight * 0.25),
-      innerTop + Math.round(usableHeight * 0.5),
-      innerTop + Math.round(usableHeight * 0.75),
-    ];
     for (var i = 0; i < values.length; i++) {
       var v = values[i] || 0;
       var prev = i > 0 ? (values[i - 1] || 0) : 0;
-      var x = 10 + i * step;
+      var x = 5 + i * step;
       var h = Math.max(2, Math.round((v / max) * usableHeight));
       var y = height - innerBottom - h;
       var cx = x + Math.floor(barW / 2);
@@ -917,11 +911,6 @@
           "<title>" + escapeHtml(title) + "</title>" +
         "</rect>"
       );
-      if (labels && labels[i] && (i === values.length - 1 || i === 0 || i % 2 === 0)) {
-        monthLabels.push(
-          '<text x="' + cx + '" y="' + (height - 5) + '" text-anchor="middle" class="manager-trend-month-label">' + escapeHtml(labels[i]) + "</text>"
-        );
-      }
     }
     var smoothPath = buildManagerSmoothPath(linePoints);
     var areaPath = "";
@@ -934,12 +923,12 @@
     for (var j = 0; j < values.length; j++) {
       var cv = values[j] || 0;
       var cp = j > 0 ? (values[j - 1] || 0) : 0;
-      var cx = 10 + j * step + Math.floor(barW / 2);
+      var cx = 5 + j * step + Math.floor(barW / 2);
       var ch = Math.max(2, Math.round((cv / max) * usableHeight));
       var cy = height - innerBottom - ch;
       var ctitle = formatManagerDeltaTitle(labels && labels[j], cv, cp);
       circles.push(
-        '<circle cx="' + cx + '" cy="' + cy + '" r="2.8" class="manager-trend-dot">' +
+        '<circle cx="' + cx + '" cy="' + cy + '" r="1.9" class="manager-trend-dot">' +
           "<title>" + escapeHtml(ctitle) + "</title>" +
         "</circle>"
       );
@@ -947,15 +936,10 @@
     return (
       '<div class="manager-trend-bars">' +
       '<svg viewBox="0 0 ' + width + " " + height + '" preserveAspectRatio="none" aria-hidden="true">' +
-      '<rect x="2" y="2" width="' + (width - 4) + '" height="' + (height - 4) + '" class="manager-trend-bg" rx="8" ry="8" />' +
-      guides.map(function (gy) {
-        return '<line x1="8" y1="' + gy + '" x2="' + (width - 8) + '" y2="' + gy + '" class="manager-trend-guide" />';
-      }).join("") +
       (areaPath ? '<path class="manager-trend-area" d="' + areaPath + '" />' : "") +
       (smoothPath ? '<path class="manager-trend-line" d="' + smoothPath + '" />' : ('<polyline class="manager-trend-line" points="' + points.join(" ") + '" />')) +
       bars.join("") +
       circles.join("") +
-      monthLabels.join("") +
       "</svg>" +
       "</div>"
     );
