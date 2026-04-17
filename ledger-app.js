@@ -3922,20 +3922,43 @@
     var monthMatch = String(monthLabel || "").match(/^(\d+)월$/);
     var monthNumber = monthMatch ? Number(monthMatch[1]) : null;
     var headerRow = -1;
+    var cols = {
+      date: -1,
+      authNo: -1,
+      empNo: -1,
+      name: -1,
+      breakfast: -1,
+      lunch: -1,
+      dinner: -1,
+      night: -1,
+      snack: -1,
+      night2: -1,
+      count: -1,
+    };
     for (var r = 0; r < Math.min(safeGrid.length, 80); r++) {
       var row = safeGrid[r] || [];
-      var b = normalizeMealHeaderToken(getGridCellTextByIndex(row, 1)); // B 인증일시
-      var e = normalizeMealHeaderToken(getGridCellTextByIndex(row, 4)); // E 사원이름
-      var j = normalizeMealHeaderToken(getGridCellTextByIndex(row, 9)); // J 중식
-      var k = normalizeMealHeaderToken(getGridCellTextByIndex(row, 10)); // K 석식
-      var p = normalizeMealHeaderToken(getGridCellTextByIndex(row, 15)); // P 건수
-      if (
-        b.indexOf("인증일시") >= 0 &&
-        (e.indexOf("사원이름") >= 0 || e.indexOf("성명") >= 0 || e.indexOf("이름") >= 0) &&
-        j.indexOf("중식") >= 0 &&
-        k.indexOf("석식") >= 0
-      ) {
+      var local = {
+        date: -1, authNo: -1, empNo: -1, name: -1,
+        breakfast: -1, lunch: -1, dinner: -1, night: -1, snack: -1, night2: -1, count: -1,
+      };
+      for (var c = 0; c < row.length; c++) {
+        var token = normalizeMealHeaderToken(row[c]);
+        if (!token) continue;
+        if (local.date < 0 && token.indexOf("인증일시") >= 0) local.date = c;
+        else if (local.authNo < 0 && token.indexOf("인증번호") >= 0) local.authNo = c;
+        else if (local.empNo < 0 && token.indexOf("사원번호") >= 0) local.empNo = c;
+        else if (local.name < 0 && (token.indexOf("사원이름") >= 0 || token.indexOf("성명") >= 0 || token.indexOf("이름") >= 0)) local.name = c;
+        else if (local.breakfast < 0 && token.indexOf("조식") >= 0) local.breakfast = c;
+        else if (local.lunch < 0 && token.indexOf("중식") >= 0) local.lunch = c;
+        else if (local.dinner < 0 && token.indexOf("석식") >= 0) local.dinner = c;
+        else if (local.night < 0 && token === "야식") local.night = c;
+        else if (local.snack < 0 && token.indexOf("간식") >= 0) local.snack = c;
+        else if (local.night2 < 0 && token.indexOf("야식2") >= 0) local.night2 = c;
+        else if (local.count < 0 && (token.indexOf("건수") >= 0 || token.indexOf("합계") >= 0 || token.indexOf("식수") >= 0)) local.count = c;
+      }
+      if (local.date >= 0 && local.name >= 0 && (local.lunch >= 0 || local.dinner >= 0)) {
         headerRow = r;
+        cols = local;
         break;
       }
     }
@@ -3944,18 +3967,18 @@
     var rows = [];
     for (var rr = headerRow + 1; rr < safeGrid.length; rr++) {
       var line = safeGrid[rr] || [];
-      var dateText = getGridCellTextByIndex(line, 1); // B
+      var dateText = getGridCellTextByIndex(line, cols.date);
       var day = parseMealDayValue(dateText, monthNumber);
-      var authNo = getGridCellTextByIndex(line, 2); // C
-      var empNo = getGridCellTextByIndex(line, 3); // D
-      var name = getGridCellTextByIndex(line, 4); // E
-      var breakfast = parseMealCountValue(getGridCellTextByIndex(line, 8)); // I
-      var lunch = parseMealCountValue(getGridCellTextByIndex(line, 9)); // J
-      var dinner = parseMealCountValue(getGridCellTextByIndex(line, 10)); // K
-      var night = parseMealCountValue(getGridCellTextByIndex(line, 11)); // L
-      var snack = parseMealCountValue(getGridCellTextByIndex(line, 12)); // M
-      var night2 = parseMealCountValue(getGridCellTextByIndex(line, 13)); // N
-      var cntP = parseMealCountValue(getGridCellTextByIndex(line, 15)); // P
+      var authNo = getGridCellTextByIndex(line, cols.authNo);
+      var empNo = getGridCellTextByIndex(line, cols.empNo);
+      var name = getGridCellTextByIndex(line, cols.name);
+      var breakfast = parseMealCountValue(getGridCellTextByIndex(line, cols.breakfast));
+      var lunch = parseMealCountValue(getGridCellTextByIndex(line, cols.lunch));
+      var dinner = parseMealCountValue(getGridCellTextByIndex(line, cols.dinner));
+      var night = parseMealCountValue(getGridCellTextByIndex(line, cols.night));
+      var snack = parseMealCountValue(getGridCellTextByIndex(line, cols.snack));
+      var night2 = parseMealCountValue(getGridCellTextByIndex(line, cols.night2));
+      var cntP = parseMealCountValue(getGridCellTextByIndex(line, cols.count));
       var total = cntP > 0 ? cntP : (breakfast + lunch + dinner + night + snack + night2);
       if (!day || !name || !total) continue;
       rows.push({
@@ -3980,25 +4003,33 @@
   function parseMealRowsFromSummaryFixedLayout(grid, sourceLabel) {
     var safeGrid = Array.isArray(grid) ? grid : [];
     var headerRow = -1;
+    var cols = {
+      authNo: -1, empNo: -1, name: -1,
+      breakfast: -1, lunch: -1, dinner: -1, night: -1, snack: -1, night2: -1, total: -1,
+    };
     for (var r = 0; r < Math.min(safeGrid.length, 80); r++) {
       var row = safeGrid[r] || [];
-      var a = normalizeMealHeaderToken(getGridCellTextByIndex(row, 0)); // A 인증번호
-      var b = normalizeMealHeaderToken(getGridCellTextByIndex(row, 1)); // B 사원번호
-      var c = normalizeMealHeaderToken(getGridCellTextByIndex(row, 2)); // C 사원이름
-      var f = normalizeMealHeaderToken(getGridCellTextByIndex(row, 5)); // F 조식
-      var g = normalizeMealHeaderToken(getGridCellTextByIndex(row, 6)); // G 중식
-      var h = normalizeMealHeaderToken(getGridCellTextByIndex(row, 7)); // H 석식
-      var l = normalizeMealHeaderToken(getGridCellTextByIndex(row, 11)); // L 합계
-      if (
-        a.indexOf("인증번호") >= 0 &&
-        b.indexOf("사원번호") >= 0 &&
-        (c.indexOf("사원이름") >= 0 || c.indexOf("성명") >= 0 || c.indexOf("이름") >= 0) &&
-        f.indexOf("조식") >= 0 &&
-        g.indexOf("중식") >= 0 &&
-        h.indexOf("석식") >= 0 &&
-        l.indexOf("합계") >= 0
-      ) {
+      var local = {
+        authNo: -1, empNo: -1, name: -1,
+        breakfast: -1, lunch: -1, dinner: -1, night: -1, snack: -1, night2: -1, total: -1,
+      };
+      for (var c = 0; c < row.length; c++) {
+        var token = normalizeMealHeaderToken(row[c]);
+        if (!token) continue;
+        if (local.authNo < 0 && token.indexOf("인증번호") >= 0) local.authNo = c;
+        else if (local.empNo < 0 && token.indexOf("사원번호") >= 0) local.empNo = c;
+        else if (local.name < 0 && (token.indexOf("사원이름") >= 0 || token.indexOf("성명") >= 0 || token.indexOf("이름") >= 0)) local.name = c;
+        else if (local.breakfast < 0 && token.indexOf("조식") >= 0) local.breakfast = c;
+        else if (local.lunch < 0 && token.indexOf("중식") >= 0) local.lunch = c;
+        else if (local.dinner < 0 && token.indexOf("석식") >= 0) local.dinner = c;
+        else if (local.night < 0 && token === "야식") local.night = c;
+        else if (local.snack < 0 && token.indexOf("간식") >= 0) local.snack = c;
+        else if (local.night2 < 0 && token.indexOf("야식2") >= 0) local.night2 = c;
+        else if (local.total < 0 && token.indexOf("합계") >= 0) local.total = c;
+      }
+      if (local.authNo >= 0 && local.empNo >= 0 && local.name >= 0 && local.total >= 0) {
         headerRow = r;
+        cols = local;
         break;
       }
     }
@@ -4007,18 +4038,18 @@
     var rows = [];
     for (var rr = headerRow + 1; rr < safeGrid.length; rr++) {
       var line = safeGrid[rr] || [];
-      var authNo = getGridCellTextByIndex(line, 0); // A
-      var empNo = getGridCellTextByIndex(line, 1); // B
-      var name = getGridCellTextByIndex(line, 2); // C
+      var authNo = getGridCellTextByIndex(line, cols.authNo);
+      var empNo = getGridCellTextByIndex(line, cols.empNo);
+      var name = getGridCellTextByIndex(line, cols.name);
       var keyId = String(empNo || authNo || "");
       if (!name || !keyId || !/^\d+$/.test(keyId)) continue;
-      var breakfast = parseMealCountValue(getGridCellTextByIndex(line, 5)); // F
-      var lunch = parseMealCountValue(getGridCellTextByIndex(line, 6)); // G
-      var dinner = parseMealCountValue(getGridCellTextByIndex(line, 7)); // H
-      var night = parseMealCountValue(getGridCellTextByIndex(line, 8)); // I
-      var snack = parseMealCountValue(getGridCellTextByIndex(line, 9)); // J
-      var night2 = parseMealCountValue(getGridCellTextByIndex(line, 10)); // K
-      var total = parseMealCountValue(getGridCellTextByIndex(line, 11)); // L
+      var breakfast = parseMealCountValue(getGridCellTextByIndex(line, cols.breakfast));
+      var lunch = parseMealCountValue(getGridCellTextByIndex(line, cols.lunch));
+      var dinner = parseMealCountValue(getGridCellTextByIndex(line, cols.dinner));
+      var night = parseMealCountValue(getGridCellTextByIndex(line, cols.night));
+      var snack = parseMealCountValue(getGridCellTextByIndex(line, cols.snack));
+      var night2 = parseMealCountValue(getGridCellTextByIndex(line, cols.night2));
+      var total = parseMealCountValue(getGridCellTextByIndex(line, cols.total));
       rows.push({
         day: 0,
         dateText: "",
@@ -4043,21 +4074,22 @@
     var monthMatch = String(monthLabel || "").match(/^(\d+)월$/);
     var monthNumber = monthMatch ? Number(monthMatch[1]) : null;
     var headerRow = -1;
+    var cols = { day: -1, lunch: -1, dinner: -1, manual: -1, total: -1 };
     for (var r = 0; r < Math.min(safeGrid.length, 80); r++) {
       var row = safeGrid[r] || [];
-      var b = normalizeMealHeaderToken(getGridCellTextByIndex(row, 1)); // B 구분
-      var d = normalizeMealHeaderToken(getGridCellTextByIndex(row, 3)); // D 중식
-      var e = normalizeMealHeaderToken(getGridCellTextByIndex(row, 4)); // E 석식
-      var f = normalizeMealHeaderToken(getGridCellTextByIndex(row, 5)); // F 수기
-      var g = normalizeMealHeaderToken(getGridCellTextByIndex(row, 6)); // G 합계
-      if (
-        b.indexOf("구분") >= 0 &&
-        d.indexOf("중식") >= 0 &&
-        e.indexOf("석식") >= 0 &&
-        f.indexOf("수기") >= 0 &&
-        g.indexOf("합계") >= 0
-      ) {
+      var local = { day: -1, lunch: -1, dinner: -1, manual: -1, total: -1 };
+      for (var c = 0; c < row.length; c++) {
+        var token = normalizeMealHeaderToken(row[c]);
+        if (!token) continue;
+        if (local.day < 0 && (token === "구분" || token.indexOf("일자") >= 0 || token.indexOf("날짜") >= 0)) local.day = c;
+        else if (local.lunch < 0 && (token.indexOf("중식") >= 0 || token.indexOf("점심") >= 0)) local.lunch = c;
+        else if (local.dinner < 0 && (token.indexOf("석식") >= 0 || token.indexOf("저녁") >= 0)) local.dinner = c;
+        else if (local.manual < 0 && (token.indexOf("수기") >= 0 || token.indexOf("수동") >= 0)) local.manual = c;
+        else if (local.total < 0 && token.indexOf("합계") >= 0) local.total = c;
+      }
+      if (local.day >= 0 && local.lunch >= 0 && local.dinner >= 0 && local.total >= 0) {
         headerRow = r;
+        cols = local;
         break;
       }
     }
@@ -4066,13 +4098,13 @@
     var rows = [];
     for (var rr = headerRow + 1; rr < safeGrid.length; rr++) {
       var line = safeGrid[rr] || [];
-      var dayText = getGridCellTextByIndex(line, 1); // B
+      var dayText = getGridCellTextByIndex(line, cols.day);
       var day = parseMealDayValue(dayText, monthNumber);
       if (!day) continue;
-      var lunch = parseMealCountValue(getGridCellTextByIndex(line, 3)); // D
-      var dinner = parseMealCountValue(getGridCellTextByIndex(line, 4)); // E
-      var manual = parseMealCountValue(getGridCellTextByIndex(line, 5)); // F
-      var total = parseMealCountValue(getGridCellTextByIndex(line, 6)); // G
+      var lunch = parseMealCountValue(getGridCellTextByIndex(line, cols.lunch));
+      var dinner = parseMealCountValue(getGridCellTextByIndex(line, cols.dinner));
+      var manual = parseMealCountValue(getGridCellTextByIndex(line, cols.manual));
+      var total = parseMealCountValue(getGridCellTextByIndex(line, cols.total));
       rows.push({
         day: day,
         dateText: monthNumber ? (monthNumber + "월 " + day + "일") : String(day) + "일",
@@ -4241,9 +4273,6 @@
       if (!best || rows.length > best.rows.length) {
         best = { sheetName: name, rows: rows };
       }
-      if (preferred.length && i < preferred.length && rows.length > 0) {
-        return { sheetName: name, rows: rows };
-      }
     }
     if (!best || !best.rows.length) {
       if (sourceLabel === "summary" || sourceLabel === "daily" || sourceLabel === "count") {
@@ -4328,6 +4357,20 @@
       if (name) set[name] = true;
     }
     return set;
+  }
+
+  function hasClosingEmployeeNameMatch(nameToken, employeeNameSet) {
+    if (!nameToken || !employeeNameSet) return false;
+    if (employeeNameSet[nameToken]) return true;
+    var keys = Object.keys(employeeNameSet);
+    for (var i = 0; i < keys.length; i++) {
+      var key = keys[i];
+      if (!key) continue;
+      if (key === nameToken) return true;
+      if (nameToken.length >= 2 && key.indexOf(nameToken) >= 0) return true;
+      if (key.length >= 2 && nameToken.indexOf(key) >= 0) return true;
+    }
+    return false;
   }
 
   function analyzeClosingMealData(monthLabel, mealData) {
@@ -4580,11 +4623,23 @@
     }
 
     var monthDailyCount = 0;
-    Object.keys(dayTotalsDaily).forEach(function (k) { monthDailyCount += dayTotalsDaily[k] || 0; });
+    var monthDailyLunchDinnerCount = 0;
+    Object.keys(dayTotalsDaily).forEach(function (k) {
+      monthDailyCount += dayTotalsDaily[k] || 0;
+      var dayNum = Number(k) || 0;
+      if (!dayNum) return;
+      var dayLunchDinner = 0;
+      dailyRows.forEach(function (dr) {
+        if (dr.day === dayNum) {
+          dayLunchDinner += parseMealCountValue(dr.lunch) + parseMealCountValue(dr.dinner);
+        }
+      });
+      monthDailyLunchDinnerCount += dayLunchDinner;
+    });
     var monthSummaryCount = 0;
     Object.keys(personTotalsSummary).forEach(function (k) {
-      var s = personTotalsSummary[k] || { breakfast: 0, lunch: 0, dinner: 0 };
-      monthSummaryCount += (s.breakfast || 0) + (s.lunch || 0) + (s.dinner || 0);
+      var s = personTotalsSummary[k] || { total: 0 };
+      monthSummaryCount += parseMealCountValue(s.total);
     });
     var monthCountFileCount = 0;
     Object.keys(dayTotalsCount).forEach(function (k) { monthCountFileCount += dayTotalsCount[k] || 0; });
@@ -4611,13 +4666,13 @@
         name: "식수정산",
         message: "월 식수 " + monthCountFileCount + "식 × 단가 " + formatDisplayNumber(unitPrice) + "원 = " + formatDisplayNumber(calculatedAmount) + "원",
       });
-      if (monthDailyCount !== monthCountWithoutManual) {
+      if (monthDailyLunchDinnerCount !== monthCountWithoutManual) {
         issues.push({
           level: "warning",
           type: "month_total_mismatch",
           day: 0,
           name: "식수정산",
-          message: "월 총 식수 불일치 (일별 합계 " + monthDailyCount + ", 식수파일(수기제외) " + monthCountWithoutManual + ", 수기 " + monthManualCount + ")",
+          message: "월 총 식수 불일치 (일별 중+석 합계 " + monthDailyLunchDinnerCount + ", 식수파일(수기제외) " + monthCountWithoutManual + ", 수기 " + monthManualCount + ")",
         });
       }
     }
@@ -4640,6 +4695,7 @@
       if (row.name === "__DAY_TOTAL__") return;
       var baseKey = row.day + "|" + normalizeClosingSearchText(row.name);
       var nameToken = normalizeClosingSearchText(row.name);
+      var isEmployeeName = hasClosingEmployeeNameMatch(nameToken, employeeNameSet);
       var att = attendanceLookup[nameToken] && attendanceLookup[nameToken][row.day];
       var empMarker = employeeMarkerLookup[nameToken] && employeeMarkerLookup[nameToken][row.day];
       if (!att && empMarker) {
@@ -4663,7 +4719,7 @@
       if ((duplicateCounter[baseKey + "|dinner"] || 0) > 1) {
         issues.push({ level: "warning", type: "duplicate", day: row.day, name: row.name, message: "석식 중복 가능성(1회 초과) 확인 필요" });
       }
-      if (!att && !employeeNameSet[nameToken] && (row.breakfast > 0 || row.lunch > 0 || row.dinner > 0)) {
+      if (!att && !isEmployeeName && (row.breakfast > 0 || row.lunch > 0 || row.dinner > 0)) {
         issues.push({ level: "warning", type: "attendance_missing", day: row.day, name: row.name, message: "근무(급여) 기록이 없는데 식대가 입력됨" });
       }
       if (row.lunch > 0 && att && !att.fromEmployeeMarker) {
@@ -4671,7 +4727,7 @@
           issues.push({ level: "warning", type: "lunch_halfday", day: row.day, name: row.name, message: "반일 근무(오전퇴근/오후출근 추정)인데 중식이 입력됨" });
         }
       }
-      if (row.dinner > 0 && (!att || overtimeHours <= 0)) {
+      if (row.dinner > 0 && (!att || overtimeHours <= 0) && !(isEmployeeName && !att)) {
         issues.push({ level: "warning", type: "dinner_without_overtime", day: row.day, name: row.name, message: "연장/야근 기록 없이 석식이 입력됨" });
       }
     });
