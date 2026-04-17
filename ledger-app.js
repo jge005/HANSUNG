@@ -3651,6 +3651,7 @@
       if (!row || !row.length) continue;
 
       var day = null;
+      var dayCol = -1;
       var name = "";
       var mealType = "";
       var numericCells = [];
@@ -3659,7 +3660,10 @@
         var cellText = toTextCell(row[c]);
         if (!cellText) continue;
         var parsedDay = parseMealDayValue(cellText, monthNumber);
-        if (parsedDay && day == null) day = parsedDay;
+        if (parsedDay && day == null) {
+          day = parsedDay;
+          dayCol = c;
+        }
         if (!name && isLikelyMealNameText(cellText)) name = cellText;
         if (!mealType) mealType = parseMealTypeToken(cellText);
         var num = parseCalcNumber(cellText);
@@ -3681,6 +3685,7 @@
 
       if (mealType) {
         var numericCandidates = numericCells
+          .filter(function (n) { return n.col !== dayCol; })
           .map(function (n) { return parseMealCountValue(n.value); })
           .filter(function (n) { return n > 0 && n <= 200; });
         var oneCount = numericCandidates.length ? numericCandidates[0] : 1;
@@ -3689,6 +3694,7 @@
         else if (mealType === "dinner") dinner = oneCount;
       } else {
         var smallNums = numericCells
+          .filter(function (n) { return n.col !== dayCol; })
           .map(function (n) { return parseMealCountValue(n.value); })
           .filter(function (n) { return n > 0 && n <= 200; });
         if (smallNums.length >= 3) {
@@ -4194,15 +4200,15 @@
         var s = personTotalsSummary[key] || { name: "", breakfast: 0, lunch: 0, dinner: 0 };
         var dailyTotal = d.breakfast + d.lunch + d.dinner;
         var summaryTotal = s.breakfast + s.lunch + s.dinner;
-        if (dailyTotal !== summaryTotal || d.breakfast !== s.breakfast || d.lunch !== s.lunch || d.dinner !== s.dinner) {
+        if (dailyTotal !== summaryTotal) {
           issues.push({
             level: "warning",
             type: "summary_mismatch",
             day: 0,
             name: s.name || d.name || "",
             message:
-              "일별↔합계 불일치 (일별 조/중/석 " + d.breakfast + "/" + d.lunch + "/" + d.dinner +
-              ", 합계파일 " + s.breakfast + "/" + s.lunch + "/" + s.dinner + ")",
+              "일별↔합계 총수량 불일치 (일별 합계 " + dailyTotal +
+              ", 합계파일 합계 " + summaryTotal + ")",
           });
         }
       });
