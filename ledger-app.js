@@ -12053,7 +12053,11 @@
                 setClosingMealData(closingState.attendanceMonth, analyzed);
                 scheduleLedgerDraftSave();
                 render();
-                showAppToast(label + " 파일 분석을 완료했어요. 이상치 " + analyzed.issues.length + "건", analyzed.issues.length ? "warning" : "success");
+                if (parsed.summaryOnly) {
+                  showAppToast(label + " 파일은 집계형으로 인식되어 등록만 완료했어요. (일자 단위 대조는 식수 파일 기준)", "success");
+                } else {
+                  showAppToast(label + " 파일 분석을 완료했어요. 이상치 " + analyzed.issues.length + "건", analyzed.issues.length ? "warning" : "success");
+                }
               })
               .catch(function (err) {
                 console.error("식대 파일 분석 실패:", err);
