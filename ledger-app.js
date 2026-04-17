@@ -4247,6 +4247,34 @@
     return lookup;
   }
 
+  function buildClosingEmployeeMarkerLookupByMonth(monthLabel) {
+    var dayCount = getClosingDaysInMonth();
+    var lookup = {};
+    var rows = normalizeClosingEmployeeRows(getClosingEmployeeRows(monthLabel));
+    for (var i = 0; i < rows.length; i += closingEmployeeMarkers.length) {
+      var baseRow = rows[i] || {};
+      var nightRow = rows[i + 0] || {};   // 야근
+      var specialRow = rows[i + 1] || {}; // 특근
+      var lateRow = rows[i + 2] || {};    // 지각
+      var earlyRow = rows[i + 3] || {};   // 조퇴
+      var absentRow = rows[i + 4] || {};  // 결근
+      var nameToken = normalizeClosingSearchText(baseRow.employee || "");
+      if (!nameToken) continue;
+      if (!lookup[nameToken]) lookup[nameToken] = {};
+      for (var day = 1; day <= dayCount; day++) {
+        var field = "d" + day;
+        lookup[nameToken][day] = {
+          night: parseMealCountValue(nightRow[field]),
+          special: parseMealCountValue(specialRow[field]),
+          late: parseMealCountValue(lateRow[field]),
+          early: parseMealCountValue(earlyRow[field]),
+          absent: parseMealCountValue(absentRow[field]),
+        };
+      }
+    }
+    return lookup;
+  }
+
   function analyzeClosingMealData(monthLabel, mealData) {
     var data = normalizeClosingMealMonthData(mealData);
     var dailyRowsRaw = normalizeClosingMealRows(data.sources && data.sources.daily);
@@ -4551,10 +4579,24 @@
     });
 
     var attendanceLookup = buildClosingAttendanceLookupByMonth(monthLabel);
+    var employeeMarkerLookup = buildClosingEmployeeMarkerLookupByMonth(monthLabel);
     rows.forEach(function (row) {
       if (row.name === "__DAY_TOTAL__") return;
       var baseKey = row.day + "|" + normalizeClosingSearchText(row.name);
-      var att = attendanceLookup[normalizeClosingSearchText(row.name)] && attendanceLookup[normalizeClosingSearchText(row.name)][row.day];
+      var nameToken = normalizeClosingSearchText(row.name);
+      var att = attendanceLookup[nameToken] && attendanceLookup[nameToken][row.day];
+      var empMarker = employeeMarkerLookup[nameToken] && employeeMarkerLookup[nameToken][row.day];
+      if (!att && empMarker) {
+        var isAbsent = parseMealCountValue(empMarker.absent) > 0;
+        att = {
+          normal: isAbsent ? 0 : 8,
+          overtime: 0,
+          night: parseMealCountValue(empMarker.night) > 0 ? 2.5 : 0,
+          special: parseMealCountValue(empMarker.special) > 0 ? 1 : 0,
+          total: isAbsent ? 0 : 8,
+          fromEmployeeMarker: true,
+        };
+      }
       var overtimeHours = att ? (att.overtime + att.night + att.special) : 0;
       if ((duplicateCounter[baseKey + "|breakfast"] || 0) > 1) {
         issues.push({ level: "warning", type: "duplicate", day: row.day, name: row.name, message: "조식 중복 가능성(1회 초과) 확인 필요" });
@@ -4568,7 +4610,7 @@
       if (!att && (row.breakfast > 0 || row.lunch > 0 || row.dinner > 0)) {
         issues.push({ level: "warning", type: "attendance_missing", day: row.day, name: row.name, message: "근무(급여) 기록이 없는데 식대가 입력됨" });
       }
-      if (row.lunch > 0 && att) {
+      if (row.lunch > 0 && att && !att.fromEmployeeMarker) {
         if (att.normal > 0 && att.normal <= 4.31 && overtimeHours <= 0) {
           issues.push({ level: "warning", type: "lunch_halfday", day: row.day, name: row.name, message: "반일 근무(오전퇴근/오후출근 추정)인데 중식이 입력됨" });
         }
