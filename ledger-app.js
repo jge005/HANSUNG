@@ -41,6 +41,7 @@
   ];
   var closingTabs = [
     { key: "attendance", label: "근무(급여)", icon: "sheet" },
+    { key: "meal", label: "식대", icon: "clipboard" },
     { key: "salesclose", label: "매출마감", icon: "scroll" },
     { key: "purchaseclose", label: "매입마감", icon: "folder" },
   ];
@@ -147,6 +148,7 @@
     salesCloseRowsByMonth: {},
     purchaseCloseRowsByMonth: {},
     attendanceSearch: "",
+    mealDataByMonth: {},
   };
   var activeLedgerKind = "sales";
   var salesLedgerBundle = null;
@@ -1676,6 +1678,9 @@
     if (!closingState.purchaseCloseRowsByMonth || typeof closingState.purchaseCloseRowsByMonth !== "object") {
       closingState.purchaseCloseRowsByMonth = {};
     }
+    if (!closingState.mealDataByMonth || typeof closingState.mealDataByMonth !== "object") {
+      closingState.mealDataByMonth = {};
+    }
     if (typeof closingState.attendanceSearch !== "string") {
       closingState.attendanceSearch = "";
     }
@@ -1770,6 +1775,97 @@
     ensureClosingAttendanceState();
     var key = monthLabel || closingState.attendanceMonth;
     closingState.purchaseCloseRowsByMonth[key] = normalizeClosingPurchaseCloseRows(rows);
+  }
+
+  function emptyClosingMealMonthData() {
+    return {
+      files: {
+        summary: "",
+        daily: "",
+        count: "",
+      },
+      sources: {
+        summary: [],
+        daily: [],
+        count: [],
+      },
+      rows: [],
+      issues: [],
+      updatedAt: "",
+    };
+  }
+
+  function normalizeClosingMealRows(rows, maxRows) {
+    var source = Array.isArray(rows) ? rows : [];
+    var normalized = source.map(function (row) {
+      var day = Number((row && row.day) || 0);
+      if (!isFinite(day) || day < 1) day = 0;
+      var breakfast = parseCalcNumber(row && row.breakfast);
+      var lunch = parseCalcNumber(row && row.lunch);
+      var dinner = parseCalcNumber(row && row.dinner);
+      return {
+        day: day,
+        dateText: String((row && row.dateText) || ""),
+        name: String((row && row.name) || ""),
+        breakfast: breakfast == null ? 0 : breakfast,
+        lunch: lunch == null ? 0 : lunch,
+        dinner: dinner == null ? 0 : dinner,
+        source: String((row && row.source) || ""),
+      };
+    }).filter(function (row) {
+      return row.day > 0 && row.name;
+    });
+    if (maxRows && normalized.length > maxRows) {
+      normalized = normalized.slice(0, maxRows);
+    }
+    return normalized;
+  }
+
+  function normalizeClosingMealIssues(issues) {
+    var source = Array.isArray(issues) ? issues : [];
+    return source.map(function (issue) {
+      return {
+        level: String((issue && issue.level) || "warning"),
+        type: String((issue && issue.type) || ""),
+        day: Number((issue && issue.day) || 0) || 0,
+        name: String((issue && issue.name) || ""),
+        message: String((issue && issue.message) || ""),
+      };
+    });
+  }
+
+  function normalizeClosingMealMonthData(data) {
+    var base = emptyClosingMealMonthData();
+    var next = data && typeof data === "object" ? data : {};
+    var files = next.files && typeof next.files === "object" ? next.files : {};
+    var sources = next.sources && typeof next.sources === "object" ? next.sources : {};
+    base.files.summary = String(files.summary || "");
+    base.files.daily = String(files.daily || "");
+    base.files.count = String(files.count || "");
+    base.sources.summary = normalizeClosingMealRows(sources.summary, 450);
+    base.sources.daily = normalizeClosingMealRows(sources.daily, 450);
+    base.sources.count = normalizeClosingMealRows(sources.count, 450);
+    base.rows = normalizeClosingMealRows(next.rows, 1200);
+    base.issues = normalizeClosingMealIssues(next.issues).slice(0, 600);
+    base.updatedAt = String(next.updatedAt || "");
+    return base;
+  }
+
+  function getClosingMealData(monthLabel) {
+    ensureClosingAttendanceState();
+    var key = monthLabel || closingState.attendanceMonth;
+    if (!closingState.mealDataByMonth[key] || typeof closingState.mealDataByMonth[key] !== "object") {
+      closingState.mealDataByMonth[key] = emptyClosingMealMonthData();
+    } else {
+      closingState.mealDataByMonth[key] = normalizeClosingMealMonthData(closingState.mealDataByMonth[key]);
+    }
+    return closingState.mealDataByMonth[key];
+  }
+
+  function setClosingMealData(monthLabel, data) {
+    ensureClosingAttendanceState();
+    var key = monthLabel || closingState.attendanceMonth;
+    closingState.mealDataByMonth[key] = normalizeClosingMealMonthData(data);
   }
 
   function getClosingEmployeeRows(monthLabel) {
@@ -3043,6 +3139,300 @@
       rowRefsByNo: parsed.rowRefsByNo,
       headerMap: headerMap,
     };
+  }
+
+  function normalizeMealHeaderToken(value) {
+    return normalizeSalesCloseHeaderToken(value);
+  }
+
+  function parseMealCountValue(value) {
+    var text = String(value == null ? "" : value).trim();
+    if (!text) return 0;
+    if (/^(O|○|Y|YES|가능|식사)$/i.test(text)) return 1;
+    if (/^(X|N|NO|미식)$/i.test(text)) return 0;
+    var num = parseCalcNumber(text);
+    return num == null ? 0 : num;
+  }
+
+  function parseMealDayValue(value, monthNumber) {
+    var text = String(value == null ? "" : value).trim();
+    if (!text) return null;
+    var month = Number(monthNumber || 0);
+    var m;
+    m = text.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+    if (m) {
+      var matchedMonth = Number(m[2]);
+      var matchedDay = Number(m[3]);
+      if ((!month || matchedMonth === month) && matchedDay >= 1 && matchedDay <= 31) return matchedDay;
+    }
+    m = text.match(/^(\d{1,2})[-/.](\d{1,2})$/);
+    if (m) {
+      var slashMonth = Number(m[1]);
+      var slashDay = Number(m[2]);
+      if ((!month || slashMonth === month) && slashDay >= 1 && slashDay <= 31) return slashDay;
+    }
+    m = text.match(/^(\d{1,2})\s*월\s*(\d{1,2})\s*일?$/);
+    if (m) {
+      var koreanMonth = Number(m[1]);
+      var koreanDay = Number(m[2]);
+      if ((!month || koreanMonth === month) && koreanDay >= 1 && koreanDay <= 31) return koreanDay;
+    }
+    m = text.match(/^(\d{1,2})일$/);
+    if (m) {
+      var onlyDay = Number(m[1]);
+      if (onlyDay >= 1 && onlyDay <= 31) return onlyDay;
+    }
+    var numeric = Number(text);
+    if (isFinite(numeric) && numeric > 20000 && numeric < 80000 && window.XLSX && window.XLSX.SSF && window.XLSX.SSF.parse_date_code) {
+      var parsedDate = window.XLSX.SSF.parse_date_code(Math.floor(numeric));
+      if (parsedDate && parsedDate.m && parsedDate.d) {
+        if (!month || parsedDate.m === month) return parsedDate.d;
+      }
+    }
+    return null;
+  }
+
+  function parseMealTypeToken(text) {
+    var token = normalizeMealHeaderToken(text);
+    if (!token) return "";
+    if (token.indexOf("조식") >= 0 || token.indexOf("아침") >= 0) return "breakfast";
+    if (token.indexOf("중식") >= 0 || token.indexOf("점심") >= 0) return "lunch";
+    if (token.indexOf("석식") >= 0 || token.indexOf("저녁") >= 0 || token.indexOf("야식") >= 0) return "dinner";
+    return "";
+  }
+
+  function findMealHeaderMapFromGrid(grid) {
+    var safeGrid = Array.isArray(grid) ? grid : [];
+    for (var r = 0; r < Math.min(safeGrid.length, 60); r++) {
+      var row = safeGrid[r] || [];
+      var cols = {
+        date: -1,
+        name: -1,
+        breakfast: -1,
+        lunch: -1,
+        dinner: -1,
+        mealType: -1,
+        count: -1,
+      };
+      var score = 0;
+      for (var c = 0; c < row.length; c++) {
+        var token = normalizeMealHeaderToken(row[c]);
+        if (!token) continue;
+        if (cols.date < 0 && (token.indexOf("일자") >= 0 || token.indexOf("날짜") >= 0 || token.indexOf("이용일") >= 0 || token.indexOf("사용일") >= 0)) {
+          cols.date = c; score++; continue;
+        }
+        if (cols.name < 0 && (token.indexOf("이름") >= 0 || token.indexOf("성명") >= 0 || token.indexOf("사원명") >= 0 || token.indexOf("직원명") >= 0)) {
+          cols.name = c; score++; continue;
+        }
+        if (cols.breakfast < 0 && (token.indexOf("조식") >= 0 || token.indexOf("아침") >= 0)) {
+          cols.breakfast = c; score++; continue;
+        }
+        if (cols.lunch < 0 && (token.indexOf("중식") >= 0 || token.indexOf("점심") >= 0)) {
+          cols.lunch = c; score++; continue;
+        }
+        if (cols.dinner < 0 && (token.indexOf("석식") >= 0 || token.indexOf("저녁") >= 0 || token.indexOf("야식") >= 0)) {
+          cols.dinner = c; score++; continue;
+        }
+        if (cols.mealType < 0 && (token.indexOf("식사구분") >= 0 || token === "구분" || token.indexOf("식사") >= 0 || token.indexOf("메뉴") >= 0)) {
+          cols.mealType = c; score++; continue;
+        }
+        if (cols.count < 0 && (token.indexOf("식수") >= 0 || token.indexOf("수량") >= 0 || token.indexOf("횟수") >= 0 || token.indexOf("인원") >= 0 || token.indexOf("건수") >= 0)) {
+          cols.count = c; score++; continue;
+        }
+      }
+      if (cols.date >= 0 && cols.name >= 0 && (cols.breakfast >= 0 || cols.lunch >= 0 || cols.dinner >= 0 || cols.mealType >= 0) && score >= 3) {
+        return { rowIndex: r, cols: cols };
+      }
+    }
+    return null;
+  }
+
+  function parseMealRecordsFromGrid(grid, monthLabel, sourceLabel) {
+    var monthMatch = String(monthLabel || "").match(/^(\d+)월$/);
+    var monthNumber = monthMatch ? Number(monthMatch[1]) : null;
+    var headerMap = findMealHeaderMapFromGrid(grid);
+    if (!headerMap) return [];
+    var cols = headerMap.cols || {};
+    var records = [];
+    for (var r = headerMap.rowIndex + 1; r < grid.length; r++) {
+      var row = grid[r] || [];
+      var name = toTextCell(cols.name >= 0 ? row[cols.name] : "");
+      if (!name) continue;
+      var day = parseMealDayValue(cols.date >= 0 ? row[cols.date] : "", monthNumber);
+      if (!day) continue;
+      var breakfast = 0;
+      var lunch = 0;
+      var dinner = 0;
+      if (cols.breakfast >= 0 || cols.lunch >= 0 || cols.dinner >= 0) {
+        breakfast = cols.breakfast >= 0 ? parseMealCountValue(row[cols.breakfast]) : 0;
+        lunch = cols.lunch >= 0 ? parseMealCountValue(row[cols.lunch]) : 0;
+        dinner = cols.dinner >= 0 ? parseMealCountValue(row[cols.dinner]) : 0;
+      } else if (cols.mealType >= 0) {
+        var type = parseMealTypeToken(row[cols.mealType]);
+        var count = cols.count >= 0 ? parseMealCountValue(row[cols.count]) : 1;
+        if (type === "breakfast") breakfast = count;
+        else if (type === "lunch") lunch = count;
+        else if (type === "dinner") dinner = count;
+      }
+      if (!breakfast && !lunch && !dinner) continue;
+      records.push({
+        day: day,
+        dateText: monthNumber ? (monthNumber + "월 " + day + "일") : String(day) + "일",
+        name: name,
+        breakfast: breakfast,
+        lunch: lunch,
+        dinner: dinner,
+        source: String(sourceLabel || ""),
+      });
+    }
+    return records;
+  }
+
+  function analyzeMealWorkbookBuffer(arrayBuffer, monthLabel, sourceLabel) {
+    var workbook = readWorkbookFromArrayBuffer(arrayBuffer);
+    var names = Array.isArray(workbook && workbook.SheetNames) ? workbook.SheetNames : [];
+    if (!names.length) throw new Error("엑셀 시트를 찾지 못했습니다.");
+    var best = null;
+    for (var i = 0; i < names.length; i++) {
+      var name = names[i];
+      var grid = getWorkbookSheetGrid(workbook, name);
+      var rows = parseMealRecordsFromGrid(grid, monthLabel, sourceLabel);
+      if (!best || rows.length > best.rows.length) {
+        best = { sheetName: name, rows: rows };
+      }
+    }
+    if (!best || !best.rows.length) {
+      throw new Error("식대 파일에서 날짜/이름/식수 데이터를 찾지 못했습니다.");
+    }
+    return best;
+  }
+
+  function buildClosingAttendanceLookupByMonth(monthLabel) {
+    var dayCount = getClosingDaysInMonth();
+    var lookup = {};
+    closingOutsourceVendors.forEach(function (vendorItem) {
+      var vendor = vendorItem && vendorItem.value ? vendorItem.value : "";
+      if (!vendor) return;
+      var rows = normalizeClosingOutsourceRows(getClosingOutsourceRows(monthLabel, vendor));
+      for (var i = 0; i < rows.length; i += closingOutsourceMarkers.length) {
+        var normalRow = rows[i] || {};
+        var overRow = rows[i + 1] || {};
+        var nightRow = rows[i + 2] || {};
+        var specialRow = rows[i + 3] || {};
+        var nameToken = normalizeClosingSearchText(normalRow.employee || "");
+        if (!nameToken) continue;
+        if (!lookup[nameToken]) lookup[nameToken] = {};
+        for (var day = 1; day <= dayCount; day++) {
+          var field = "d" + day;
+          var normal = parseCalcNumber(normalRow[field]) || 0;
+          var overtime = parseCalcNumber(overRow[field]) || 0;
+          var night = parseCalcNumber(nightRow[field]) || 0;
+          var special = parseCalcNumber(specialRow[field]) || 0;
+          lookup[nameToken][day] = {
+            normal: normal,
+            overtime: overtime,
+            night: night,
+            special: special,
+            total: normal + overtime + night + special,
+          };
+        }
+      }
+    });
+    return lookup;
+  }
+
+  function analyzeClosingMealData(monthLabel, mealData) {
+    var data = normalizeClosingMealMonthData(mealData);
+    var sourceKeys = ["summary", "daily", "count"];
+    var merged = {};
+    var issues = [];
+    var duplicateCounter = {};
+    var hasAnySource = false;
+    sourceKeys.forEach(function (key) {
+      var rows = normalizeClosingMealRows(data.sources[key]);
+      if (rows.length) hasAnySource = true;
+      rows.forEach(function (row) {
+        var nameToken = normalizeClosingSearchText(row.name);
+        if (!row.day || !nameToken) return;
+        var keyBase = row.day + "|" + nameToken;
+        if (!merged[keyBase]) {
+          merged[keyBase] = {
+            day: row.day,
+            dateText: row.dateText || "",
+            name: row.name,
+            breakfast: 0,
+            lunch: 0,
+            dinner: 0,
+            source: key,
+          };
+        }
+        merged[keyBase].breakfast += parseMealCountValue(row.breakfast);
+        merged[keyBase].lunch += parseMealCountValue(row.lunch);
+        merged[keyBase].dinner += parseMealCountValue(row.dinner);
+        duplicateCounter[keyBase + "|breakfast"] = (duplicateCounter[keyBase + "|breakfast"] || 0) + (parseMealCountValue(row.breakfast) > 0 ? 1 : 0);
+        duplicateCounter[keyBase + "|lunch"] = (duplicateCounter[keyBase + "|lunch"] || 0) + (parseMealCountValue(row.lunch) > 0 ? 1 : 0);
+        duplicateCounter[keyBase + "|dinner"] = (duplicateCounter[keyBase + "|dinner"] || 0) + (parseMealCountValue(row.dinner) > 0 ? 1 : 0);
+      });
+    });
+    if (!hasAnySource) {
+      normalizeClosingMealRows(data.rows).forEach(function (row) {
+        var keyBase = row.day + "|" + normalizeClosingSearchText(row.name);
+        if (!merged[keyBase]) {
+          merged[keyBase] = {
+            day: row.day,
+            dateText: row.dateText || "",
+            name: row.name,
+            breakfast: 0,
+            lunch: 0,
+            dinner: 0,
+            source: "saved",
+          };
+        }
+        merged[keyBase].breakfast += parseMealCountValue(row.breakfast);
+        merged[keyBase].lunch += parseMealCountValue(row.lunch);
+        merged[keyBase].dinner += parseMealCountValue(row.dinner);
+      });
+    }
+
+    var rows = Object.keys(merged).map(function (key) {
+      return merged[key];
+    }).sort(function (a, b) {
+      if (a.day !== b.day) return a.day - b.day;
+      return String(a.name || "").localeCompare(String(b.name || ""), "ko");
+    });
+
+    var attendanceLookup = buildClosingAttendanceLookupByMonth(monthLabel);
+    rows.forEach(function (row) {
+      var baseKey = row.day + "|" + normalizeClosingSearchText(row.name);
+      var att = attendanceLookup[normalizeClosingSearchText(row.name)] && attendanceLookup[normalizeClosingSearchText(row.name)][row.day];
+      var overtimeHours = att ? (att.overtime + att.night + att.special) : 0;
+      if ((duplicateCounter[baseKey + "|breakfast"] || 0) > 1 || row.breakfast > 1) {
+        issues.push({ level: "warning", type: "duplicate", day: row.day, name: row.name, message: "조식 중복 가능성(1회 초과) 확인 필요" });
+      }
+      if ((duplicateCounter[baseKey + "|lunch"] || 0) > 1 || row.lunch > 1) {
+        issues.push({ level: "warning", type: "duplicate", day: row.day, name: row.name, message: "중식 중복 가능성(1회 초과) 확인 필요" });
+      }
+      if ((duplicateCounter[baseKey + "|dinner"] || 0) > 1 || row.dinner > 1) {
+        issues.push({ level: "warning", type: "duplicate", day: row.day, name: row.name, message: "석식 중복 가능성(1회 초과) 확인 필요" });
+      }
+      if (!att && (row.breakfast > 0 || row.lunch > 0 || row.dinner > 0)) {
+        issues.push({ level: "warning", type: "attendance_missing", day: row.day, name: row.name, message: "근무(급여) 기록이 없는데 식대가 입력됨" });
+      }
+      if (row.lunch > 0 && att) {
+        if (att.normal > 0 && att.normal <= 4.31 && overtimeHours <= 0) {
+          issues.push({ level: "warning", type: "lunch_halfday", day: row.day, name: row.name, message: "반일 근무(오전퇴근/오후출근 추정)인데 중식이 입력됨" });
+        }
+      }
+      if (row.dinner > 0 && (!att || overtimeHours <= 0)) {
+        issues.push({ level: "warning", type: "dinner_without_overtime", day: row.day, name: row.name, message: "연장/야근 기록 없이 석식이 입력됨" });
+      }
+    });
+
+    data.rows = normalizeClosingMealRows(rows, 1200);
+    data.issues = normalizeClosingMealIssues(issues).slice(0, 600);
+    data.sources = { summary: [], daily: [], count: [] };
+    data.updatedAt = new Date().toISOString();
+    return data;
   }
 
   function setSalesCloseSyncMeta(meta) {
@@ -5593,6 +5983,16 @@
           });
           return cloned;
         })(),
+        mealDataByMonth: (function () {
+          var source = closingState.mealDataByMonth && typeof closingState.mealDataByMonth === "object"
+            ? closingState.mealDataByMonth
+            : {};
+          var cloned = {};
+          Object.keys(source).forEach(function (key) {
+            cloned[key] = normalizeClosingMealMonthData(source[key]);
+          });
+          return cloned;
+        })(),
       },
       updatedAt: new Date().toISOString(),
     };
@@ -5793,6 +6193,12 @@
       if (closingData.purchaseCloseRowsByMonth && typeof closingData.purchaseCloseRowsByMonth === "object") {
         Object.keys(closingData.purchaseCloseRowsByMonth).forEach(function (key) {
           closingState.purchaseCloseRowsByMonth[key] = normalizeClosingPurchaseCloseRows(closingData.purchaseCloseRowsByMonth[key]);
+        });
+      }
+      closingState.mealDataByMonth = {};
+      if (closingData.mealDataByMonth && typeof closingData.mealDataByMonth === "object") {
+        Object.keys(closingData.mealDataByMonth).forEach(function (key) {
+          closingState.mealDataByMonth[key] = normalizeClosingMealMonthData(closingData.mealDataByMonth[key]);
         });
       }
     }
@@ -9502,6 +9908,101 @@
     );
   }
 
+  function renderClosingMealTab() {
+    ensureClosingAttendanceState();
+    var mealData = getClosingMealData(closingState.attendanceMonth);
+    var monthOptions = getClosingMonthOptions().map(function (option) {
+      return '<option value="' + escapeAttr(option.value) + '"' + (option.value === closingState.attendanceMonth ? " selected" : "") + ">" + escapeHtml(option.label) + "</option>";
+    }).join("");
+    var totalBreakfast = 0;
+    var totalLunch = 0;
+    var totalDinner = 0;
+    (mealData.rows || []).forEach(function (row) {
+      totalBreakfast += parseMealCountValue(row.breakfast);
+      totalLunch += parseMealCountValue(row.lunch);
+      totalDinner += parseMealCountValue(row.dinner);
+    });
+    var issueRows = (mealData.issues || []).map(function (issue) {
+      return (
+        '<tr>' +
+          '<td class="center">' + escapeHtml(String(issue.day || "")) + '</td>' +
+          '<td>' + escapeHtml(issue.name || "") + '</td>' +
+          '<td>' + escapeHtml(issue.message || "") + '</td>' +
+        '</tr>'
+      );
+    }).join("");
+    var dataRows = (mealData.rows || []).slice(0, 180).map(function (row) {
+      return (
+        '<tr>' +
+          '<td class="center">' + escapeHtml(String(row.day || "")) + '</td>' +
+          '<td>' + escapeHtml(row.name || "") + '</td>' +
+          '<td class="right">' + escapeHtml(formatDisplayNumber(row.breakfast || 0)) + '</td>' +
+          '<td class="right">' + escapeHtml(formatDisplayNumber(row.lunch || 0)) + '</td>' +
+          '<td class="right">' + escapeHtml(formatDisplayNumber(row.dinner || 0)) + '</td>' +
+        '</tr>'
+      );
+    }).join("");
+
+    return (
+      '<div class="closing-page">' +
+        '<div class="closing-card closing-sheet-card">' +
+          '<div class="closing-sheet-toolbar">' +
+            '<div>' +
+              '<div class="closing-title">' + icon("clipboard") + ' 식대</div>' +
+              '<div class="closing-copy">월별 식대 파일(합계/일별/식수)을 올리면 중복 및 근무(급여) 대조 이상치를 자동 확인합니다.</div>' +
+            '</div>' +
+            '<div class="closing-inline-controls">' +
+              '<label class="closing-inline-label" for="closing-meal-month">대상월</label>' +
+              '<select id="closing-meal-month" class="closing-inline-select">' + monthOptions + '</select>' +
+              '<button type="button" class="soft-btn" id="closing-meal-upload-summary">합계 업로드</button>' +
+              '<button type="button" class="soft-btn" id="closing-meal-upload-daily">일별 업로드</button>' +
+              '<button type="button" class="soft-btn" id="closing-meal-upload-count">식수 업로드</button>' +
+              '<button type="button" class="soft-btn active-filter" id="closing-meal-run">분석 실행</button>' +
+              '<input type="file" id="closing-meal-file-summary" accept=".xlsx,.xls" style="display:none" />' +
+              '<input type="file" id="closing-meal-file-daily" accept=".xlsx,.xls" style="display:none" />' +
+              '<input type="file" id="closing-meal-file-count" accept=".xlsx,.xls" style="display:none" />' +
+            '</div>' +
+          '</div>' +
+          '<div class="closing-rule-list closing-rule-list-inline">' +
+            '<div class="closing-rule-item"><strong>합계:</strong> ' + escapeHtml(mealData.files.summary || "미업로드") + '</div>' +
+            '<div class="closing-rule-item"><strong>일별:</strong> ' + escapeHtml(mealData.files.daily || "미업로드") + '</div>' +
+            '<div class="closing-rule-item"><strong>식수:</strong> ' + escapeHtml(mealData.files.count || "미업로드") + '</div>' +
+          '</div>' +
+          '<div class="closing-matrix-summarybar" style="margin-top:10px">' +
+            '<div class="closing-matrix-badge">행수 <strong>' + escapeHtml(String((mealData.rows || []).length)) + '</strong></div>' +
+            '<div class="closing-matrix-badge">조식 <strong>' + escapeHtml(formatDisplayNumber(totalBreakfast)) + '</strong></div>' +
+            '<div class="closing-matrix-badge">중식 <strong>' + escapeHtml(formatDisplayNumber(totalLunch)) + '</strong></div>' +
+            '<div class="closing-matrix-badge">석식 <strong>' + escapeHtml(formatDisplayNumber(totalDinner)) + '</strong></div>' +
+            '<div class="closing-matrix-badge strong">이상치 <strong>' + escapeHtml(String((mealData.issues || []).length)) + '</strong></div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="closing-card closing-card-wide">' +
+          '<div class="closing-title">' + icon("scroll") + ' 이상치 체크 결과</div>' +
+          '<div class="closing-table-simple-wrap">' +
+            '<table class="closing-table-simple">' +
+              '<thead><tr><th class="center" style="width:70px">일자</th><th style="width:180px">이름</th><th>내용</th></tr></thead>' +
+              '<tbody>' +
+                (issueRows || '<tr><td colspan="3" class="center muted">이상치가 없습니다.</td></tr>') +
+              '</tbody>' +
+            '</table>' +
+          '</div>' +
+        '</div>' +
+        '<div class="closing-card closing-card-wide">' +
+          '<div class="closing-title">' + icon("sheet") + ' 식대 데이터 미리보기</div>' +
+          '<div class="closing-table-simple-wrap">' +
+            '<table class="closing-table-simple">' +
+              '<thead><tr><th class="center" style="width:70px">일자</th><th style="width:180px">이름</th><th class="right">조식</th><th class="right">중식</th><th class="right">석식</th></tr></thead>' +
+              '<tbody>' +
+                (dataRows || '<tr><td colspan="5" class="center muted">업로드된 데이터가 없습니다.</td></tr>') +
+              '</tbody>' +
+            '</table>' +
+          '</div>' +
+          ((mealData.rows || []).length > 180 ? '<div class="closing-copy">미리보기는 180행까지만 표시됩니다.</div>' : '') +
+        '</div>' +
+      '</div>'
+    );
+  }
+
   function getClosingInputCellInfo(input) {
     if (!(input instanceof HTMLInputElement)) return null;
     var outsourceRow = input.getAttribute("data-outsource-row");
@@ -10667,6 +11168,8 @@
       var closingBody = "";
       if (state.closingSubTab === "attendance") {
         closingBody = renderClosingAttendanceTab();
+      } else if (state.closingSubTab === "meal") {
+        closingBody = renderClosingMealTab();
       } else if (state.closingSubTab === "salesclose") {
         closingBody = renderClosingSalesCloseTab();
       } else if (state.closingSubTab === "purchaseclose") {
@@ -10987,6 +11490,68 @@
               });
             }
           }
+        }
+      } else if (state.closingSubTab === "meal") {
+        var wasClosingMealLoaded = ledgerState.loadedFromFirebase;
+        ensureLedgerLoadedFromFirebase().then(function () {
+          if (state.mainTab === "closing" && state.closingSubTab === "meal" && !wasClosingMealLoaded) {
+            render();
+          }
+        });
+        var closeMonthSelectForMeal = document.getElementById("closing-meal-month");
+        if (closeMonthSelectForMeal) {
+          closeMonthSelectForMeal.value = closingState.attendanceMonth || defaultClosingMonthLabel();
+          closeMonthSelectForMeal.addEventListener("change", function () {
+            closingState.attendanceMonth = closeMonthSelectForMeal.value || defaultClosingMonthLabel();
+            ensureClosingAttendanceState();
+            scheduleLedgerDraftSave();
+            render();
+          });
+        }
+        function bindMealUploadButton(buttonId, inputId, sourceKey, label) {
+          var button = document.getElementById(buttonId);
+          var input = document.getElementById(inputId);
+          if (!button || !input) return;
+          button.addEventListener("click", function () {
+            input.click();
+          });
+          input.addEventListener("change", function () {
+            var file = input.files && input.files[0];
+            if (!file) return;
+            readFileAsArrayBuffer(file)
+              .then(function (buffer) {
+                var parsed = analyzeMealWorkbookBuffer(buffer, closingState.attendanceMonth, sourceKey);
+                var mealData = getClosingMealData(closingState.attendanceMonth);
+                mealData.files[sourceKey] = file.name || "";
+                mealData.sources[sourceKey] = normalizeClosingMealRows(parsed.rows);
+                var analyzed = analyzeClosingMealData(closingState.attendanceMonth, mealData);
+                setClosingMealData(closingState.attendanceMonth, analyzed);
+                scheduleLedgerDraftSave();
+                render();
+                showAppToast(label + " 파일 분석을 완료했어요. 이상치 " + analyzed.issues.length + "건", analyzed.issues.length ? "warning" : "success");
+              })
+              .catch(function (err) {
+                console.error("식대 파일 분석 실패:", err);
+                showAppToast(err && err.message ? err.message : "식대 파일 분석에 실패했어요.", "warning");
+              })
+              .finally(function () {
+                input.value = "";
+              });
+          });
+        }
+        bindMealUploadButton("closing-meal-upload-summary", "closing-meal-file-summary", "summary", "합계");
+        bindMealUploadButton("closing-meal-upload-daily", "closing-meal-file-daily", "daily", "일별");
+        bindMealUploadButton("closing-meal-upload-count", "closing-meal-file-count", "count", "식수");
+        var mealRunButton = document.getElementById("closing-meal-run");
+        if (mealRunButton) {
+          mealRunButton.addEventListener("click", function () {
+            var mealData = getClosingMealData(closingState.attendanceMonth);
+            var analyzed = analyzeClosingMealData(closingState.attendanceMonth, mealData);
+            setClosingMealData(closingState.attendanceMonth, analyzed);
+            scheduleLedgerDraftSave();
+            render();
+            showAppToast("식대 대조 분석을 다시 실행했어요. 이상치 " + analyzed.issues.length + "건", analyzed.issues.length ? "warning" : "success");
+          });
         }
       } else if (state.closingSubTab === "salesclose") {
         var closeMonthSelectForSales = document.getElementById("closing-close-month");
