@@ -103,6 +103,12 @@
     localSaveTimer: null,
     saveRetryTimer: null,
     loadRetryTimer: null,
+    saveInFlight: false,
+    saveQueued: false,
+    lastSaveStartedAt: 0,
+    lastSaveFinishedAt: 0,
+    saveRevision: 0,
+    lastSavedRevision: 0,
     dirty: false,
     localUpdatedAt: null,
     cloudOffline: false,
@@ -3547,18 +3553,21 @@
       var matchedMonth = Number(m[2]);
       var matchedDay = Number(m[3]);
       if ((!month || matchedMonth === month) && matchedDay >= 1 && matchedDay <= 31) return matchedDay;
+      if (matchedDay >= 1 && matchedDay <= 31) return matchedDay;
     }
     m = sanitized.match(/^(\d{1,2})[-/.](\d{1,2})(?:\D.*)?$/);
     if (m) {
       var slashMonth = Number(m[1]);
       var slashDay = Number(m[2]);
       if ((!month || slashMonth === month) && slashDay >= 1 && slashDay <= 31) return slashDay;
+      if (slashDay >= 1 && slashDay <= 31) return slashDay;
     }
     m = sanitized.match(/^(\d{1,2})월(\d{1,2})일?(?:\D.*)?$/);
     if (m) {
       var koreanMonth = Number(m[1]);
       var koreanDay = Number(m[2]);
       if ((!month || koreanMonth === month) && koreanDay >= 1 && koreanDay <= 31) return koreanDay;
+      if (koreanDay >= 1 && koreanDay <= 31) return koreanDay;
     }
     m = sanitized.match(/^(\d{1,2})일(?:\D.*)?$/);
     if (m) {
@@ -3570,9 +3579,27 @@
       var parsedDate = window.XLSX.SSF.parse_date_code(Math.floor(numeric));
       if (parsedDate && parsedDate.m && parsedDate.d) {
         if (!month || parsedDate.m === month) return parsedDate.d;
+        return parsedDate.d;
       }
     }
     return null;
+  }
+
+  function extractMonthNumberFromText(text) {
+    var raw = String(text || "");
+    if (!raw) return 0;
+    var m = raw.match(/(?:^|[^0-9])(\d{1,2})\s*월/);
+    if (m) {
+      var mm = Number(m[1]);
+      if (mm >= 1 && mm <= 12) return mm;
+    }
+    m = raw.match(/(?:^|[^0-9])(\d{1,2})[-/.](\d{1,2})(?:[-/.]\d{1,2})?/);
+    if (m) {
+      var a = Number(m[1]);
+      var b = Number(m[2]);
+      if (a >= 1 && a <= 12 && b >= 1 && b <= 31) return a;
+    }
+    return 0;
   }
 
   function parseMealTypeToken(text) {
@@ -4051,6 +4078,7 @@
     var hasSummarySource = summaryRowsRaw.length > 0;
     var hasDailySource = dailyRowsRaw.length > 0;
     var hasCountSource = countRowsRaw.length > 0;
+    var selectedMonthNumber = parseMonthLabelNumber(monthLabel);
 
     var merged = {};
     var issues = [];
@@ -4121,6 +4149,27 @@
         day: 0,
         name: "식수파일",
         message: "식수 파일 데이터가 없어 날짜별/금액 대조를 수행할 수 없습니다.",
+      });
+    }
+    if (selectedMonthNumber > 0) {
+      var fileMonthChecks = [
+        { key: "summary", label: "합계파일" },
+        { key: "daily", label: "일별파일" },
+        { key: "count", label: "식수파일" },
+      ];
+      fileMonthChecks.forEach(function (item) {
+        var fileName = String((data.files && data.files[item.key]) || "");
+        if (!fileName) return;
+        var detected = extractMonthNumberFromText(fileName);
+        if (detected > 0 && detected !== selectedMonthNumber) {
+          issues.push({
+            level: "warning",
+            type: "file_month_mismatch",
+            day: 0,
+            name: item.label,
+            message: item.label + " 월(" + detected + "월)과 현재 대상월(" + selectedMonthNumber + "월)이 다릅니다.",
+          });
+        }
       });
     }
 
@@ -7130,13 +7179,24 @@
     return (
       code.indexOf("unavailable") >= 0 ||
       code.indexOf("failed-precondition") >= 0 ||
+      code.indexOf("resource-exhausted") >= 0 ||
       message.indexOf("offline") >= 0 ||
-      message.indexOf("network") >= 0
+      message.indexOf("network") >= 0 ||
+      message.indexOf("queued writes") >= 0 ||
+      message.indexOf("resource-exhausted") >= 0
     );
   }
 
   function queueLedgerSaveRetry(delay) {
+    if (ledgerState.saveInFlight) {
+      ledgerState.saveQueued = true;
+      return;
+    }
     if (ledgerState.saveRetryTimer) clearTimeout(ledgerState.saveRetryTimer);
+    if (ledgerState.saveTimer) {
+      clearTimeout(ledgerState.saveTimer);
+      ledgerState.saveTimer = null;
+    }
     ledgerState.saveRetryTimer = setTimeout(function () {
       ledgerState.saveRetryTimer = null;
       if (ledgerState.dirty) saveLedgerDraftToFirebase();
@@ -7160,7 +7220,7 @@
       ledgerState.cloudOffline = false;
       ledgerState.loadingPromise = null;
       ensureLedgerLoadedFromFirebase();
-      if (ledgerState.dirty) saveLedgerDraftToFirebase();
+      if (ledgerState.dirty) scheduleLedgerDraftSave(1800);
     });
 
     document.addEventListener("visibilitychange", function () {
@@ -7169,7 +7229,7 @@
         ledgerState.loadingPromise = null;
         ensureLedgerLoadedFromFirebase();
       }
-      if (ledgerState.dirty) saveLedgerDraftToFirebase();
+      if (ledgerState.dirty) scheduleLedgerDraftSave(1800);
     });
 
     window.addEventListener("beforeunload", function () {
@@ -7181,6 +7241,11 @@
     attempts = attempts || 0;
     ensureDraftId();
     flushLocalLedgerBackup();
+
+    if (ledgerState.saveInFlight) {
+      ledgerState.saveQueued = true;
+      return;
+    }
 
     if (!ledgerState.initialLoadFinished && ledgerState.loadingPromise) {
       queueLedgerSaveRetry(1200);
@@ -7196,32 +7261,67 @@
       return;
     }
 
+    var now = Date.now();
+    var minInterval = ledgerState.cloudOffline ? 7000 : 3200;
+    if (
+      ledgerState.lastSaveStartedAt &&
+      now - ledgerState.lastSaveStartedAt < minInterval
+    ) {
+      queueLedgerSaveRetry(minInterval - (now - ledgerState.lastSaveStartedAt) + 180);
+      return;
+    }
+
+    ledgerState.saveInFlight = true;
+    ledgerState.saveQueued = false;
+    ledgerState.lastSaveStartedAt = Date.now();
+    var sendingRevision = ledgerState.saveRevision;
+
     window.firebaseFirestoreApi
       .saveWorkDraft(ledgerState.draftId, getLedgerPayload())
       .then(function () {
+        ledgerState.saveInFlight = false;
+        ledgerState.lastSaveFinishedAt = Date.now();
+        ledgerState.lastSavedRevision = Math.max(ledgerState.lastSavedRevision || 0, sendingRevision || 0);
         ledgerState.loadedFromFirebase = true;
-        ledgerState.dirty = false;
+        ledgerState.dirty = (ledgerState.saveRevision || 0) > (sendingRevision || 0);
         ledgerState.cloudOffline = false;
+        if (ledgerState.saveQueued || ledgerState.dirty) {
+          queueLedgerSaveRetry(2200);
+        }
       })
       .catch(function (err) {
+        ledgerState.saveInFlight = false;
+        ledgerState.lastSaveFinishedAt = Date.now();
         ledgerState.cloudOffline = isRetryableFirestoreError(err);
         if (ledgerState.cloudOffline) {
           console.warn("Firestore 저장 지연, 재시도 예정:", err);
-          queueLedgerSaveRetry(3000);
+          var code = err && err.code ? String(err.code) : "";
+          var message = err && err.message ? String(err.message).toLowerCase() : "";
+          var heavyQueue = code.indexOf("resource-exhausted") >= 0 || message.indexOf("queued writes") >= 0;
+          queueLedgerSaveRetry(heavyQueue ? 10000 : 3500);
           return;
         }
         console.error("Firestore 저장 실패:", err);
       });
   }
 
-  function scheduleLedgerDraftSave() {
+  function scheduleLedgerDraftSave(delay) {
     ledgerState.dirty = true;
+    ledgerState.saveRevision = (ledgerState.saveRevision || 0) + 1;
     scheduleLocalLedgerBackup(700);
+
+    var wait = parseCalcNumber(delay);
+    if (!(wait > 0)) wait = 1200;
+    if (ledgerState.saveInFlight) {
+      ledgerState.saveQueued = true;
+      if (wait < 2200) wait = 2200;
+    }
 
     if (ledgerState.saveTimer) clearTimeout(ledgerState.saveTimer);
     ledgerState.saveTimer = setTimeout(function () {
+      ledgerState.saveTimer = null;
       saveLedgerDraftToFirebase();
-    }, 1200);
+    }, wait);
   }
 
   function ensureLedgerLoadedFromFirebase() {
