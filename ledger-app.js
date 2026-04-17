@@ -891,13 +891,13 @@
     if (!values.length) return '<div class="manager-trend-bars"></div>';
     var max = values.reduce(function (m, v) { return v > m ? v : m; }, 0);
     if (max <= 0) max = 1;
-    var width = Math.max(96, values.length * 15 + 14);
+    var width = Math.max(120, values.length * 22 + 18);
     var height = 30;
     var innerTop = 3;
     var innerBottom = 4;
     var usableHeight = height - innerTop - innerBottom;
-    var barW = 3;
-    var step = values.length > 1 ? Math.max(11, Math.floor((width - 12) / values.length)) : 13;
+    var barW = 4;
+    var step = values.length > 1 ? Math.max(16, Math.floor((width - 16) / values.length)) : 18;
     var linePoints = [];
     var bars = [];
     for (var i = 0; i < values.length; i++) {
@@ -935,7 +935,7 @@
     }
     return (
       '<div class="manager-trend-bars">' +
-      '<svg viewBox="0 0 ' + width + " " + height + '" preserveAspectRatio="none" aria-hidden="true">' +
+      '<svg viewBox="0 0 ' + width + " " + height + '" preserveAspectRatio="xMidYMid meet" aria-hidden="true">' +
       '<polyline class="manager-trend-line" points="' + polylinePoints + '" />' +
       bars.join("") +
       circles.join("") +
@@ -955,7 +955,7 @@
     if (amountMax <= 0) amountMax = 1;
 
     var width = Math.max(560, monthLabels.length * 82 + 90);
-    var height = 188;
+    var height = 196;
     var left = 22;
     var right = 18;
     var top = 14;
@@ -963,7 +963,7 @@
     var plotW = Math.max(100, width - left - right);
     var plotH = Math.max(90, height - top - bottom);
     var step = monthLabels.length > 1 ? (plotW / (monthLabels.length - 1)) : 0;
-    var barW = Math.min(10, Math.max(5, Math.floor(plotW / (monthLabels.length * 3.2))));
+    var barW = Math.min(16, Math.max(8, Math.floor(plotW / (monthLabels.length * 2.2))));
 
     var gridLines = [];
     for (var g = 0; g <= 4; g++) {
@@ -1010,7 +1010,7 @@
           '<span class="manager-main-legend-item"><i class="bar"></i>월 합계</span>' +
         '</div>' +
         '<div class="manager-main-chart-wrap">' +
-          '<svg viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none" aria-hidden="true">' +
+          '<svg viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="xMidYMid meet" aria-hidden="true">' +
             gridLines.join("") +
             '<line x1="' + left + '" y1="' + (top + plotH) + '" x2="' + (left + plotW) + '" y2="' + (top + plotH) + '" class="manager-main-axis" />' +
             bars.join("") +
