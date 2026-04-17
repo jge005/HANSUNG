@@ -531,22 +531,35 @@
     return String((doc && doc.key) || "") + "|" + String((doc && doc.expiresAt) || "");
   }
 
-  function maybeNotifyManagerDocs() {
+  function maybeNotifyManagerDocs(options) {
+    options = options || {};
+    var force = !!options.force;
+    var withToastFallback = !!options.withToastFallback;
     if (!managerState.alertsEnabled) return;
-    if (!("Notification" in window) || Notification.permission !== "granted") return;
     var leadDays = Number(managerState.alertLeadDays || 30);
     var docs = normalizeManagerDocs(managerState.docs).filter(function (doc) {
       return doc.daysLeft <= leadDays;
     }).sort(function (a, b) { return a.daysLeft - b.daysLeft; });
-    if (!docs.length) return;
+    if (!docs.length) {
+      if (withToastFallback) showAppToast("현재 알림 대상이 없습니다.", "success");
+      return;
+    }
+    if (!("Notification" in window) || Notification.permission !== "granted") {
+      if (withToastFallback) {
+        var preview = docs.slice(0, 2).map(function (doc) { return doc.title; }).filter(Boolean).join(", ");
+        showAppToast("시스템 알림 권한이 없어 앱 내 안내만 표시합니다. 대상: " + (preview || String(docs.length) + "건"), "warning");
+      }
+      return;
+    }
     var today = new Date();
     var todayKey = today.getFullYear() + "-" + String(today.getMonth() + 1).padStart(2, "0") + "-" + String(today.getDate()).padStart(2, "0");
     var sent = 0;
+    var createFailed = false;
     for (var i = 0; i < docs.length; i++) {
       var doc = docs[i];
       var id = buildManagerNotifyId(doc);
       var stamp = managerState.notifiedMap[id] || "";
-      if (stamp === todayKey) continue;
+      if (!force && stamp === todayKey) continue;
       var body = doc.daysLeft < 0
         ? (doc.title + " 성적서가 만료되었습니다. 갱신본 요청이 필요합니다.")
         : (doc.title + " 성적서가 " + doc.daysLeft + "일 후 만료됩니다. 업체 갱신본 요청이 필요합니다.");
@@ -554,10 +567,19 @@
         new Notification("유해물질 성적서 알림", { body: body, tag: "hazard-doc-" + id });
         managerState.notifiedMap[id] = todayKey;
         sent++;
-      } catch (err) {}
+      } catch (err) {
+        createFailed = true;
+      }
       if (sent >= 3) break;
     }
     if (sent > 0) scheduleLedgerDraftSave();
+    if (withToastFallback && sent <= 0) {
+      if (createFailed) {
+        showAppToast("알림 권한은 있지만 시스템 알림 표시가 실패했습니다. Windows 알림 설정을 확인해주세요.", "warning");
+      } else {
+        showAppToast("오늘 이미 알림을 보낸 대상입니다. 테스트는 알림 테스트 버튼으로 강제 실행 가능합니다.", "warning");
+      }
+    }
   }
 
   function startManagerAlertLoop() {
@@ -688,8 +710,12 @@
       '<button type="button" class="soft-btn" id="btn-manager-connect-folder">폴더 연결</button>' +
       '<button type="button" class="soft-btn" id="btn-manager-rescan">다시 스캔</button>' +
       '<button type="button" class="soft-btn" id="btn-manager-notify-perm">시스템 알림 권한</button>' +
+      '<button type="button" class="soft-btn" id="btn-manager-test-notify">알림 테스트</button>' +
       '<label class="manager-inline-control"><input type="checkbox" id="manager-alerts-enabled" ' + (managerState.alertsEnabled ? "checked" : "") + "> 알림 사용</label>" +
       '<label class="manager-inline-control">임박 기준 <input type="number" min="1" max="120" step="1" id="manager-alert-days" value="' + escapeAttr(String(Number(managerState.alertLeadDays || 30))) + '"> 일</label>' +
+      "</div>" +
+      '<div class="manager-head-meta" style="margin-top:8px;margin-bottom:0">' +
+      "<span>알림 상태: " + escapeHtml((("Notification" in window) ? Notification.permission : "unsupported")) + "</span>" +
       "</div>" +
       "</div>" +
 
@@ -9568,6 +9594,7 @@
         rescanBtn.addEventListener("click", function () {
           refreshManagerDocs({ toast: true, persistScan: true })
             .then(function () {
+              maybeNotifyManagerDocs({ force: true, withToastFallback: true });
               render();
             })
             .catch(function (err) {
@@ -9582,7 +9609,7 @@
             .then(function (perm) {
               if (perm === "granted") {
                 showAppToast("시스템 알림이 허용되었습니다.", "success");
-                maybeNotifyManagerDocs();
+                maybeNotifyManagerDocs({ force: true, withToastFallback: true });
               } else if (perm === "denied") {
                 showAppToast("브라우저 설정에서 알림을 허용해주세요.", "warning");
               } else {
@@ -9599,7 +9626,7 @@
         alertsEnabledEl.addEventListener("change", function () {
           managerState.alertsEnabled = !!alertsEnabledEl.checked;
           scheduleLedgerDraftSave();
-          maybeNotifyManagerDocs();
+          maybeNotifyManagerDocs({ withToastFallback: true });
         });
       }
       var alertDaysEl = document.getElementById("manager-alert-days");
@@ -9610,6 +9637,31 @@
           managerState.alertLeadDays = next;
           scheduleLedgerDraftSave();
           render();
+        });
+      }
+      var testNotifyBtn = document.getElementById("btn-manager-test-notify");
+      if (testNotifyBtn) {
+        testNotifyBtn.addEventListener("click", function () {
+          function runTest() {
+            maybeNotifyManagerDocs({ force: true, withToastFallback: true });
+          }
+          if (!("Notification" in window) || Notification.permission === "granted") {
+            runTest();
+            return;
+          }
+          ensureManagerNotificationPermission()
+            .then(function (perm) {
+              if (perm === "granted") {
+                runTest();
+              } else if (perm === "denied") {
+                showAppToast("시스템 알림 권한이 차단되어 있어요. 브라우저/Windows에서 허용해주세요.", "warning");
+              } else {
+                showAppToast("알림 권한 요청이 취소되었습니다.", "warning");
+              }
+            })
+            .catch(function (err) {
+              showAppToast(err && err.message ? err.message : "알림 테스트에 실패했어요.", "warning");
+            });
         });
       }
       return;
