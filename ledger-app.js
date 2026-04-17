@@ -1981,6 +1981,63 @@
     return extraHours;
   }
 
+  function getClosingOutsourceGroupStart(rowIndex) {
+    var size = closingOutsourceMarkers.length || 4;
+    var idx = Number(rowIndex) || 0;
+    return idx - (idx % size);
+  }
+
+  function getClosingOutsourceCellFlags(rowText, warningFlag) {
+    var normalText = String(rowText || "").trim();
+    var normalNum = parseCalcNumber(normalText);
+    return {
+      isWarning: !!warningFlag && !normalText,
+      isCaution: !!normalText && (normalNum == null || normalNum < 8),
+    };
+  }
+
+  function updateClosingOutsourceWarningsForManualInput(rows, warnings, rowIndex, field) {
+    if (!/^d\d+$/.test(String(field || ""))) return;
+    var day = Number(String(field).slice(1));
+    if (!isFinite(day) || day < 1 || day > 31) return;
+    var groupStart = getClosingOutsourceGroupStart(rowIndex);
+    var markerOffset = rowIndex - groupStart;
+    if (markerOffset !== 0) return;
+    var warningKey = groupStart + ":" + field;
+    var text = String(rows[rowIndex] && rows[rowIndex][field] || "").trim();
+    if (text) {
+      delete warnings[warningKey];
+      return;
+    }
+    var warningLimit = getClosingWarningDayLimit();
+    if (day > warningLimit || isClosingWeekend(day)) {
+      delete warnings[warningKey];
+      return;
+    }
+    warnings[warningKey] = true;
+  }
+
+  function syncClosingOutsourceNormalRowDom(outsourceWrap, rowIndex, rows, warnings) {
+    if (!outsourceWrap) return;
+    var daysInMonth = getClosingDaysInMonth();
+    var groupStart = getClosingOutsourceGroupStart(rowIndex);
+    for (var day = 1; day <= daysInMonth; day++) {
+      var field = "d" + day;
+      var input = outsourceWrap.querySelector(
+        'input[data-outsource-row="' + groupStart + '"][data-outsource-field="' + field + '"]'
+      );
+      if (!(input instanceof HTMLInputElement)) continue;
+      var value = String(rows[groupStart] && rows[groupStart][field] || "");
+      if (input.value !== value) input.value = value;
+      var warningKey = groupStart + ":" + field;
+      var flags = getClosingOutsourceCellFlags(value, !!(warnings && warnings[warningKey]));
+      var td = input.closest("td");
+      if (!td) continue;
+      td.classList.toggle("warning", flags.isWarning);
+      td.classList.toggle("caution", flags.isCaution);
+    }
+  }
+
   function calculateClosingOutsourcePerfectAttendancePay(block, warnings, groupStart, daysInMonth, hourlyWage) {
     var normalRow = block && block[0] ? block[0] : {};
     var dayLimit = Math.min(daysInMonth, getClosingWarningDayLimit());
@@ -10681,7 +10738,20 @@
                   next[field] = target.value;
                   return next;
                 })());
+                var warnings = getClosingOutsourceWarnings(closingState.attendanceMonth, closingState.outsourceVendor);
+                updateClosingOutsourceWarningsForManualInput(rows, warnings, rowIndex, field);
+                if (/^d\d+$/.test(String(field || ""))) {
+                  var groupStart = getClosingOutsourceGroupStart(rowIndex);
+                  var block = rows.slice(groupStart, groupStart + closingOutsourceMarkers.length);
+                  var meta = getClosingOutsourceMeta(closingState.attendanceMonth, closingState.outsourceVendor);
+                  var lockDay = getClosingOutsourceLockDay(meta, getClosingDaysInMonth());
+                  calculateClosingOutsourceWeeklyHolidayHours(block, warnings, groupStart, getClosingDaysInMonth(), true, lockDay);
+                }
                 setClosingOutsourceRows(closingState.attendanceMonth, closingState.outsourceVendor, rows);
+                setClosingOutsourceWarnings(closingState.attendanceMonth, closingState.outsourceVendor, warnings);
+                if (/^d\d+$/.test(String(field || ""))) {
+                  syncClosingOutsourceNormalRowDom(outsourceWrap, rowIndex, rows, warnings);
+                }
                 scheduleLedgerDraftSave();
                 return;
               }
