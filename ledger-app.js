@@ -4708,7 +4708,35 @@
       var isEmployeeName = hasClosingEmployeeNameMatch(nameToken, employeeNameSet);
       var att = findClosingLookupByNameAndDay(attendanceLookup, nameToken, row.day);
       var empMarker = findClosingLookupByNameAndDay(employeeMarkerLookup, nameToken, row.day);
-      if (!att && empMarker) {
+      if (empMarker && isEmployeeName) {
+        // 정직원 이름으로 매칭된 경우에는 정직원 수기표(야근/특근/결근)를 우선 반영한다.
+        var empIsAbsent = parseMealCountValue(empMarker.absent) > 0;
+        var baseNormal = empIsAbsent ? 0 : 8;
+        var baseNight = parseMealCountValue(empMarker.night) > 0 ? 2.5 : 0;
+        var baseSpecial = parseMealCountValue(empMarker.special) > 0 ? 1 : 0;
+        if (att) {
+          att = {
+            normal: empIsAbsent ? 0 : Math.max(parseCalcNumber(att.normal) || 0, baseNormal),
+            overtime: parseCalcNumber(att.overtime) || 0,
+            night: Math.max(parseCalcNumber(att.night) || 0, baseNight),
+            special: Math.max(parseCalcNumber(att.special) || 0, baseSpecial),
+            total: (empIsAbsent ? 0 : Math.max(parseCalcNumber(att.normal) || 0, baseNormal))
+              + (parseCalcNumber(att.overtime) || 0)
+              + Math.max(parseCalcNumber(att.night) || 0, baseNight)
+              + Math.max(parseCalcNumber(att.special) || 0, baseSpecial),
+            fromEmployeeMarker: true,
+          };
+        } else {
+          att = {
+            normal: baseNormal,
+            overtime: 0,
+            night: baseNight,
+            special: baseSpecial,
+            total: baseNormal + baseNight + baseSpecial,
+            fromEmployeeMarker: true,
+          };
+        }
+      } else if (!att && empMarker) {
         var isAbsent = parseMealCountValue(empMarker.absent) > 0;
         att = {
           normal: isAbsent ? 0 : 8,
