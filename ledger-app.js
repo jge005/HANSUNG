@@ -893,19 +893,19 @@
     if (!values.length) return '<div class="manager-trend-bars"></div>';
     var max = values.reduce(function (m, v) { return v > m ? v : m; }, 0);
     if (max <= 0) max = 1;
-    var width = Math.max(120, values.length * 22 + 18);
-    var height = 30;
-    var innerTop = 3;
-    var innerBottom = 4;
+    var width = Math.max(220, values.length * 34 + 26);
+    var height = 46;
+    var innerTop = 4;
+    var innerBottom = 6;
     var usableHeight = height - innerTop - innerBottom;
-    var barW = 4;
-    var step = values.length > 1 ? Math.max(16, Math.floor((width - 16) / values.length)) : 18;
+    var barW = 8;
+    var step = values.length > 1 ? Math.max(24, Math.floor((width - 18) / values.length)) : 26;
     var linePoints = [];
     var bars = [];
     for (var i = 0; i < values.length; i++) {
       var v = values[i] || 0;
       var prev = i > 0 ? (values[i - 1] || 0) : 0;
-      var x = 5 + i * step;
+      var x = 6 + i * step;
       var h = Math.max(2, Math.round((v / max) * usableHeight));
       var y = height - innerBottom - h;
       var cx = x + Math.floor(barW / 2);
@@ -913,7 +913,7 @@
       var title = formatManagerDeltaTitle(labels && labels[i], v, prev);
       var barClass = v >= prev ? "manager-trend-bar up" : "manager-trend-bar down";
       bars.push(
-        '<rect x="' + x + '" y="' + y + '" width="' + barW + '" height="' + h + '" class="' + barClass + '" rx="1.2" ry="1.2">' +
+        '<rect x="' + x + '" y="' + y + '" width="' + barW + '" height="' + h + '" class="' + barClass + '" rx="1.8" ry="1.8">' +
           "<title>" + escapeHtml(title) + "</title>" +
         "</rect>"
       );
@@ -925,12 +925,12 @@
     for (var j = 0; j < values.length; j++) {
       var cv = values[j] || 0;
       var cp = j > 0 ? (values[j - 1] || 0) : 0;
-      var cx = 5 + j * step + Math.floor(barW / 2);
+      var cx = 6 + j * step + Math.floor(barW / 2);
       var ch = Math.max(2, Math.round((cv / max) * usableHeight));
       var cy = height - innerBottom - ch;
       var ctitle = formatManagerDeltaTitle(labels && labels[j], cv, cp);
       circles.push(
-        '<circle cx="' + cx + '" cy="' + cy + '" r="0.95" class="manager-trend-dot">' +
+        '<circle cx="' + cx + '" cy="' + cy + '" r="1.3" class="manager-trend-dot">' +
           "<title>" + escapeHtml(ctitle) + "</title>" +
         "</circle>"
       );
@@ -956,16 +956,16 @@
     var amountMax = amountSeries.reduce(function (m, v) { return v > m ? v : m; }, 0);
     if (amountMax <= 0) amountMax = 1;
 
-    var width = Math.max(960, monthLabels.length * 120 + 180);
-    var height = 320;
+    var width = Math.max(760, monthLabels.length * 92 + 120);
+    var height = 220;
     var left = 22;
     var right = 18;
-    var top = 18;
-    var bottom = 44;
+    var top = 14;
+    var bottom = 32;
     var plotW = Math.max(100, width - left - right);
     var plotH = Math.max(90, height - top - bottom);
     var step = monthLabels.length > 1 ? (plotW / (monthLabels.length - 1)) : 0;
-    var barW = Math.min(34, Math.max(14, Math.floor(plotW / (monthLabels.length * 1.55))));
+    var barW = Math.min(22, Math.max(10, Math.floor(plotW / (monthLabels.length * 2.15))));
 
     var gridLines = [];
     for (var g = 0; g <= 4; g++) {
@@ -1073,7 +1073,7 @@
       '<div class="manager-table-card">' +
       '<div class="manager-table-wrap manager-trend-table-wrap">' +
       '<table class="manager-table manager-trend-table">' +
-      "<thead><tr><th style=\"width:260px\">업체명</th><th style=\"min-width:520px\">월별 추이</th><th style=\"width:140px\">당월</th><th style=\"width:140px\">전월</th><th style=\"width:140px\">증감</th><th style=\"width:120px\">증감률</th></tr></thead>" +
+      "<thead><tr><th style=\"width:260px\">업체명</th><th style=\"min-width:760px\">월별 추이</th><th style=\"width:140px\">당월</th><th style=\"width:140px\">전월</th><th style=\"width:140px\">증감</th><th style=\"width:120px\">증감률</th></tr></thead>" +
       "<tbody>" +
       (topRows || '<tr><td colspan="6" class="manager-empty">표시할 업체 데이터가 없습니다.</td></tr>') +
       "</tbody></table></div>" +
@@ -3826,9 +3826,15 @@
         day: day,
         dateText: monthNumber ? (monthNumber + "월 " + day + "일") : String(day) + "일",
         name: "__DAY_TOTAL__",
+        keyId: "",
         breakfast: 0,
-        lunch: lunch + manual,
+        lunch: lunch,
         dinner: dinner,
+        night: 0,
+        snack: 0,
+        night2: 0,
+        manual: manual,
+        total: total > 0 ? total : (lunch + dinner + manual),
         source: String(sourceLabel || "") + (manual > 0 ? ":manual" : ""),
       });
     }
@@ -3906,8 +3912,7 @@
         b.indexOf("인증일시") >= 0 &&
         (e.indexOf("사원이름") >= 0 || e.indexOf("성명") >= 0 || e.indexOf("이름") >= 0) &&
         j.indexOf("중식") >= 0 &&
-        k.indexOf("석식") >= 0 &&
-        (p.indexOf("건수") >= 0 || p === "")
+        k.indexOf("석식") >= 0
       ) {
         headerRow = r;
         break;
@@ -4191,13 +4196,32 @@
     var workbook = readWorkbookFromArrayBuffer(arrayBuffer);
     var names = Array.isArray(workbook && workbook.SheetNames) ? workbook.SheetNames : [];
     if (!names.length) throw new Error("엑셀 시트를 찾지 못했습니다.");
+    var preferred = [];
+    var others = [];
+    names.forEach(function (name) {
+      var token = normalizeMealHeaderToken(name);
+      var matched = false;
+      if (sourceLabel === "daily") {
+        matched = token.indexOf("식수관리상세") >= 0 || token.indexOf("상세") >= 0;
+      } else if (sourceLabel === "summary") {
+        matched = token.indexOf("식수관리") >= 0 && token.indexOf("상세") < 0;
+      } else if (sourceLabel === "count") {
+        matched = token === "한성" || token.indexOf("식수") >= 0;
+      }
+      if (matched) preferred.push(name);
+      else others.push(name);
+    });
+    var orderedNames = preferred.concat(others);
     var best = null;
-    for (var i = 0; i < names.length; i++) {
-      var name = names[i];
+    for (var i = 0; i < orderedNames.length; i++) {
+      var name = orderedNames[i];
       var grid = getWorkbookSheetGrid(workbook, name);
       var rows = parseMealRecordsFromGrid(grid, monthLabel, sourceLabel, name);
       if (!best || rows.length > best.rows.length) {
         best = { sheetName: name, rows: rows };
+      }
+      if (preferred.length && i < preferred.length && rows.length > 0) {
+        return { sheetName: name, rows: rows };
       }
     }
     if (!best || !best.rows.length) {
@@ -4273,6 +4297,16 @@
       }
     }
     return lookup;
+  }
+
+  function buildClosingEmployeeNameSetByMonth(monthLabel) {
+    var rows = normalizeClosingEmployeeRows(getClosingEmployeeRows(monthLabel));
+    var set = {};
+    for (var i = 0; i < rows.length; i += closingEmployeeMarkers.length) {
+      var name = normalizeClosingSearchText((rows[i] && rows[i].employee) || "");
+      if (name) set[name] = true;
+    }
+    return set;
   }
 
   function analyzeClosingMealData(monthLabel, mealData) {
@@ -4580,6 +4614,7 @@
 
     var attendanceLookup = buildClosingAttendanceLookupByMonth(monthLabel);
     var employeeMarkerLookup = buildClosingEmployeeMarkerLookupByMonth(monthLabel);
+    var employeeNameSet = buildClosingEmployeeNameSetByMonth(monthLabel);
     rows.forEach(function (row) {
       if (row.name === "__DAY_TOTAL__") return;
       var baseKey = row.day + "|" + normalizeClosingSearchText(row.name);
@@ -4607,7 +4642,7 @@
       if ((duplicateCounter[baseKey + "|dinner"] || 0) > 1) {
         issues.push({ level: "warning", type: "duplicate", day: row.day, name: row.name, message: "석식 중복 가능성(1회 초과) 확인 필요" });
       }
-      if (!att && (row.breakfast > 0 || row.lunch > 0 || row.dinner > 0)) {
+      if (!att && !employeeNameSet[nameToken] && (row.breakfast > 0 || row.lunch > 0 || row.dinner > 0)) {
         issues.push({ level: "warning", type: "attendance_missing", day: row.day, name: row.name, message: "근무(급여) 기록이 없는데 식대가 입력됨" });
       }
       if (row.lunch > 0 && att && !att.fromEmployeeMarker) {
