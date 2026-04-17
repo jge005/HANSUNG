@@ -49,6 +49,7 @@
     { key: "due", label: "만료임박", icon: "scroll" },
     { key: "expired", label: "만료됨", icon: "folder" },
     { key: "recent", label: "최근스캔", icon: "clipboard" },
+    { key: "certsheet", label: "증명서시트", icon: "sheet" },
   ];
 
   var icons = {
@@ -124,9 +125,8 @@
     docs: [],
     undatedFolders: [],
     folderLabel: "",
-    certFolderLabel: "",
     lastScanAt: "",
-    certLastScanAt: "",
+    certSheetRows: [],
     alertsEnabled: true,
     alertLeadDays: 30,
     notifiedMap: {},
@@ -264,7 +264,6 @@
   };
   var closingProtectOriginalExcel = true;
   var managerDocDirHandle = null;
-  var managerCertDirHandle = null;
   var managerAlertTimer = null;
   var managerScanInFlight = false;
   var closingHandleDbPromise = null;
@@ -368,6 +367,21 @@
     return source.map(function (name) { return String(name || ""); }).filter(Boolean);
   }
 
+  function normalizeManagerCertSheetRows(rows) {
+    var source = Array.isArray(rows) ? rows : [];
+    return source.map(function (row) {
+      var name = String((row && row.name) || "").trim();
+      var modifiedAtRaw = String((row && row.modifiedAt) || "").trim();
+      var modifiedAt = /^\d{4}-\d{2}-\d{2}$/.test(modifiedAtRaw) ? modifiedAtRaw : parseManagerIssuedDateFromName(modifiedAtRaw);
+      var note = String((row && row.note) || "").trim();
+      return {
+        name: name,
+        modifiedAt: modifiedAt || "",
+        note: note,
+      };
+    });
+  }
+
   function normalizeManagerKey(name) {
     return String(name || "").toLowerCase().replace(/\s+/g, "").replace(/[()[\]{}\-_,.]/g, "");
   }
@@ -426,6 +440,28 @@
     if (daysLeft <= 7) return "urgent";
     if (daysLeft <= 30) return "due";
     return "normal";
+  }
+
+  function getManagerCertSheetDocs() {
+    return normalizeManagerCertSheetRows(managerState.certSheetRows).filter(function (row) {
+      return row.name && row.modifiedAt;
+    }).map(function (row) {
+      var expiresAt = addYearsIsoDate(row.modifiedAt, 1);
+      var daysLeft = calcDaysLeftFromIso(expiresAt);
+      return {
+        key: "certsheet|" + normalizeManagerKey(row.name + "|" + row.modifiedAt),
+        title: row.name,
+        latestFolder: "증명서 시트",
+        sourceType: "certsheet",
+        sourceLabel: "증명서",
+        renewYears: 1,
+        missingHint: "",
+        issuedAt: row.modifiedAt,
+        expiresAt: expiresAt,
+        daysLeft: daysLeft,
+        status: getManagerDocStatus(daysLeft),
+      };
+    });
   }
 
   function extractManagerMissingHint(text) {
@@ -594,19 +630,6 @@
           managerState.folderLabel = hazardHandle.name || managerState.folderLabel || "";
         }
       }
-      var certHandle = await loadManagerDirectoryHandle("cert");
-      if (certHandle) {
-        if (certHandle.queryPermission) {
-          var certPerm = await certHandle.queryPermission({ mode: "read" });
-          if (certPerm !== "denied") {
-            managerCertDirHandle = certHandle;
-            managerState.certFolderLabel = certHandle.name || managerState.certFolderLabel || "";
-          }
-        } else {
-          managerCertDirHandle = certHandle;
-          managerState.certFolderLabel = certHandle.name || managerState.certFolderLabel || "";
-        }
-      }
     } catch (err) {}
   }
 
@@ -741,7 +764,7 @@
       var id = buildManagerNotifyId(doc);
       var stamp = managerState.notifiedMap[id] || "";
       if (!force && stamp === notifyStamp) continue;
-      var docTypeLabel = doc.sourceType === "cert" ? "증명서" : "성적서";
+      var docTypeLabel = (doc.sourceType === "cert" || doc.sourceType === "certsheet") ? "증명서" : "성적서";
       var body = doc.daysLeft < 0
         ? (doc.title + " " + docTypeLabel + "가 만료되었습니다. 갱신본 요청이 필요합니다.")
         : (doc.title + " " + docTypeLabel + "가 " + doc.daysLeft + "일 후 만료됩니다. 업체 갱신본 요청이 필요합니다.");
@@ -777,7 +800,7 @@
   function startManagerAlertLoop() {
     if (managerAlertTimer) clearInterval(managerAlertTimer);
     managerAlertTimer = setInterval(function () {
-      if ((managerDocDirHandle || managerCertDirHandle) && !managerScanInFlight) {
+      if (managerDocDirHandle && !managerScanInFlight) {
         managerScanInFlight = true;
         refreshManagerDocs({ toast: false })
           .catch(function () {
@@ -814,7 +837,7 @@
 
   async function refreshManagerDocs(options) {
     options = options || {};
-    if (!managerDocDirHandle && !managerCertDirHandle) throw new Error("먼저 성적서 또는 증명서 폴더를 연결해주세요.");
+    var hazardScanned = { docs: [], undatedFolders: [] };
     if (managerDocDirHandle && managerDocDirHandle.queryPermission) {
       var permission = await managerDocDirHandle.queryPermission({ mode: "read" });
       if (permission !== "granted" && managerDocDirHandle.requestPermission) {
@@ -822,38 +845,25 @@
       }
       if (permission !== "granted") throw new Error("폴더 읽기 권한이 필요합니다.");
     }
-    if (managerCertDirHandle && managerCertDirHandle.queryPermission) {
-      var certPermission = await managerCertDirHandle.queryPermission({ mode: "read" });
-      if (certPermission !== "granted" && managerCertDirHandle.requestPermission) {
-        certPermission = await managerCertDirHandle.requestPermission({ mode: "read" });
-      }
-      if (certPermission !== "granted") throw new Error("증명서 폴더 읽기 권한이 필요합니다.");
-    }
-    var hazardScanned = { docs: [], undatedFolders: [] };
     if (managerDocDirHandle) {
       hazardScanned = await scanManagerHazardDocsFromHandle(managerDocDirHandle);
       managerState.lastScanAt = new Date().toISOString();
       managerState.folderLabel = managerDocDirHandle.name || managerState.folderLabel || "";
     }
-    var certScanned = { docs: [], undatedFolders: [] };
-    if (managerCertDirHandle) {
-      certScanned = await scanManagerCertDocsFromHandle(managerCertDirHandle);
-      managerState.certLastScanAt = new Date().toISOString();
-      managerState.certFolderLabel = managerCertDirHandle.name || managerState.certFolderLabel || "";
-    }
-    var nextDocs = normalizeManagerDocs((hazardScanned.docs || []).concat(certScanned.docs || []));
+    var certSheetDocs = getManagerCertSheetDocs();
+    var nextDocs = normalizeManagerDocs((hazardScanned.docs || []).concat(certSheetDocs));
     var nextUndated = normalizeManagerUndatedFolders(hazardScanned.undatedFolders || []);
     var prevSignature = JSON.stringify({
       docs: normalizeManagerDocs(managerState.docs),
       undated: normalizeManagerUndatedFolders(managerState.undatedFolders),
       folder: String(managerState.folderLabel || ""),
-      certFolder: String(managerState.certFolderLabel || ""),
+      certSheetRows: normalizeManagerCertSheetRows(managerState.certSheetRows || []),
     });
     var nextSignature = JSON.stringify({
       docs: nextDocs,
       undated: nextUndated,
       folder: String((managerDocDirHandle && managerDocDirHandle.name) || managerState.folderLabel || ""),
-      certFolder: String((managerCertDirHandle && managerCertDirHandle.name) || managerState.certFolderLabel || ""),
+      certSheetRows: normalizeManagerCertSheetRows(managerState.certSheetRows || []),
     });
     var changed = prevSignature !== nextSignature;
     managerState.docs = nextDocs;
@@ -863,7 +873,7 @@
       scheduleLedgerDraftSave();
     }
     if (options.toast) {
-      showAppToast("성적서/증명서 폴더를 스캔했어요.", "success");
+      showAppToast("성적서 폴더를 스캔했고 증명서 시트를 반영했어요.", "success");
     }
   }
 
@@ -881,20 +891,6 @@
     await refreshManagerDocs({ toast: true, persistScan: true });
   }
 
-  async function connectManagerCertFolderAndScan() {
-    if (!window.showDirectoryPicker) {
-      throw new Error("이 브라우저에서는 폴더 연결을 지원하지 않습니다.");
-    }
-    var handle = await window.showDirectoryPicker({
-      mode: "read",
-      id: "cert-docs-folder",
-    });
-    managerCertDirHandle = handle;
-    managerState.certFolderLabel = handle && handle.name ? handle.name : "";
-    await saveManagerDirectoryHandle(handle, "cert");
-    await refreshManagerDocs({ toast: true, persistScan: true });
-  }
-
   function renderManagerDashboard() {
     var activeSubTab = managerState.subTab || "overview";
     var docs = getManagerDocsByTab(activeSubTab);
@@ -904,11 +900,12 @@
     }).length;
     var expiredCount = allDocs.filter(function (doc) { return doc.daysLeft < 0; }).length;
     var urgentCount = allDocs.filter(function (doc) { return doc.daysLeft >= 0 && doc.daysLeft <= 7; }).length;
+    var certRows = normalizeManagerCertSheetRows(managerState.certSheetRows);
     var docRowsHtml = docs.map(function (doc) {
       var leftText = doc.daysLeft < 0 ? (Math.abs(doc.daysLeft) + "일 지남") : (doc.daysLeft + "일 남음");
       return (
         "<tr>" +
-        "<td>" + escapeHtml(doc.sourceLabel || (doc.sourceType === "cert" ? "증명서" : "유해물질 성적서")) + "</td>" +
+        "<td>" + escapeHtml(doc.sourceLabel || ((doc.sourceType === "cert" || doc.sourceType === "certsheet") ? "증명서" : "유해물질 성적서")) + "</td>" +
         '<td class="mono">' + escapeHtml(formatManagerIsoDate(doc.issuedAt) || "-") + "</td>" +
         '<td class="mono">' + escapeHtml(formatManagerIsoDate(doc.expiresAt) || "-") + "</td>" +
         "<td>" + escapeHtml(doc.title || "-") + "</td>" +
@@ -922,6 +919,33 @@
     var undatedHtml = (managerState.undatedFolders || []).slice(0, 12).map(function (name) {
       return "<li>" + escapeHtml(name) + "</li>";
     }).join("");
+    var certRowsHtml = certRows.map(function (row, idx) {
+      var expiresAt = row.modifiedAt ? addYearsIsoDate(row.modifiedAt, 1) : "";
+      var daysLeft = expiresAt ? calcDaysLeftFromIso(expiresAt) : 0;
+      var leftText = row.modifiedAt ? (daysLeft < 0 ? (Math.abs(daysLeft) + "일 지남") : (daysLeft + "일 남음")) : "-";
+      return (
+        "<tr>" +
+        '<td><input type="text" class="field" data-cert-row="' + idx + '" data-cert-field="name" value="' + escapeAttr(row.name || "") + '" placeholder="증명서 이름" /></td>' +
+        '<td><input type="date" class="field mono" data-cert-row="' + idx + '" data-cert-field="modifiedAt" value="' + escapeAttr(row.modifiedAt || "") + '" /></td>' +
+        '<td class="mono">' + escapeHtml(formatManagerIsoDate(expiresAt) || "-") + "</td>" +
+        '<td class="mono">' + escapeHtml(leftText) + "</td>" +
+        '<td><input type="text" class="field" data-cert-row="' + idx + '" data-cert-field="note" value="' + escapeAttr(row.note || "") + '" placeholder="메모" /></td>' +
+        '<td><button type="button" class="soft-btn" data-cert-delete="' + idx + '">삭제</button></td>' +
+        "</tr>"
+      );
+    }).join("");
+    var certSheetPanelHtml =
+      '<div class="manager-table-card">' +
+      '<div class="manager-head-actions" style="padding:0 0 10px 0">' +
+      '<button type="button" class="soft-btn" id="btn-manager-cert-add">증명서 추가</button>' +
+      '<span class="hint">수정일 기준 1년 만료 알림</span>' +
+      "</div>" +
+      '<div class="manager-table-wrap">' +
+      '<table class="manager-table" id="manager-certsheet-table">' +
+      "<thead><tr><th>증명서명</th><th>수정일</th><th>만료예정일</th><th>남은기간</th><th>메모</th><th>관리</th></tr></thead>" +
+      "<tbody>" +
+      (certRowsHtml || '<tr><td colspan="6" class="manager-empty">증명서를 추가해주세요.</td></tr>') +
+      "</tbody></table></div></div>";
 
     return (
       '<div class="manager-page">' +
@@ -930,12 +954,10 @@
       '<div class="manager-head-meta">' +
       "<span>성적서 폴더: " + escapeHtml(managerState.folderLabel || "미연결") + "</span>" +
       "<span>성적서 스캔: " + escapeHtml(formatManagerDateTime(managerState.lastScanAt) || "-") + "</span>" +
-      "<span>증명서 폴더: " + escapeHtml(managerState.certFolderLabel || "미연결") + "</span>" +
-      "<span>증명서 스캔: " + escapeHtml(formatManagerDateTime(managerState.certLastScanAt) || "-") + "</span>" +
+      "<span>증명서 시트: " + certRows.length + "건</span>" +
       "</div>" +
       '<div class="manager-head-actions">' +
       '<button type="button" class="soft-btn" id="btn-manager-connect-folder">성적서 폴더 연결</button>' +
-      '<button type="button" class="soft-btn" id="btn-manager-connect-cert-folder">증명서 폴더 연결</button>' +
       '<button type="button" class="soft-btn" id="btn-manager-rescan">다시 스캔</button>' +
       '<button type="button" class="soft-btn" id="btn-manager-notify-perm">시스템 알림 권한</button>' +
       '<button type="button" class="soft-btn" id="btn-manager-test-notify">알림 테스트</button>' +
@@ -960,13 +982,19 @@
       }).join("") +
       "</div>" +
 
-      '<div class="manager-table-card">' +
-      '<div class="manager-table-wrap">' +
-      '<table class="manager-table">' +
-      "<thead><tr><th>구분</th><th>발급일</th><th>만료일</th><th>업체/문서명</th><th>기준 폴더</th><th>상태</th><th>남은기간</th></tr></thead>" +
-      "<tbody>" +
-      (docRowsHtml || '<tr><td colspan="7" class="manager-empty">해당 조건의 문서가 없습니다.</td></tr>') +
-      "</tbody></table></div></div>" +
+      (
+        activeSubTab === "certsheet"
+          ? certSheetPanelHtml
+          : (
+            '<div class="manager-table-card">' +
+            '<div class="manager-table-wrap">' +
+            '<table class="manager-table">' +
+            "<thead><tr><th>구분</th><th>발급일</th><th>만료일</th><th>업체/문서명</th><th>기준 폴더</th><th>상태</th><th>남은기간</th></tr></thead>" +
+            "<tbody>" +
+            (docRowsHtml || '<tr><td colspan="7" class="manager-empty">해당 조건의 문서가 없습니다.</td></tr>') +
+            "</tbody></table></div></div>"
+          )
+      ) +
 
       '<div class="manager-undated-card">' +
       '<div class="manager-undated-title">날짜 인식 실패 폴더 (형식: YYYY-MM-DD 폴더명)</div>' +
@@ -5314,9 +5342,8 @@
         docs: normalizeManagerDocs(managerState.docs),
         undatedFolders: normalizeManagerUndatedFolders(managerState.undatedFolders),
         folderLabel: String(managerState.folderLabel || ""),
-        certFolderLabel: String(managerState.certFolderLabel || ""),
         lastScanAt: String(managerState.lastScanAt || ""),
-        certLastScanAt: String(managerState.certLastScanAt || ""),
+        certSheetRows: normalizeManagerCertSheetRows(managerState.certSheetRows || []),
         alertsEnabled: managerState.alertsEnabled !== false,
         alertLeadDays: Number(managerState.alertLeadDays || 30),
         notifiedMap: Object.assign({}, managerState.notifiedMap || {}),
@@ -5521,17 +5548,22 @@
 
     if (managerData) {
       managerState.subTab = managerData.subTab || managerState.subTab || "overview";
-      managerState.docs = normalizeManagerDocs(managerData.docs);
+      managerState.docs = normalizeManagerDocs(managerData.docs).filter(function (doc) {
+        return doc.sourceType !== "cert";
+      });
       managerState.undatedFolders = normalizeManagerUndatedFolders(managerData.undatedFolders);
       managerState.folderLabel = String(managerData.folderLabel || managerState.folderLabel || "");
-      managerState.certFolderLabel = String(managerData.certFolderLabel || managerState.certFolderLabel || "");
       managerState.lastScanAt = String(managerData.lastScanAt || "");
-      managerState.certLastScanAt = String(managerData.certLastScanAt || "");
+      managerState.certSheetRows = normalizeManagerCertSheetRows(managerData.certSheetRows || []);
       managerState.alertsEnabled = managerData.alertsEnabled !== false;
       managerState.alertLeadDays = Math.max(1, Math.min(120, Number(managerData.alertLeadDays || 30)));
       managerState.notifiedMap = managerData.notifiedMap && typeof managerData.notifiedMap === "object"
         ? Object.assign({}, managerData.notifiedMap)
         : {};
+      var hazardDocs = normalizeManagerDocs(managerState.docs).filter(function (doc) {
+        return doc.sourceType !== "certsheet";
+      });
+      managerState.docs = normalizeManagerDocs(hazardDocs.concat(getManagerCertSheetDocs()));
       state.managerSubTab = managerState.subTab;
     }
 
@@ -9793,7 +9825,7 @@
       ensureLedgerLoadedFromFirebase().then(function () {
         if (!wasManagerLoaded && state.role === "manager") render();
       });
-      if ((managerDocDirHandle || managerCertDirHandle) && !normalizeManagerDocs(managerState.docs).length && !managerState.lastScanAt && !managerState.certLastScanAt) {
+      if (managerDocDirHandle && !managerState.lastScanAt) {
         refreshManagerDocs({ toast: false }).then(function () {
           if (state.role === "manager") render();
         }).catch(function () {
@@ -9821,19 +9853,6 @@
             });
         });
       }
-      var connectCertBtn = document.getElementById("btn-manager-connect-cert-folder");
-      if (connectCertBtn) {
-        connectCertBtn.addEventListener("click", function () {
-          connectManagerCertFolderAndScan()
-            .then(function () {
-              render();
-            })
-            .catch(function (err) {
-              if (err && /abort|취소/i.test(String(err.message || ""))) return;
-              showAppToast(err && err.message ? err.message : "증명서 폴더 연결에 실패했어요.", "warning");
-            });
-        });
-      }
       var rescanBtn = document.getElementById("btn-manager-rescan");
       if (rescanBtn) {
         rescanBtn.addEventListener("click", function () {
@@ -9847,6 +9866,47 @@
             });
         });
       }
+      var certAddBtn = document.getElementById("btn-manager-cert-add");
+      if (certAddBtn) {
+        certAddBtn.addEventListener("click", function () {
+          var next = normalizeManagerCertSheetRows(managerState.certSheetRows || []);
+          next.push({ name: "", modifiedAt: "", note: "" });
+          managerState.certSheetRows = next;
+          scheduleLedgerDraftSave();
+          render();
+        });
+      }
+      app.querySelectorAll("[data-cert-delete]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var idx = Number(btn.getAttribute("data-cert-delete"));
+          if (!isFinite(idx) || idx < 0) return;
+          var next = normalizeManagerCertSheetRows(managerState.certSheetRows || []);
+          next.splice(idx, 1);
+          managerState.certSheetRows = next;
+          refreshManagerDocs({ toast: false, persistScan: true }).then(function () {
+            if (state.role === "manager") render();
+          }).catch(function () {
+            if (state.role === "manager") render();
+          });
+        });
+      });
+      app.querySelectorAll("[data-cert-row][data-cert-field]").forEach(function (el) {
+        var commit = function () {
+          var idx = Number(el.getAttribute("data-cert-row"));
+          var field = String(el.getAttribute("data-cert-field") || "");
+          if (!isFinite(idx) || idx < 0 || !field) return;
+          var next = normalizeManagerCertSheetRows(managerState.certSheetRows || []);
+          while (next.length <= idx) next.push({ name: "", modifiedAt: "", note: "" });
+          var row = Object.assign({}, next[idx]);
+          row[field] = String(el.value || "").trim();
+          next[idx] = row;
+          managerState.certSheetRows = next;
+          refreshManagerDocs({ toast: false, persistScan: true }).catch(function () {});
+          scheduleLedgerDraftSave();
+        };
+        el.addEventListener("change", commit);
+        el.addEventListener("blur", commit);
+      });
       var permBtn = document.getElementById("btn-manager-notify-perm");
       if (permBtn) {
         permBtn.addEventListener("click", function () {
@@ -11135,7 +11195,7 @@
   ]).finally(function () {
     startManagerAlertLoop();
     render();
-    if (managerDocDirHandle || managerCertDirHandle) {
+    if (managerDocDirHandle) {
       refreshManagerDocs({ toast: false })
         .then(function () {
           maybeNotifyManagerDocs();
