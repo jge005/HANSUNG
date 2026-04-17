@@ -83,7 +83,7 @@
     role: null,
     mainTab: null,
     subTab: "manage",
-    ordersSubTab: "status",
+    ordersSubTab: "sheet",
     closingSubTab: "attendance",
     managerMainTab: "docs",
     managerSubTab: "overview",
@@ -138,6 +138,16 @@
     rowHeights: [],
     extractionText: "",
     lastExtraction: null,
+    selectedDate: "",
+    listSearch: "",
+    listVendor: "all",
+    listStatus: "all",
+    listChannel: "all",
+    listUrgentOnly: false,
+    listChangedOnly: false,
+    listSortKey: "date",
+    listSortDir: "desc",
+    editTargetRow: -1,
   };
   var manageState = {
     startMonth: "",
@@ -6227,6 +6237,153 @@
       });
   }
 
+  function normalizeOrderDateText(value) {
+    if (!value) return "";
+    if (window.OrderModel && typeof window.OrderModel.normalizeDate === "function") {
+      return window.OrderModel.normalizeDate(value) || "";
+    }
+    var text = String(value || "").trim();
+    var m = text.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+    if (!m) return "";
+    var mm = Number(m[2]);
+    var dd = Number(m[3]);
+    return m[1] + "-" + (mm < 10 ? "0" + mm : mm) + "-" + (dd < 10 ? "0" + dd : dd);
+  }
+
+  function normalizeOrderRowsToRecords(rows) {
+    var normalizedRows = normalizeOrderRows(rows || [], 1);
+    var records = [];
+    for (var i = 0; i < normalizedRows.length; i++) {
+      var row = normalizedRows[i];
+      if (!rowHasAnyValue(row, orderGridFields)) continue;
+      var note = String(row.note || "");
+      var status = String(row.status || "요청");
+      var orderDate = normalizeOrderDateText(row.orderDate) || "";
+      var dueDate = normalizeOrderDateText(row.dueDate) || "";
+      var qtyNum = toNumberValue(row.qty);
+      var qtyText = qtyNum ? formatDisplayNumber(qtyNum) : String(row.qty || "").trim();
+      var unitText = String(row.unit || "").trim();
+      var quantitySummary = qtyText + (unitText ? " " + unitText : "");
+      var noteLower = note.toLowerCase();
+      var urgent = /긴급|urgent|asap|rush/i.test(note) || /긴급/.test(status);
+      var changed = /변경|연기|앞당김|리스케줄|reschedule|delay|advance/i.test(noteLower);
+      var requester = "-";
+      if (/고객|거래처|customer/i.test(note)) requester = "customer";
+      else if (/내부|생산|구매|internal/i.test(note)) requester = "internal";
+      var channel = "direct";
+      if (/kakao|카톡/.test(noteLower)) channel = "kakao";
+      else if (/email|메일/.test(noteLower)) channel = "email";
+      else if (/phone|전화|유선/.test(noteLower)) channel = "phone";
+      else if (/업로드|파일/.test(noteLower)) channel = "file_upload";
+      records.push({
+        rowIndex: i,
+        order_id: "row_" + i,
+        customer_name: String(row.vendor || "").trim(),
+        item_summary: String(row.itemName || "").trim() + (String(row.spec || "").trim() ? " (" + String(row.spec || "").trim() + ")" : ""),
+        quantity_summary: quantitySummary.trim(),
+        due_date: dueDate,
+        order_date: orderDate,
+        status: status || "요청",
+        is_urgent: urgent,
+        has_schedule_change: changed,
+        change_requested_by: requester,
+        received_channel: channel,
+        note: note,
+      });
+    }
+    return records;
+  }
+
+  function getOrderMonthBase(records) {
+    var first = "";
+    (records || []).some(function (record) {
+      var date = record.order_date || record.due_date || "";
+      if (date) {
+        first = date;
+        return true;
+      }
+      return false;
+    });
+    if (!first) {
+      var now = new Date();
+      var ym =
+        now.getFullYear() +
+        "-" +
+        (now.getMonth() + 1 < 10 ? "0" + (now.getMonth() + 1) : String(now.getMonth() + 1));
+      return ym;
+    }
+    return first.slice(0, 7);
+  }
+
+  function buildOrderCalendarDays(records, monthBase) {
+    var ym = /^\d{4}-\d{2}$/.test(monthBase || "") ? monthBase : getOrderMonthBase(records);
+    var year = Number(ym.slice(0, 4));
+    var month = Number(ym.slice(5, 7));
+    var daysInMonth = new Date(year, month, 0).getDate();
+    var map = {};
+    for (var d = 1; d <= daysInMonth; d++) {
+      var key = ym + "-" + (d < 10 ? "0" + d : d);
+      map[key] = { date: key, count: 0, urgent: 0, changed: 0, customers: [] };
+    }
+    (records || []).forEach(function (record) {
+      var key = record.order_date || record.due_date;
+      if (!key || !map[key]) return;
+      map[key].count += 1;
+      if (record.is_urgent) map[key].urgent += 1;
+      if (record.has_schedule_change) map[key].changed += 1;
+      var cust = record.customer_name || "-";
+      if (map[key].customers.indexOf(cust) < 0) map[key].customers.push(cust);
+    });
+    return { ym: ym, year: year, month: month, daysInMonth: daysInMonth, byDate: map };
+  }
+
+  function getRecordsByDate(records, dateKey) {
+    return (records || []).filter(function (record) {
+      var key = record.order_date || record.due_date;
+      return key === dateKey;
+    });
+  }
+
+  function filterAndSortOrderRecords(records) {
+    var list = (records || []).slice();
+    var searchToken = normalizeCompanyMatchText(orderState.listSearch || "");
+    var vendorFilter = normalizeCompanyMatchText(orderState.listVendor || "all");
+    var statusFilter = String(orderState.listStatus || "all");
+    var channelFilter = String(orderState.listChannel || "all");
+    list = list.filter(function (record) {
+      if (vendorFilter !== "all" && normalizeCompanyMatchText(record.customer_name) !== vendorFilter) return false;
+      if (statusFilter !== "all" && String(record.status || "") !== statusFilter) return false;
+      if (channelFilter !== "all" && String(record.received_channel || "") !== channelFilter) return false;
+      if (orderState.listUrgentOnly && !record.is_urgent) return false;
+      if (orderState.listChangedOnly && !record.has_schedule_change) return false;
+      if (searchToken) {
+        var hay = normalizeCompanyMatchText(
+          [record.customer_name, record.item_summary, record.note, record.status, record.received_channel].join(" ")
+        );
+        if (hay.indexOf(searchToken) < 0) return false;
+      }
+      return true;
+    });
+    var key = orderState.listSortKey || "date";
+    var dir = orderState.listSortDir === "asc" ? 1 : -1;
+    list.sort(function (a, b) {
+      var av = "";
+      var bv = "";
+      if (key === "vendor") {
+        av = String(a.customer_name || "");
+        bv = String(b.customer_name || "");
+      } else if (key === "status") {
+        av = String(a.status || "");
+        bv = String(b.status || "");
+      } else {
+        av = String(a.order_date || a.due_date || "");
+        bv = String(b.order_date || b.due_date || "");
+      }
+      return av === bv ? 0 : av > bv ? dir : -dir;
+    });
+    return list;
+  }
+
   function createMiniSheetEngine(options) {
     var engine = {
       host: null,
@@ -7529,8 +7686,21 @@
         workInfo: cloneWorkInfo(workState.info),
       },
       orders: {
-        subTab: state.ordersSubTab || "status",
+        subTab: state.ordersSubTab || "sheet",
         rows: normalizeOrderRows(orderState.rows, 50),
+        selectedDate: String(orderState.selectedDate || ""),
+        listSearch: String(orderState.listSearch || ""),
+        listVendor: String(orderState.listVendor || "all"),
+        listStatus: String(orderState.listStatus || "all"),
+        listChannel: String(orderState.listChannel || "all"),
+        listUrgentOnly: !!orderState.listUrgentOnly,
+        listChangedOnly: !!orderState.listChangedOnly,
+        listSortKey: String(orderState.listSortKey || "date"),
+        listSortDir: String(orderState.listSortDir || "desc"),
+        extractionText: String(orderState.extractionText || ""),
+        lastExtraction: orderState.lastExtraction && typeof orderState.lastExtraction === "object"
+          ? JSON.parse(JSON.stringify(orderState.lastExtraction))
+          : null,
         sheetLayout: {
           colWidths: (orderSheetEngine && Array.isArray(orderSheetEngine.colWidths) && orderSheetEngine.colWidths.length
             ? orderSheetEngine.colWidths
@@ -7677,6 +7847,19 @@
     } else if (Array.isArray(data.orderRows)) {
       orderState.rows = normalizeOrderRows(data.orderRows, 50);
     }
+    orderState.selectedDate = ordersData ? String(ordersData.selectedDate || "") : String(orderState.selectedDate || "");
+    orderState.listSearch = ordersData ? String(ordersData.listSearch || "") : String(orderState.listSearch || "");
+    orderState.listVendor = ordersData ? String(ordersData.listVendor || "all") : String(orderState.listVendor || "all");
+    orderState.listStatus = ordersData ? String(ordersData.listStatus || "all") : String(orderState.listStatus || "all");
+    orderState.listChannel = ordersData ? String(ordersData.listChannel || "all") : String(orderState.listChannel || "all");
+    orderState.listUrgentOnly = ordersData ? !!ordersData.listUrgentOnly : !!orderState.listUrgentOnly;
+    orderState.listChangedOnly = ordersData ? !!ordersData.listChangedOnly : !!orderState.listChangedOnly;
+    orderState.listSortKey = ordersData ? String(ordersData.listSortKey || "date") : String(orderState.listSortKey || "date");
+    orderState.listSortDir = ordersData ? String(ordersData.listSortDir || "desc") : String(orderState.listSortDir || "desc");
+    orderState.extractionText = ordersData ? String(ordersData.extractionText || "") : String(orderState.extractionText || "");
+    orderState.lastExtraction = ordersData && ordersData.lastExtraction && typeof ordersData.lastExtraction === "object"
+      ? JSON.parse(JSON.stringify(ordersData.lastExtraction))
+      : null;
     if (ordersData && ordersData.sheetLayout && typeof ordersData.sheetLayout === "object") {
       if (Array.isArray(ordersData.sheetLayout.colWidths)) {
         orderState.colWidths = ordersData.sheetLayout.colWidths.slice(0, orderSheetColumns.length);
@@ -11281,7 +11464,7 @@
     );
   }
 
-  function renderOrdersStatusTab() {
+  function renderOrdersSheetTab() {
     orderState.rows = normalizeOrderRows(orderState.rows, 50);
     var summary = getOrderSummary(orderState.rows);
     var extraction = orderState.lastExtraction && typeof orderState.lastExtraction === "object" ? orderState.lastExtraction : null;
@@ -11329,11 +11512,160 @@
         '<div class="clientdoc-card">' +
           '<div class="clientdoc-head">' +
             '<div class="clientdoc-title">' + icon("folder") + ' 발주 현황</div>' +
-            '<div class="sub">발주일/업체/품목/납기/상태를 한 시트에서 관리</div>' +
+            '<div class="sub">발주일/업체/품목/납기/상태를 한 시트에서 관리' + (orderState.editTargetRow >= 0 ? " (리스트에서 선택: " + (orderState.editTargetRow + 1) + "행)" : "") + '</div>' +
           '</div>' +
           '<div id="order-grid-host"></div>' +
         '</div>' +
       '</div>'
+    );
+  }
+
+  function renderOrdersCalendarTab() {
+    var records = normalizeOrderRowsToRecords(orderState.rows);
+    var monthBase = getOrderMonthBase(records);
+    var selectedDate = orderState.selectedDate || "";
+    var monthData = buildOrderCalendarDays(records, monthBase);
+    if (!selectedDate || !monthData.byDate[selectedDate]) {
+      selectedDate = monthData.ym + "-01";
+      if (!monthData.byDate[selectedDate]) {
+        var keys = Object.keys(monthData.byDate);
+        selectedDate = keys.length ? keys[0] : "";
+      }
+      orderState.selectedDate = selectedDate;
+    }
+    var firstDayWeek = new Date(monthData.year, monthData.month - 1, 1).getDay();
+    var cells = [];
+    for (var pad = 0; pad < firstDayWeek; pad++) cells.push(null);
+    for (var d = 1; d <= monthData.daysInMonth; d++) {
+      var dayKey = monthData.ym + "-" + (d < 10 ? "0" + d : d);
+      cells.push(monthData.byDate[dayKey] || { date: dayKey, count: 0, urgent: 0, changed: 0, customers: [] });
+    }
+    while (cells.length % 7 !== 0) cells.push(null);
+
+    var dayRecords = getRecordsByDate(records, selectedDate);
+
+    return (
+      '<div class="clientdoc">' +
+        '<div class="toolbar-card" style="margin-bottom:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+          '<span class="chip">대상월</span>' +
+          '<input type="month" id="orders-calendar-month" class="field" style="height:36px;width:160px" value="' + escapeAttr(monthData.ym) + '" />' +
+          '<span class="chip">선택일 ' + escapeHtml(selectedDate || "-") + "</span>" +
+          '<span class="chip">총건수 ' + escapeHtml(String(records.length)) + "</span>" +
+        '</div>' +
+        '<div class="clientdoc-card" style="margin-bottom:12px">' +
+          '<div class="clientdoc-head"><div class="clientdoc-title">' + icon("sheet") + " 달력형 조회</div><div class=\"sub\">날짜 클릭 시 아래 리스트 표시</div></div>" +
+          '<div style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px">' +
+            ["일", "월", "화", "수", "목", "금", "토"].map(function (dow) {
+              return '<div class="sub" style="text-align:center;padding:4px 0;font-weight:700">' + dow + "</div>";
+            }).join("") +
+            cells.map(function (cell) {
+              if (!cell) return '<div style="border:1px solid var(--line);border-radius:8px;min-height:86px;background:#faf8ff"></div>';
+              var dayNum = Number(cell.date.slice(8, 10));
+              var active = cell.date === selectedDate ? "2px solid var(--primary)" : "1px solid var(--line)";
+              var label = cell.customers.slice(0, 2).join(", ");
+              return (
+                '<button type="button" class="soft-btn" data-order-cal-date="' + escapeAttr(cell.date) + '" style="height:auto;min-height:86px;display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:4px;padding:8px;border:' + active + '">' +
+                  '<div style="font-weight:700">' + dayNum + "일</div>" +
+                  '<div class="chip" style="padding:2px 6px;font-size:11px">건수 ' + cell.count + "</div>" +
+                  (cell.urgent ? '<div class="chip" style="padding:2px 6px;font-size:11px;color:#b42318">긴급 ' + cell.urgent + "</div>" : "") +
+                  (cell.changed ? '<div class="chip" style="padding:2px 6px;font-size:11px;color:#7a4d02">변경 ' + cell.changed + "</div>" : "") +
+                  (label ? '<div class="sub" style="font-size:11px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:100%">' + escapeHtml(label) + "</div>" : "") +
+                "</button>"
+              );
+            }).join("") +
+          "</div>" +
+        "</div>" +
+        '<div class="clientdoc-card">' +
+          '<div class="clientdoc-head"><div class="clientdoc-title">' + icon("clipboard") + " 날짜별 발주 리스트</div><div class=\"sub\">거래처/품목/수량/납기/상태/긴급/변경/요청주체/접수경로</div></div>" +
+          '<div style="overflow:auto">' +
+            '<table class="simple-grid-table" style="width:100%"><thead><tr>' +
+              '<th>거래처명</th><th>품목명 요약</th><th>수량 요약</th><th>납기</th><th>상태</th><th>긴급</th><th>변경</th><th>요청주체</th><th>접수경로</th>' +
+            '</tr></thead><tbody>' +
+              (dayRecords.length ? dayRecords.map(function (r) {
+                return "<tr>" +
+                  "<td>" + escapeHtml(r.customer_name || "-") + "</td>" +
+                  "<td>" + escapeHtml(r.item_summary || "-") + "</td>" +
+                  "<td>" + escapeHtml(r.quantity_summary || "-") + "</td>" +
+                  "<td>" + escapeHtml(r.due_date || "-") + "</td>" +
+                  "<td>" + escapeHtml(r.status || "-") + "</td>" +
+                  "<td>" + (r.is_urgent ? "Y" : "-") + "</td>" +
+                  "<td>" + (r.has_schedule_change ? "Y" : "-") + "</td>" +
+                  "<td>" + escapeHtml(r.change_requested_by || "-") + "</td>" +
+                  "<td>" + escapeHtml(r.received_channel || "-") + "</td>" +
+                "</tr>";
+              }).join("") : '<tr><td colspan="9" class="sub" style="text-align:center">선택한 날짜의 발주 데이터가 없습니다.</td></tr>') +
+            "</tbody></table>" +
+          "</div>" +
+        "</div>" +
+      "</div>"
+    );
+  }
+
+  function renderOrdersListTab() {
+    var records = normalizeOrderRowsToRecords(orderState.rows);
+    var vendors = [];
+    var vendorSeen = {};
+    var statuses = [];
+    var statusSeen = {};
+    var channels = [];
+    var channelSeen = {};
+    records.forEach(function (r) {
+      var v = r.customer_name || "-";
+      var vn = normalizeCompanyMatchText(v);
+      if (!vendorSeen[vn]) { vendorSeen[vn] = true; vendors.push(v); }
+      var s = r.status || "요청";
+      if (!statusSeen[s]) { statusSeen[s] = true; statuses.push(s); }
+      var c = r.received_channel || "direct";
+      if (!channelSeen[c]) { channelSeen[c] = true; channels.push(c); }
+    });
+    var filtered = filterAndSortOrderRecords(records);
+    return (
+      '<div class="clientdoc">' +
+        '<div class="toolbar-card" style="margin-bottom:12px;display:grid;grid-template-columns:minmax(180px,2fr) repeat(3,minmax(140px,1fr)) auto auto auto auto;gap:8px;align-items:center">' +
+          '<input id="orders-list-search" class="field" style="height:36px" placeholder="검색 (거래처/품목/메모)" value="' + escapeAttr(orderState.listSearch || "") + '" />' +
+          '<select id="orders-list-vendor" class="field" style="height:36px"><option value="all">업체 전체</option>' +
+            vendors.map(function (v) { return '<option value="' + escapeAttr(v) + '"' + (normalizeCompanyMatchText(orderState.listVendor) === normalizeCompanyMatchText(v) ? " selected" : "") + ">" + escapeHtml(v) + "</option>"; }).join("") +
+          "</select>" +
+          '<select id="orders-list-status" class="field" style="height:36px"><option value="all">상태 전체</option>' +
+            statuses.map(function (s) { return '<option value="' + escapeAttr(s) + '"' + (String(orderState.listStatus) === String(s) ? " selected" : "") + ">" + escapeHtml(s) + "</option>"; }).join("") +
+          "</select>" +
+          '<select id="orders-list-channel" class="field" style="height:36px"><option value="all">경로 전체</option>' +
+            channels.map(function (c) { return '<option value="' + escapeAttr(c) + '"' + (String(orderState.listChannel) === String(c) ? " selected" : "") + ">" + escapeHtml(c) + "</option>"; }).join("") +
+          "</select>" +
+          '<label class="chip" style="gap:6px"><input type="checkbox" id="orders-list-urgent" ' + (orderState.listUrgentOnly ? "checked" : "") + ' /> 긴급</label>' +
+          '<label class="chip" style="gap:6px"><input type="checkbox" id="orders-list-changed" ' + (orderState.listChangedOnly ? "checked" : "") + ' /> 변경</label>' +
+          '<select id="orders-list-sort-key" class="field" style="height:36px">' +
+            '<option value="date"' + (orderState.listSortKey === "date" ? " selected" : "") + ">날짜순</option>" +
+            '<option value="vendor"' + (orderState.listSortKey === "vendor" ? " selected" : "") + ">업체순</option>" +
+            '<option value="status"' + (orderState.listSortKey === "status" ? " selected" : "") + ">상태순</option>" +
+          "</select>" +
+          '<button type="button" class="soft-btn" id="orders-list-sort-dir">' + (orderState.listSortDir === "asc" ? "오름차순" : "내림차순") + "</button>" +
+        "</div>" +
+        '<div class="clientdoc-card">' +
+          '<div class="clientdoc-head"><div class="clientdoc-title">' + icon("scroll") + " 리스트형 조회</div><div class=\"sub\">검색/필터/정렬 + 상세보기(수정진입)</div></div>" +
+          '<div style="overflow:auto">' +
+            '<table class="simple-grid-table" style="width:100%"><thead><tr>' +
+            '<th>일자</th><th>거래처</th><th>품목</th><th>수량</th><th>납기</th><th>상태</th><th>긴급</th><th>변경</th><th>요청주체</th><th>경로</th><th>작업</th>' +
+            '</tr></thead><tbody>' +
+            (filtered.length ? filtered.map(function (r) {
+              return "<tr>" +
+                "<td>" + escapeHtml(r.order_date || "-") + "</td>" +
+                "<td>" + escapeHtml(r.customer_name || "-") + "</td>" +
+                "<td>" + escapeHtml(r.item_summary || "-") + "</td>" +
+                "<td>" + escapeHtml(r.quantity_summary || "-") + "</td>" +
+                "<td>" + escapeHtml(r.due_date || "-") + "</td>" +
+                "<td>" + escapeHtml(r.status || "-") + "</td>" +
+                "<td>" + (r.is_urgent ? "Y" : "-") + "</td>" +
+                "<td>" + (r.has_schedule_change ? "Y" : "-") + "</td>" +
+                "<td>" + escapeHtml(r.change_requested_by || "-") + "</td>" +
+                "<td>" + escapeHtml(r.received_channel || "-") + "</td>" +
+                '<td><button type="button" class="soft-btn" data-orders-edit-row="' + r.rowIndex + '">수정진입</button></td>' +
+              "</tr>";
+            }).join("") : '<tr><td colspan="11" class="sub" style="text-align:center">조건에 맞는 발주 데이터가 없습니다.</td></tr>') +
+            "</tbody></table>" +
+          "</div>" +
+        "</div>" +
+      "</div>"
     );
   }
 
@@ -12656,10 +12988,12 @@
 
     if (state.role === "orders") {
       var ordersTabs = [
-        { key: "status", label: "발주현황", icon: "folder" },
+        { key: "sheet", label: "엑셀형 시트", icon: "sheet" },
+        { key: "calendar", label: "달력형 보기", icon: "clipboard" },
+        { key: "list", label: "리스트형 보기", icon: "scroll" },
       ];
       if (!ordersTabs.some(function (tab) { return tab.key === state.ordersSubTab; })) {
-        state.ordersSubTab = "status";
+        state.ordersSubTab = "sheet";
       }
       var ordersTabHtml = '<div class="tabs">';
       ordersTabs.forEach(function (tab) {
@@ -12675,11 +13009,17 @@
       });
       ordersTabHtml += "</div>";
 
-      var ordersBody = renderOrdersStatusTab();
+      var ordersBody = state.ordersSubTab === "calendar"
+        ? renderOrdersCalendarTab()
+        : state.ordersSubTab === "list"
+          ? renderOrdersListTab()
+          : renderOrdersSheetTab();
       app.innerHTML = renderTopBar() + '<div class="content">' + ordersTabHtml + ordersBody + "</div>";
       wireTopBar();
-      attachOrderGridWhenNeeded(document.getElementById("order-grid-host"));
-      refreshOrderSummaryUi();
+      if (state.ordersSubTab === "sheet") {
+        attachOrderGridWhenNeeded(document.getElementById("order-grid-host"));
+        refreshOrderSummaryUi();
+      }
 
       var wasOrdersLoaded = ledgerState.loadedFromFirebase;
       ensureLedgerLoadedFromFirebase().then(function () {
@@ -12693,28 +13033,128 @@
           render();
         });
       });
-      var extractTextEl = document.getElementById("order-extract-text");
-      if (extractTextEl) {
-        extractTextEl.addEventListener("input", function () {
-          orderState.extractionText = String(extractTextEl.value || "");
+      if (state.ordersSubTab === "sheet") {
+        var extractTextEl = document.getElementById("order-extract-text");
+        if (extractTextEl) {
+          extractTextEl.addEventListener("input", function () {
+            orderState.extractionText = String(extractTextEl.value || "");
+          });
+        }
+        var extractTextBtn = document.getElementById("btn-order-extract-text");
+        if (extractTextBtn) {
+          extractTextBtn.addEventListener("click", function () {
+            runOrderTextExtraction();
+          });
+        }
+        var extractFileBtn = document.getElementById("btn-order-extract-file");
+        if (extractFileBtn) {
+          extractFileBtn.addEventListener("click", function () {
+            runOrderFileExtraction();
+          });
+        }
+        var applyExtractionBtn = document.getElementById("btn-order-apply-extraction");
+        if (applyExtractionBtn) {
+          applyExtractionBtn.addEventListener("click", function () {
+            applyExtractionToOrderGrid(orderState.lastExtraction);
+          });
+        }
+      }
+
+      if (state.ordersSubTab === "calendar") {
+        var monthEl = document.getElementById("orders-calendar-month");
+        if (monthEl) {
+          monthEl.addEventListener("change", function () {
+            var monthValue = String(monthEl.value || "");
+            if (/^\d{4}-\d{2}$/.test(monthValue)) {
+              orderState.selectedDate = monthValue + "-01";
+              scheduleLedgerDraftSave();
+              render();
+            }
+          });
+        }
+        app.querySelectorAll("[data-order-cal-date]").forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            orderState.selectedDate = btn.getAttribute("data-order-cal-date") || "";
+            scheduleLedgerDraftSave();
+            render();
+          });
         });
       }
-      var extractTextBtn = document.getElementById("btn-order-extract-text");
-      if (extractTextBtn) {
-        extractTextBtn.addEventListener("click", function () {
-          runOrderTextExtraction();
-        });
-      }
-      var extractFileBtn = document.getElementById("btn-order-extract-file");
-      if (extractFileBtn) {
-        extractFileBtn.addEventListener("click", function () {
-          runOrderFileExtraction();
-        });
-      }
-      var applyExtractionBtn = document.getElementById("btn-order-apply-extraction");
-      if (applyExtractionBtn) {
-        applyExtractionBtn.addEventListener("click", function () {
-          applyExtractionToOrderGrid(orderState.lastExtraction);
+
+      if (state.ordersSubTab === "list") {
+        var searchEl = document.getElementById("orders-list-search");
+        var vendorEl = document.getElementById("orders-list-vendor");
+        var statusEl = document.getElementById("orders-list-status");
+        var channelEl = document.getElementById("orders-list-channel");
+        var urgentEl = document.getElementById("orders-list-urgent");
+        var changedEl = document.getElementById("orders-list-changed");
+        var sortKeyEl = document.getElementById("orders-list-sort-key");
+        var sortDirBtn = document.getElementById("orders-list-sort-dir");
+        if (searchEl) {
+          searchEl.addEventListener("input", function () {
+            orderState.listSearch = String(searchEl.value || "");
+            scheduleLedgerDraftSave();
+            render();
+          });
+        }
+        if (vendorEl) {
+          vendorEl.addEventListener("change", function () {
+            orderState.listVendor = String(vendorEl.value || "all");
+            scheduleLedgerDraftSave();
+            render();
+          });
+        }
+        if (statusEl) {
+          statusEl.addEventListener("change", function () {
+            orderState.listStatus = String(statusEl.value || "all");
+            scheduleLedgerDraftSave();
+            render();
+          });
+        }
+        if (channelEl) {
+          channelEl.addEventListener("change", function () {
+            orderState.listChannel = String(channelEl.value || "all");
+            scheduleLedgerDraftSave();
+            render();
+          });
+        }
+        if (urgentEl) {
+          urgentEl.addEventListener("change", function () {
+            orderState.listUrgentOnly = !!urgentEl.checked;
+            scheduleLedgerDraftSave();
+            render();
+          });
+        }
+        if (changedEl) {
+          changedEl.addEventListener("change", function () {
+            orderState.listChangedOnly = !!changedEl.checked;
+            scheduleLedgerDraftSave();
+            render();
+          });
+        }
+        if (sortKeyEl) {
+          sortKeyEl.addEventListener("change", function () {
+            orderState.listSortKey = String(sortKeyEl.value || "date");
+            scheduleLedgerDraftSave();
+            render();
+          });
+        }
+        if (sortDirBtn) {
+          sortDirBtn.addEventListener("click", function () {
+            orderState.listSortDir = orderState.listSortDir === "asc" ? "desc" : "asc";
+            scheduleLedgerDraftSave();
+            render();
+          });
+        }
+        app.querySelectorAll("[data-orders-edit-row]").forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            var row = Number(btn.getAttribute("data-orders-edit-row"));
+            if (!isFinite(row) || row < 0) return;
+            orderState.editTargetRow = row;
+            state.ordersSubTab = "sheet";
+            scheduleLedgerDraftSave();
+            render();
+          });
         });
       }
       return;
