@@ -720,9 +720,34 @@
     return { labels: labels, monthMap: monthMap };
   }
 
-  function buildManagerDeltaRows(kind) {
+  function getManagerAnalyticsMonthOptions() {
+    var salesInfo = buildManagerMonthlyCompanyAmountMap("sales");
+    var purchaseInfo = buildManagerMonthlyCompanyAmountMap("purchase");
+    var map = {};
+    (salesInfo.labels || []).forEach(function (label) { map[label] = true; });
+    (purchaseInfo.labels || []).forEach(function (label) { map[label] = true; });
+    var labels = Object.keys(map).sort(function (a, b) {
+      return (parseMonthLabelNumber(a) || 0) - (parseMonthLabelNumber(b) || 0);
+    });
+    return labels;
+  }
+
+  function getLimitedAnalyticsLabels(labels, baseMonthLabel) {
+    var list = Array.isArray(labels) ? labels.slice() : [];
+    if (!list.length) return [];
+    if (!baseMonthLabel) return list;
+    var baseNum = parseMonthLabelNumber(baseMonthLabel);
+    if (baseNum == null) return list;
+    var filtered = list.filter(function (label) {
+      var num = parseMonthLabelNumber(label);
+      return num != null && num <= baseNum;
+    });
+    return filtered.length ? filtered : list;
+  }
+
+  function buildManagerDeltaRows(kind, baseMonthLabel) {
     var info = buildManagerMonthlyCompanyAmountMap(kind);
-    var labels = info.labels;
+    var labels = getLimitedAnalyticsLabels(info.labels, baseMonthLabel);
     var monthMap = info.monthMap;
     var rows = [];
     labels.forEach(function (monthLabel, monthIndex) {
@@ -746,8 +771,8 @@
     return rows;
   }
 
-  function renderManagerDeltaTable(kind) {
-    var rows = buildManagerDeltaRows(kind);
+  function renderManagerDeltaTable(kind, baseMonthLabel) {
+    var rows = buildManagerDeltaRows(kind, baseMonthLabel);
     var sorted = rows.slice().sort(function (a, b) {
       var am = parseMonthLabelNumber(a.month) || 0;
       var bm = parseMonthLabelNumber(b.month) || 0;
@@ -793,9 +818,9 @@
     return result;
   }
 
-  function buildManagerCompanyTrendRows(kind) {
+  function buildManagerCompanyTrendRows(kind, baseMonthLabel) {
     var info = buildManagerMonthlyCompanyAmountMap(kind);
-    var labels = info.labels || [];
+    var labels = getLimitedAnalyticsLabels(info.labels || [], baseMonthLabel);
     var monthMap = info.monthMap || {};
     var companyNames = {};
     labels.forEach(function (label) {
@@ -834,28 +859,69 @@
     };
   }
 
+  function formatManagerDeltaTitle(monthLabel, value, prevValue) {
+    var delta = (value || 0) - (prevValue || 0);
+    var rate = prevValue > 0 ? (delta / prevValue) * 100 : null;
+    var sign = delta > 0 ? "+" : "";
+    var rateText = rate == null ? "-" : (Math.round(rate * 100) / 100).toLocaleString("ko-KR") + "%";
+    return String(monthLabel || "") + " 금액 " + formatDisplayNumber(value || 0) + " / 전달대비 " + sign + formatDisplayNumber(delta) + " (" + rateText + ")";
+  }
+
   function renderManagerTrendBars(series, labels) {
     var values = Array.isArray(series) ? series : [];
-    var max = 0;
-    values.forEach(function (v) { if (v > max) max = v; });
+    if (!values.length) return '<div class="manager-trend-bars"></div>';
+    var max = values.reduce(function (m, v) { return v > m ? v : m; }, 0);
     if (max <= 0) max = 1;
+    var width = Math.max(100, values.length * 18 + 16);
+    var height = 64;
+    var innerTop = 6;
+    var innerBottom = 8;
+    var usableHeight = height - innerTop - innerBottom;
+    var barW = 9;
+    var step = values.length > 1 ? Math.max(14, Math.floor((width - 16) / values.length)) : 18;
+    var points = [];
+    var bars = [];
+    for (var i = 0; i < values.length; i++) {
+      var v = values[i] || 0;
+      var prev = i > 0 ? (values[i - 1] || 0) : 0;
+      var x = 8 + i * step;
+      var h = Math.max(2, Math.round((v / max) * usableHeight));
+      var y = height - innerBottom - h;
+      points.push((x + Math.floor(barW / 2)) + "," + y);
+      var title = formatManagerDeltaTitle(labels && labels[i], v, prev);
+      bars.push(
+        '<rect x="' + x + '" y="' + y + '" width="' + barW + '" height="' + h + '" class="manager-trend-bar">' +
+          "<title>" + escapeHtml(title) + "</title>" +
+        "</rect>"
+      );
+    }
+    var circles = [];
+    for (var j = 0; j < values.length; j++) {
+      var cv = values[j] || 0;
+      var cp = j > 0 ? (values[j - 1] || 0) : 0;
+      var cx = 8 + j * step + Math.floor(barW / 2);
+      var ch = Math.max(2, Math.round((cv / max) * usableHeight));
+      var cy = height - innerBottom - ch;
+      var ctitle = formatManagerDeltaTitle(labels && labels[j], cv, cp);
+      circles.push(
+        '<circle cx="' + cx + '" cy="' + cy + '" r="2.3" class="manager-trend-dot">' +
+          "<title>" + escapeHtml(ctitle) + "</title>" +
+        "</circle>"
+      );
+    }
     return (
       '<div class="manager-trend-bars">' +
-      values.map(function (v, i) {
-        var h = Math.max(8, Math.round((v / max) * 52));
-        var monthText = labels && labels[i] ? labels[i] : (String(i + 1) + "월");
-        return (
-          '<div class="manager-trend-bar-wrap" title="' + escapeAttr(monthText + " / " + formatDisplayNumber(v)) + '">' +
-          '<div class="manager-trend-bar" style="height:' + h + 'px"></div>' +
-          "</div>"
-        );
-      }).join("") +
+      '<svg viewBox="0 0 ' + width + " " + height + '" preserveAspectRatio="none" aria-hidden="true">' +
+      '<polyline class="manager-trend-line" points="' + points.join(" ") + '" />' +
+      bars.join("") +
+      circles.join("") +
+      "</svg>" +
       "</div>"
     );
   }
 
-  function renderManagerTrendPanel(kind) {
-    var trend = buildManagerCompanyTrendRows(kind);
+  function renderManagerTrendPanel(kind, baseMonthLabel) {
+    var trend = buildManagerCompanyTrendRows(kind, baseMonthLabel);
     var labels = trend.labels || [];
     if (!labels.length) {
       return (
@@ -1222,16 +1288,25 @@
           )
       );
 
+    var analyticsMonthOptions = getManagerAnalyticsMonthOptions();
+    var normalizedBaseMonth = String(managerState.analyticsBaseMonth || "");
+    if (!analyticsMonthOptions.length) {
+      normalizedBaseMonth = "";
+    } else if (!normalizedBaseMonth || analyticsMonthOptions.indexOf(normalizedBaseMonth) < 0) {
+      normalizedBaseMonth = analyticsMonthOptions[analyticsMonthOptions.length - 1];
+      managerState.analyticsBaseMonth = normalizedBaseMonth;
+    }
+
     var closingContentHtml =
       (
         activeSubTab === "purchase-analytics"
-          ? renderManagerTrendPanel("purchase")
-          : renderManagerTrendPanel("sales")
+          ? renderManagerTrendPanel("purchase", normalizedBaseMonth)
+          : renderManagerTrendPanel("sales", normalizedBaseMonth)
       ) +
       '<div class="manager-head-card">' +
       '<div class="manager-title">' + icon("sheet") + "<strong>업체별 증감 상세</strong></div>" +
       "</div>" +
-      renderManagerDeltaTable(activeSubTab === "purchase-analytics" ? "purchase" : "sales");
+      renderManagerDeltaTable(activeSubTab === "purchase-analytics" ? "purchase" : "sales", normalizedBaseMonth);
 
     return (
       '<div class="manager-page">' +
@@ -1273,6 +1348,15 @@
           '<div class="manager-head-card">' +
           '<div class="manager-title">' + icon("scroll") + "<strong>마감 추이 분석</strong></div>" +
           '<div class="manager-head-meta"><span>월별 마감 데이터 기준으로 업체별 증감/추이를 자동 분석합니다.</span></div>' +
+          '<div class="manager-head-actions">' +
+            '<label class="manager-inline-control">기준월 ' +
+              '<select id="manager-analytics-base-month">' +
+                analyticsMonthOptions.map(function (label) {
+                  return '<option value="' + escapeAttr(label) + '"' + (label === normalizedBaseMonth ? " selected" : "") + ">" + escapeHtml(label) + "</option>";
+                }).join("") +
+              "</select>" +
+            "</label>" +
+          "</div>" +
           "</div>"
         )) +
 
@@ -3368,6 +3452,14 @@
     return "";
   }
 
+  function inferMealTypeFromContext(sourceLabel, sheetName, headerText) {
+    var joined = normalizeMealHeaderToken(String(sourceLabel || "") + " " + String(sheetName || "") + " " + String(headerText || ""));
+    if (joined.indexOf("조식") >= 0 || joined.indexOf("아침") >= 0) return "breakfast";
+    if (joined.indexOf("석식") >= 0 || joined.indexOf("저녁") >= 0 || joined.indexOf("야식") >= 0) return "dinner";
+    if (joined.indexOf("중식") >= 0 || joined.indexOf("점심") >= 0 || joined.indexOf("식수") >= 0) return "lunch";
+    return "lunch";
+  }
+
   function isLikelyMealNameText(text) {
     var value = String(text || "").trim();
     if (!value) return false;
@@ -3467,6 +3559,59 @@
     return rows;
   }
 
+  function parseMealRowsByDateColumnsPattern(grid, monthLabel, sourceLabel, sheetName) {
+    var safeGrid = Array.isArray(grid) ? grid : [];
+    var monthMatch = String(monthLabel || "").match(/^(\d+)월$/);
+    var monthNumber = monthMatch ? Number(monthMatch[1]) : null;
+    var bestRows = [];
+    for (var r = 0; r < Math.min(safeGrid.length, 90); r++) {
+      var headRow = safeGrid[r] || [];
+      var dayCols = [];
+      var dayColSeen = {};
+      for (var c = 0; c < headRow.length; c++) {
+        var day = parseMealDayValue(headRow[c], monthNumber);
+        if (!day || dayColSeen[c]) continue;
+        dayColSeen[c] = true;
+        dayCols.push({ col: c, day: day });
+      }
+      if (dayCols.length < 5) continue;
+      dayCols.sort(function (a, b) { return a.col - b.col; });
+      var firstDayCol = dayCols[0].col;
+      var mealType = inferMealTypeFromContext(sourceLabel, sheetName, headRow.join(" "));
+      var rows = [];
+      for (var rr = r + 1; rr < Math.min(safeGrid.length, r + 260); rr++) {
+        var row = safeGrid[rr] || [];
+        var name = "";
+        var nameSearchMax = Math.max(4, Math.min(firstDayCol + 1, 10));
+        for (var nc = 0; nc < nameSearchMax; nc++) {
+          var maybeName = toTextCell(row[nc]);
+          if (isLikelyMealNameText(maybeName)) {
+            name = maybeName;
+            break;
+          }
+        }
+        if (!name) continue;
+        for (var i = 0; i < dayCols.length; i++) {
+          var info = dayCols[i];
+          var raw = row[info.col];
+          var cnt = parseMealCountValue(raw);
+          if (!(cnt > 0 && cnt <= 20)) continue;
+          rows.push({
+            day: info.day,
+            dateText: monthNumber ? (monthNumber + "월 " + info.day + "일") : String(info.day) + "일",
+            name: name,
+            breakfast: mealType === "breakfast" ? cnt : 0,
+            lunch: mealType === "lunch" ? cnt : 0,
+            dinner: mealType === "dinner" ? cnt : 0,
+            source: String(sourceLabel || ""),
+          });
+        }
+      }
+      if (rows.length > bestRows.length) bestRows = rows;
+    }
+    return bestRows;
+  }
+
   function findMealHeaderMapFromGrid(grid) {
     var safeGrid = Array.isArray(grid) ? grid : [];
     for (var r = 0; r < Math.min(safeGrid.length, 60); r++) {
@@ -3513,11 +3658,13 @@
     return null;
   }
 
-  function parseMealRecordsFromGrid(grid, monthLabel, sourceLabel) {
+  function parseMealRecordsFromGrid(grid, monthLabel, sourceLabel, sheetName) {
     var monthMatch = String(monthLabel || "").match(/^(\d+)월$/);
     var monthNumber = monthMatch ? Number(monthMatch[1]) : null;
     var headerMap = findMealHeaderMapFromGrid(grid);
     if (!headerMap) {
+      var rowsByDateCols = parseMealRowsByDateColumnsPattern(grid, monthLabel, sourceLabel, sheetName);
+      if (rowsByDateCols && rowsByDateCols.length) return rowsByDateCols;
       return parseMealRowsByLoosePattern(grid, monthLabel, sourceLabel);
     }
     var cols = headerMap.cols || {};
@@ -3576,7 +3723,7 @@
     for (var i = 0; i < names.length; i++) {
       var name = names[i];
       var grid = getWorkbookSheetGrid(workbook, name);
-      var rows = parseMealRecordsFromGrid(grid, monthLabel, sourceLabel);
+      var rows = parseMealRecordsFromGrid(grid, monthLabel, sourceLabel, name);
       if (!best || rows.length > best.rows.length) {
         best = { sheetName: name, rows: rows };
       }
@@ -10830,6 +10977,14 @@
           render();
         });
       });
+      var managerAnalyticsBaseMonth = document.getElementById("manager-analytics-base-month");
+      if (managerAnalyticsBaseMonth) {
+        managerAnalyticsBaseMonth.addEventListener("change", function () {
+          managerState.analyticsBaseMonth = String(managerAnalyticsBaseMonth.value || "");
+          scheduleLedgerDraftSave();
+          render();
+        });
+      }
       var connectBtn = document.getElementById("btn-manager-connect-folder");
       if (connectBtn) {
         connectBtn.addEventListener("click", function () {

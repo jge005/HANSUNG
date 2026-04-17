@@ -967,6 +967,14 @@
       background: #fff;
       color: #514867;
     }
+    .manager-inline-control select {
+      border: 1px solid #dbcdf2;
+      border-radius: 8px;
+      padding: 3px 8px;
+      font: inherit;
+      background: #fff;
+      color: #514867;
+    }
     .manager-summary-row {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1024,26 +1032,31 @@
       min-width: 320px;
     }
     .manager-trend-bars {
-      display: flex;
-      align-items: flex-end;
-      gap: 4px;
-      min-height: 58px;
       width: 100%;
+      min-height: 60px;
     }
-    .manager-trend-bar-wrap {
-      flex: 1 1 0;
-      min-width: 10px;
-      display: flex;
-      align-items: flex-end;
-      justify-content: center;
+    .manager-trend-bars svg {
+      width: 100%;
+      height: 64px;
+      overflow: visible;
+      display: block;
+    }
+    .manager-trend-line {
+      fill: none;
+      stroke: #4c51bf;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
     .manager-trend-bar {
-      width: 100%;
-      border-radius: 4px 4px 0 0;
-      background: linear-gradient(180deg, #b893f6 0%, #8f6ad6 100%);
-      border: 1px solid #7a56c7;
-      border-bottom: none;
-      min-height: 8px;
+      fill: #d8c4ff;
+      stroke: #8f6ad6;
+      stroke-width: 0.8;
+    }
+    .manager-trend-dot {
+      fill: #4c51bf;
+      stroke: #fff;
+      stroke-width: 0.8;
     }
     .manager-table .mono {
       font-family: "Consolas", "SFMono-Regular", Menlo, monospace;
