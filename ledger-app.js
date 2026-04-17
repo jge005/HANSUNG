@@ -148,6 +148,7 @@
     listSortKey: "date",
     listSortDir: "desc",
     editTargetRow: -1,
+    writeMode: "replace",
   };
   var manageState = {
     startMonth: "",
@@ -6108,6 +6109,31 @@
     return normalized.length;
   }
 
+  function getOrderLastUsedRow(rows) {
+    var normalized = normalizeOrderRows(rows, 50);
+    for (var i = normalized.length - 1; i >= 0; i--) {
+      if (rowHasAnyValue(normalized[i], orderGridFields)) return i;
+    }
+    return -1;
+  }
+
+  function getFirstWritableRow(rows, mode) {
+    var normalized = normalizeOrderRows(rows, 50);
+    var writeMode = mode === "append" ? "append" : "replace";
+    if (writeMode === "append") {
+      return findOrderFirstEmptyRow(normalized);
+    }
+    // replace mode: 현재 실제 남아있는 데이터 기준으로 시작행 계산
+    for (var i = 0; i < normalized.length; i++) {
+      if (rowHasAnyValue(normalized[i], orderGridFields)) return i;
+    }
+    return 0;
+  }
+
+  function clearInsertState() {
+    orderState.editTargetRow = -1;
+  }
+
   function mapExtractionItemsToOrderRows(extraction) {
     if (!extraction || !Array.isArray(extraction.items)) return [];
     var orderDate = extraction.order && extraction.order.order_date ? extraction.order.order_date : "";
@@ -6115,6 +6141,7 @@
     var shipDate = extraction.order && extraction.order.current_ship_date ? extraction.order.current_ship_date : "";
     var customer = extraction.order && extraction.order.customer_name ? extraction.order.customer_name : "";
     return extraction.items.map(function (item) {
+      var itemDue = item && item.due_date ? normalizeOrderDateText(item.due_date) : "";
       return {
         orderDate: orderDate || "",
         vendor: customer || "",
@@ -6123,21 +6150,30 @@
         spec: item && item.spec ? String(item.spec) : "",
         qty: item && item.quantity != null ? String(item.quantity) : "",
         unit: item && item.unit ? String(item.unit) : "",
-        dueDate: dueDate || shipDate || "",
+        dueDate: itemDue || dueDate || shipDate || "",
         status: "요청",
         note: item && item.remarks ? String(item.remarks) : "",
       };
     });
   }
 
-  function applyExtractionToOrderGrid(extraction) {
+  function writeExtractedOrdersToSheet(extraction, mode) {
     if (!extraction || !Array.isArray(extraction.items) || !extraction.items.length) {
       showAppToast("추출된 품목이 없어요. 원문 텍스트를 확인해주세요.", "warning");
       return;
     }
     var mappedRows = mapExtractionItemsToOrderRows(extraction);
     var rows = normalizeOrderRows(orderState.rows, 50);
-    var start = findOrderFirstEmptyRow(rows);
+    var writeMode = mode === "append" ? "append" : "replace";
+    var start = getFirstWritableRow(rows, writeMode);
+    if (writeMode === "replace") {
+      var lastUsed = getOrderLastUsedRow(rows);
+      if (lastUsed >= start) {
+        for (var clearIndex = start; clearIndex <= lastUsed; clearIndex++) {
+          rows[clearIndex] = emptyOrderRow();
+        }
+      }
+    }
     while (rows.length < start + mappedRows.length + 1) rows.push(emptyOrderRow());
     for (var i = 0; i < mappedRows.length; i++) {
       rows[start + i] = Object.assign(emptyOrderRow(), mappedRows[i]);
@@ -6145,8 +6181,13 @@
     orderState.rows = normalizeOrderRows(rows, 50);
     if (orderSheetEngine) orderSheetEngine.refresh();
     refreshOrderSummaryUi();
+    clearInsertState();
     scheduleLedgerDraftSave();
-    showAppToast("자동추출 결과를 발주 시트에 반영했어요.", "success");
+    showAppToast("자동추출 결과를 발주 시트에 반영했어요. (" + writeMode + ")", "success");
+  }
+
+  function applyExtractionToOrderGrid(extraction) {
+    return writeExtractedOrdersToSheet(extraction, orderState.writeMode || "replace");
   }
 
   function setOrderExtractionResult(extraction) {
@@ -6250,6 +6291,13 @@
     return m[1] + "-" + (mm < 10 ? "0" + mm : mm) + "-" + (dd < 10 ? "0" + dd : dd);
   }
 
+  function toNumberValue(value) {
+    if (typeof parseCalcNumber === "function") return parseCalcNumber(value);
+    if (value == null || value === "") return 0;
+    var num = Number(String(value).replace(/,/g, "").trim());
+    return isFinite(num) ? num : 0;
+  }
+
   function normalizeOrderRowsToRecords(rows) {
     var normalizedRows = normalizeOrderRows(rows || [], 1);
     var records = [];
@@ -6260,7 +6308,12 @@
       var status = String(row.status || "요청");
       var orderDate = normalizeOrderDateText(row.orderDate) || "";
       var dueDate = normalizeOrderDateText(row.dueDate) || "";
-      var qtyNum = toNumberValue(row.qty);
+      var qtyNum =
+        typeof toNumberValue === "function"
+          ? toNumberValue(row.qty)
+          : typeof parseCalcNumber === "function"
+            ? parseCalcNumber(row.qty)
+            : Number(String(row.qty == null ? "" : row.qty).replace(/,/g, "").trim()) || 0;
       var qtyText = qtyNum ? formatDisplayNumber(qtyNum) : String(row.qty || "").trim();
       var unitText = String(row.unit || "").trim();
       var quantitySummary = qtyText + (unitText ? " " + unitText : "");
@@ -7697,6 +7750,7 @@
         listChangedOnly: !!orderState.listChangedOnly,
         listSortKey: String(orderState.listSortKey || "date"),
         listSortDir: String(orderState.listSortDir || "desc"),
+        writeMode: String(orderState.writeMode || "replace"),
         extractionText: String(orderState.extractionText || ""),
         lastExtraction: orderState.lastExtraction && typeof orderState.lastExtraction === "object"
           ? JSON.parse(JSON.stringify(orderState.lastExtraction))
@@ -7856,6 +7910,7 @@
     orderState.listChangedOnly = ordersData ? !!ordersData.listChangedOnly : !!orderState.listChangedOnly;
     orderState.listSortKey = ordersData ? String(ordersData.listSortKey || "date") : String(orderState.listSortKey || "date");
     orderState.listSortDir = ordersData ? String(ordersData.listSortDir || "desc") : String(orderState.listSortDir || "desc");
+    orderState.writeMode = ordersData ? String(ordersData.writeMode || "replace") : String(orderState.writeMode || "replace");
     orderState.extractionText = ordersData ? String(ordersData.extractionText || "") : String(orderState.extractionText || "");
     orderState.lastExtraction = ordersData && ordersData.lastExtraction && typeof ordersData.lastExtraction === "object"
       ? JSON.parse(JSON.stringify(ordersData.lastExtraction))
@@ -11485,6 +11540,13 @@
               '<option value="phone">phone</option>' +
               '<option value="direct">direct</option>' +
             '</select>' +
+            '<select id="order-write-mode" class="field" style="height:36px">' +
+              '<option value="replace"' + (orderState.writeMode === "replace" ? " selected" : "") + '>replace (기본)</option>' +
+              '<option value="append"' + (orderState.writeMode === "append" ? " selected" : "") + '>append</option>' +
+            '</select>' +
+            '<button type="button" class="soft-btn" id="btn-order-clear-insert-state">입력위치 초기화</button>' +
+          '</div>' +
+          '<div style="display:grid;grid-template-columns:minmax(220px,1fr) minmax(220px,1fr) minmax(220px,2fr) auto;gap:8px;align-items:center;margin-bottom:8px">' +
             '<input type="file" id="order-extract-file" accept=".xlsx,.xls,.csv,.tsv,.txt,.pdf,.png,.jpg,.jpeg,.bmp,.gif,.webp" class="field" style="height:36px;padding:6px" />' +
             '<button type="button" class="soft-btn" id="btn-order-extract-file">파일 추출</button>' +
           '</div>' +
@@ -13034,6 +13096,21 @@
         });
       });
       if (state.ordersSubTab === "sheet") {
+        var writeModeEl = document.getElementById("order-write-mode");
+        if (writeModeEl) {
+          writeModeEl.addEventListener("change", function () {
+            orderState.writeMode = writeModeEl.value === "append" ? "append" : "replace";
+            scheduleLedgerDraftSave();
+          });
+        }
+        var clearInsertBtn = document.getElementById("btn-order-clear-insert-state");
+        if (clearInsertBtn) {
+          clearInsertBtn.addEventListener("click", function () {
+            clearInsertState();
+            scheduleLedgerDraftSave();
+            showAppToast("입력 위치 상태를 초기화했어요.", "success");
+          });
+        }
         var extractTextEl = document.getElementById("order-extract-text");
         if (extractTextEl) {
           extractTextEl.addEventListener("input", function () {

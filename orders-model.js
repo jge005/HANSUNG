@@ -742,6 +742,360 @@
     });
   }
 
+  // ------------------------
+  // v2 generic extraction pipeline (rule-based)
+  // ------------------------
+  function detectInputType(input) {
+    if (typeof input === "string") return "text";
+    if (!input || typeof input !== "object") return "manual";
+    var file = input && input.file ? input.file : input;
+    var name = toCleanString(file && (file.name || file.fileName)).toLowerCase();
+    var mime = toCleanString(file && (file.type || file.mimeType)).toLowerCase();
+    if (mime.indexOf("sheet") >= 0 || /\.(xlsx|xls|csv|tsv)$/i.test(name)) return "excel";
+    if (mime.indexOf("pdf") >= 0 || /\.pdf$/i.test(name)) return "pdf";
+    if (mime.indexOf("image") >= 0 || /\.(png|jpg|jpeg|bmp|gif|webp|tif|tiff)$/i.test(name)) return "image";
+    if (mime.indexOf("text") >= 0 || /\.(txt|md|log|json)$/i.test(name)) return "text";
+    return "manual";
+  }
+
+  function detectOrderSourceType(input) {
+    return detectInputType(input);
+  }
+
+  function normalizeExtractedText(text) {
+    return normalizeText(text);
+  }
+
+  function detectSummaryRows(rowValues) {
+    var joined = (rowValues || []).map(function (v) { return toCleanString(v); }).join(" ").toLowerCase();
+    if (!joined) return false;
+    return /(합계수량|합계금액|세액|총액|합계|공급가액|부가세|subtotal|total|tax|vat)/.test(joined);
+  }
+
+  function detectHeaderSection(rows) {
+    var header = { orderDate: null, customerName: "" };
+    for (var r = 0; r < Math.min(rows.length, 30); r++) {
+      var row = Array.isArray(rows[r]) ? rows[r] : [];
+      for (var c = 0; c < row.length; c++) {
+        var cell = toCleanString(row[c]).toLowerCase();
+        if (!cell) continue;
+        if (!header.orderDate && /(발주일자|발주일|작성일|order\s*date)/.test(cell)) {
+          var cand = normalizeDate(row[c + 1]) || normalizeDate((rows[r + 1] && rows[r + 1][c]) || "");
+          if (cand) header.orderDate = cand;
+        }
+        if (!header.customerName && /(거래처|발주처|업체명|customer|buyer|to)/.test(cell)) {
+          var name = toCleanString(row[c + 1]) || toCleanString(row[c + 2]);
+          if (name && !detectSummaryRows([name])) header.customerName = name;
+        }
+      }
+    }
+    return header;
+  }
+
+  function normalizeExcelHeaderKey(cellText) {
+    var t = toCleanString(cellText).toLowerCase().replace(/\s+/g, "");
+    if (!t) return "";
+    if (/^(no|번호|순번)$/.test(t)) return "no";
+    if (/(구매품번|품번|품목코드|코드|itemcode|partno)/.test(t)) return "code";
+    if (/(구매품명|품명|품목명|itemname|item)/.test(t)) return "name";
+    if (/(규격|spec|size)/.test(t)) return "spec";
+    if (/(단위|unit)/.test(t)) return "unit";
+    if (/(발주수량|수량|qty|quantity)/.test(t)) return "qty";
+    if (/(납기일|납기|due|shipdate|요청출고)/.test(t)) return "due";
+    if (/(단가|price)/.test(t)) return "price";
+    return "";
+  }
+
+  function detectItemTable(rows) {
+    var best = null;
+    for (var r = 0; r < Math.min(rows.length, 90); r++) {
+      var row = Array.isArray(rows[r]) ? rows[r] : [];
+      var map = {};
+      var score = 0;
+      for (var c = 0; c < row.length; c++) {
+        var key = normalizeExcelHeaderKey(row[c]);
+        if (!key || map[key] != null) continue;
+        map[key] = c;
+        score += 1;
+      }
+      if ((map.name != null) && (map.qty != null || map.due != null || map.code != null)) {
+        if (!best || score > best.score) best = { headerRow: r, colMap: map, score: score };
+      }
+    }
+    return best;
+  }
+
+  function parseOrderDate(header) {
+    return header && header.orderDate ? header.orderDate : null;
+  }
+
+  function parseDueDate(value) {
+    return normalizeDate(value);
+  }
+
+  function parseOrderItems(rows, tableInfo) {
+    if (!tableInfo) return [];
+    var items = [];
+    var map = tableInfo.colMap;
+    var blankStreak = 0;
+    for (var r = tableInfo.headerRow + 1; r < rows.length; r++) {
+      var row = Array.isArray(rows[r]) ? rows[r] : [];
+      var hasAny = row.some(function (v) { return toCleanString(v) !== ""; });
+      if (!hasAny) {
+        blankStreak += 1;
+        if (blankStreak >= 3) break;
+        continue;
+      }
+      blankStreak = 0;
+      if (detectSummaryRows(row)) continue;
+      var product = toCleanString(row[map.name]);
+      var code = toCleanString(row[map.code]);
+      var qty = normalizeNumber(row[map.qty], null);
+      var due = parseDueDate(row[map.due]);
+      if (!(product || code)) continue;
+      if (qty == null && !due) continue;
+      if (product && /(합계|총액|세액|금액)/.test(product)) continue;
+      items.push({
+        product_name: product || code,
+        spec: toCleanString(row[map.spec]),
+        quantity: qty == null ? 0 : qty,
+        unit: toCleanString(row[map.unit]),
+        unit_price: normalizeNumber(row[map.price], null),
+        due_date: due,
+        remarks: "",
+      });
+      if (items.length >= 500) break;
+    }
+    return items;
+  }
+
+  function parseExcelOrderSheet(workbook) {
+    var bestSheet = null;
+    var bestRows = [];
+    var bestCount = -1;
+    (workbook.SheetNames || []).forEach(function (name) {
+      var ws = workbook.Sheets[name];
+      if (!ws) return;
+      var rows = global.XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+      var count = 0;
+      for (var i = 0; i < rows.length; i++) {
+        if (Array.isArray(rows[i]) && rows[i].some(function (v) { return toCleanString(v) !== ""; })) count += 1;
+      }
+      if (count > bestCount) {
+        bestCount = count;
+        bestSheet = name;
+        bestRows = rows;
+      }
+    });
+    var header = detectHeaderSection(bestRows);
+    var table = detectItemTable(bestRows);
+    var items = parseOrderItems(bestRows, table);
+    var firstDue = null;
+    for (var k = 0; k < items.length; k++) {
+      if (items[k].due_date) {
+        firstDue = items[k].due_date;
+        break;
+      }
+    }
+    var lines = [];
+    bestRows.forEach(function (row) {
+      if (!Array.isArray(row)) return;
+      var line = row.map(function (v) { return toCleanString(v); }).join("\t").trim();
+      if (line) lines.push(line);
+    });
+    return {
+      sheetName: bestSheet || "",
+      raw_text: normalizeExtractedText(lines.join("\n")),
+      customer_name: header.customerName || "",
+      order_date: parseOrderDate(header),
+      requested_ship_date: firstDue,
+      due_date: firstDue,
+      order_items: items,
+      unresolved_fields: [],
+    };
+  }
+
+  function extractTextFromExcel(file) {
+    if (!global.XLSX || !file || typeof file.arrayBuffer !== "function") {
+      return Promise.resolve({ source_type: "excel", raw_text: "", parsed: null, meta: { mode: "excel_unavailable" } });
+    }
+    return file.arrayBuffer().then(function (buffer) {
+      var wb = global.XLSX.read(buffer, { type: "array" });
+      var parsed = parseExcelOrderSheet(wb);
+      return { source_type: "excel", raw_text: parsed.raw_text || "", parsed: parsed, meta: { mode: "excel_structured" } };
+    });
+  }
+
+  function extractTextFromPdf(file) {
+    if (file && typeof file.text === "function") {
+      return file.text().then(function (txt) {
+        return { source_type: "pdf", raw_text: normalizeExtractedText(txt || ""), parsed: null, meta: { mode: "pdf_text_fallback" } };
+      });
+    }
+    return Promise.resolve({ source_type: "pdf", raw_text: "", parsed: null, meta: { mode: "pdf_placeholder" } });
+  }
+
+  function extractTextFromImage(file) {
+    // placeholder for OCR path
+    return Promise.resolve({ source_type: "image", raw_text: "", parsed: null, meta: { mode: "ocr_placeholder" } });
+  }
+
+  function extractTextFromText(fileOrText) {
+    if (typeof fileOrText === "string") {
+      return Promise.resolve({ source_type: "text", raw_text: normalizeExtractedText(fileOrText), parsed: null, meta: { mode: "direct_text" } });
+    }
+    var file = fileOrText && fileOrText.file ? fileOrText.file : fileOrText;
+    if (file && typeof file.text === "function") {
+      return file.text().then(function (txt) {
+        return { source_type: "text", raw_text: normalizeExtractedText(txt || ""), parsed: null, meta: { mode: "file_text" } };
+      });
+    }
+    return Promise.resolve({ source_type: "manual", raw_text: "", parsed: null, meta: { mode: "empty_text" } });
+  }
+
+  function extractRawText(input) {
+    var type = detectInputType(input);
+    var file = input && input.file ? input.file : input;
+    if (type === "excel") return extractTextFromExcel(file);
+    if (type === "pdf") return extractTextFromPdf(file);
+    if (type === "image") return extractTextFromImage(file);
+    return extractTextFromText(input);
+  }
+
+  function parseCustomerName(text) {
+    var normalized = normalizeExtractedText(text);
+    var lines = normalized.split("\n");
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      var m = line.match(/(?:거래처|발주처|업체명|customer|buyer|to)\s*[:：]\s*(.+)$/i);
+      if (m && toCleanString(m[1])) return toCleanString(m[1]);
+    }
+    return "";
+  }
+
+  function parseDates(text) {
+    var normalized = normalizeExtractedText(text);
+    var lines = normalized.split("\n");
+    var result = { order_date: null, requested_ship_date: null, due_date: null, current_ship_date: null, original_ship_date: null, candidates: [] };
+    var reg = /(\d{4}[.\-/년]\s*\d{1,2}[.\-/월]\s*\d{1,2}\s*일?|\d{8})/g;
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      var hit;
+      while ((hit = reg.exec(line))) {
+        var raw = toCleanString(hit[1]).replace(/년|월/g, "-").replace(/일/g, "").replace(/[.\/]/g, "-").replace(/\s+/g, "");
+        var d = normalizeDate(raw);
+        if (!d) continue;
+        result.candidates.push({ date: d, line: line, index: i });
+        var low = line.toLowerCase();
+        if (!result.order_date && /(발주일|작성일|order date)/.test(low)) result.order_date = d;
+        if (!result.requested_ship_date && /(납기|요청출고|ship|due)/.test(low)) result.requested_ship_date = d;
+      }
+    }
+    if (!result.order_date && result.candidates[0]) result.order_date = result.candidates[0].date;
+    if (!result.requested_ship_date && result.candidates[1]) result.requested_ship_date = result.candidates[1].date;
+    result.due_date = result.requested_ship_date || null;
+    result.current_ship_date = result.requested_ship_date || null;
+    result.original_ship_date = result.requested_ship_date || null;
+    return result;
+  }
+
+  function parseItems(text) {
+    var lines = normalizeExtractedText(text).split("\n");
+    var items = [];
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (!line.trim()) continue;
+      if (/(합계|총액|세액|금액합계|부가세|subtotal|total|tax|vat)/i.test(line)) continue;
+      var parts = line.indexOf("\t") >= 0 ? line.split("\t") : line.split(/\s{2,}/);
+      if (!parts || parts.length < 2) continue;
+      var qty = null;
+      for (var c = 0; c < parts.length; c++) {
+        var n = normalizeNumber(parts[c], null);
+        if (n != null) { qty = n; break; }
+      }
+      if (qty == null) continue;
+      var name = toCleanString(parts[0]);
+      if (!name) continue;
+      items.push({ product_name: name, spec: toCleanString(parts[1]), quantity: qty, unit: "", unit_price: null, remarks: "" });
+      if (items.length >= 200) break;
+    }
+    return items;
+  }
+
+  function buildNormalizedOrder(options) {
+    var opts = isObject(options) ? options : {};
+    var parsed = isObject(opts.parsed) ? opts.parsed : null;
+    var rawText = normalizeExtractedText(opts.raw_text || "");
+    var sourceType = normalizeEnum(opts.source_type, ORDER_SOURCE_TYPES, detectInputType(opts.file || rawText || ""));
+    var inputMethod = normalizeEnum(opts.input_method, ORDER_INPUT_METHODS, "auto_upload");
+    var receivedChannel = normalizeEnum(opts.received_channel, ORDER_RECEIVED_CHANNELS, "file_upload");
+    var customerName = parsed && parsed.customer_name ? toCleanString(parsed.customer_name) : parseCustomerName(rawText);
+    var dates = parsed ? {
+      order_date: normalizeDate(parsed.order_date),
+      requested_ship_date: normalizeDate(parsed.requested_ship_date || parsed.due_date),
+      due_date: normalizeDate(parsed.due_date || parsed.requested_ship_date),
+      current_ship_date: normalizeDate(parsed.requested_ship_date || parsed.due_date),
+      original_ship_date: normalizeDate(parsed.requested_ship_date || parsed.due_date),
+      candidates: [],
+    } : parseDates(rawText);
+    var items = parsed && Array.isArray(parsed.order_items) ? parsed.order_items.map(function (r) { return normalizeOrderItem(r, null); }) : parseItems(rawText);
+    var urgent = parseUrgency(rawText);
+    var scheduleChange = parseScheduleChange(rawText, dates.current_ship_date);
+    var unresolved = [];
+    if (!customerName) unresolved.push("customer_name");
+    if (!dates.order_date) unresolved.push("order_date");
+    if (!dates.requested_ship_date) unresolved.push("requested_ship_date");
+    if (!items.length) unresolved.push("order_items");
+    if (!rawText && !parsed) unresolved.push("raw_text");
+    if (parsed && Array.isArray(parsed.unresolved_fields)) unresolved = normalizeUnresolvedFields(unresolved.concat(parsed.unresolved_fields));
+    var confidence = {
+      customer_name: customerName ? 0.9 : 0.3,
+      dates: dates.order_date ? 0.9 : (dates.requested_ship_date ? 0.6 : 0.2),
+      items: items.length ? 0.9 : 0.2,
+      urgency: urgent ? 0.9 : 0.6,
+    };
+    confidence.overall = (confidence.customer_name + confidence.dates + confidence.items + confidence.urgency) / 4;
+    var baseOrder = normalizeOrder({
+      source_type: sourceType,
+      input_method: inputMethod,
+      received_channel: receivedChannel,
+      received_by: toCleanString(opts.received_by),
+      customer_name: customerName,
+      order_date: dates.order_date,
+      requested_ship_date: dates.requested_ship_date,
+      current_ship_date: dates.current_ship_date,
+      original_ship_date: dates.original_ship_date,
+      due_date: dates.due_date,
+      is_urgent: urgent,
+      status: unresolved.length ? "review_required" : "received",
+      notes: toCleanString(opts.notes),
+      raw_text: rawText,
+      unresolved_fields: unresolved,
+      confidence: confidence.overall,
+      order_items: items.map(function (row) { return normalizeOrderItem(row, null); }),
+      schedule_changes: scheduleChange ? [scheduleChange] : [],
+    });
+    baseOrder.order_items = baseOrder.order_items.map(function (it) { return normalizeOrderItem(it, baseOrder.id); });
+    baseOrder.schedule_changes = baseOrder.schedule_changes.map(function (sc) { return normalizeScheduleChange(sc, baseOrder.id); });
+    return { order: baseOrder, items: baseOrder.order_items.slice(), confidence: confidence, unresolved_fields: unresolved.slice() };
+  }
+
+  function runExtractionFromInput(input, context) {
+    var ctx = isObject(context) ? context : {};
+    return extractRawText(input).then(function (rawResult) {
+      return buildNormalizedOrder({
+        source_type: rawResult.source_type,
+        input_method: ctx.input_method || "auto_upload",
+        received_channel: ctx.received_channel || (rawResult.source_type === "phone" ? "phone" : "file_upload"),
+        received_by: ctx.received_by || "",
+        notes: ctx.notes || "",
+        raw_text: rawResult.raw_text || "",
+        parsed: rawResult.parsed || null,
+        file: input && input.file ? input.file : input,
+      });
+    });
+  }
+
   global.OrderModel = {
     ORDER_SOURCE_TYPES: ORDER_SOURCE_TYPES.slice(),
     ORDER_INPUT_METHODS: ORDER_INPUT_METHODS.slice(),
@@ -763,9 +1117,21 @@
     mergeExtractionResult: mergeExtractionResult,
     toFirestoreWriteBundle: toFirestoreWriteBundle,
     sampleOrderStructure: sampleOrderStructure,
+    detectInputType: detectInputType,
     detectOrderSourceType: detectOrderSourceType,
     extractRawText: extractRawText,
+    extractTextFromExcel: extractTextFromExcel,
+    extractTextFromPdf: extractTextFromPdf,
+    extractTextFromImage: extractTextFromImage,
     normalizeText: normalizeText,
+    normalizeExtractedText: normalizeExtractedText,
+    parseExcelOrderSheet: parseExcelOrderSheet,
+    detectHeaderSection: detectHeaderSection,
+    detectItemTable: detectItemTable,
+    detectSummaryRows: detectSummaryRows,
+    parseOrderDate: parseOrderDate,
+    parseDueDate: parseDueDate,
+    parseOrderItems: parseOrderItems,
     parseCustomerName: parseCustomerName,
     parseDates: parseDates,
     parseItems: parseItems,
