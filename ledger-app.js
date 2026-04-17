@@ -286,6 +286,8 @@
   var managerAlertTimer = null;
   var managerScanInFlight = false;
   var closingHandleDbPromise = null;
+  var closingMultiDeleteActiveState = null;
+  var closingMultiDeleteMouseupBound = false;
 
   function getClosingHandleDb() {
     if (closingHandleDbPromise) return closingHandleDbPromise;
@@ -11308,6 +11310,171 @@
     });
   }
 
+  function getClosingInputByCellInfo(wrap, info) {
+    if (!wrap || !info) return null;
+    var selector = "";
+    if (info.type === "outsource") {
+      var fieldName = info.col <= 31 ? ("d" + info.col) : (info.col === 1001 ? "payCalc" : (info.col === 1002 ? "bonus" : "payAmount"));
+      selector = 'input[data-outsource-row="' + info.row + '"][data-outsource-field="' + fieldName + '"]';
+    } else if (info.type === "employee") {
+      selector = 'input[data-employee-row="' + info.row + '"][data-employee-field="d' + info.col + '"]';
+    }
+    if (!selector) return null;
+    var node = wrap.querySelector(selector);
+    return node instanceof HTMLInputElement ? node : null;
+  }
+
+  function getClosingCellKey(info) {
+    return String(info.type || "") + ":" + String(info.row) + ":" + String(info.col);
+  }
+
+  function parseClosingCellKey(key) {
+    var parts = String(key || "").split(":");
+    if (parts.length !== 3) return null;
+    return {
+      type: parts[0],
+      row: Number(parts[1]),
+      col: Number(parts[2]),
+    };
+  }
+
+  function bindClosingMultiDeleteSelection(wrap) {
+    if (!wrap || wrap.__closingMultiDeleteBound) return;
+    wrap.__closingMultiDeleteBound = true;
+
+    var state = {
+      mouseDown: false,
+      anchor: null,
+      keys: [],
+      lastAppliedKeys: [],
+    };
+    if (!closingMultiDeleteMouseupBound) {
+      closingMultiDeleteMouseupBound = true;
+      document.addEventListener("mouseup", function () {
+        if (closingMultiDeleteActiveState) closingMultiDeleteActiveState.mouseDown = false;
+      });
+    }
+
+    function clearVisual(keys) {
+      (keys || []).forEach(function (key) {
+        var info = parseClosingCellKey(key);
+        if (!info) return;
+        var input = getClosingInputByCellInfo(wrap, info);
+        if (input) input.classList.remove("closing-matrix-input-selected");
+      });
+    }
+
+    function applyVisual(keys) {
+      clearVisual(state.lastAppliedKeys);
+      (keys || []).forEach(function (key) {
+        var info = parseClosingCellKey(key);
+        if (!info) return;
+        var input = getClosingInputByCellInfo(wrap, info);
+        if (input) input.classList.add("closing-matrix-input-selected");
+      });
+      state.lastAppliedKeys = (keys || []).slice();
+    }
+
+    function setKeys(keys) {
+      state.keys = keys.slice();
+      applyVisual(state.keys);
+    }
+
+    function rangeKeys(fromInfo, toInfo) {
+      if (!fromInfo || !toInfo) return [];
+      if (fromInfo.type !== toInfo.type) return [getClosingCellKey(toInfo)];
+      var r1 = Math.min(fromInfo.row, toInfo.row);
+      var r2 = Math.max(fromInfo.row, toInfo.row);
+      var c1 = Math.min(fromInfo.col, toInfo.col);
+      var c2 = Math.max(fromInfo.col, toInfo.col);
+      var keys = [];
+      for (var r = r1; r <= r2; r++) {
+        for (var c = c1; c <= c2; c++) {
+          var info = { type: fromInfo.type, row: r, col: c };
+          var input = getClosingInputByCellInfo(wrap, info);
+          if (input) keys.push(getClosingCellKey(info));
+        }
+      }
+      return keys;
+    }
+
+    wrap.addEventListener("mousedown", function (e) {
+      var target = e.target;
+      if (!(target instanceof HTMLInputElement)) return;
+      var info = getClosingInputCellInfo(target);
+      if (!info) return;
+      state.mouseDown = true;
+      closingMultiDeleteActiveState = state;
+      state.anchor = info;
+      setKeys([getClosingCellKey(info)]);
+      e.preventDefault();
+      target.focus();
+      target.select();
+    });
+
+    wrap.addEventListener("mouseover", function (e) {
+      if (!state.mouseDown || !state.anchor) return;
+      var target = e.target;
+      if (!(target instanceof HTMLInputElement)) return;
+      var info = getClosingInputCellInfo(target);
+      if (!info) return;
+      setKeys(rangeKeys(state.anchor, info));
+    });
+    wrap.addEventListener("mouseleave", function () {
+      state.mouseDown = false;
+    });
+
+    wrap.addEventListener("focusin", function (e) {
+      var target = e.target;
+      if (!(target instanceof HTMLInputElement)) return;
+      var info = getClosingInputCellInfo(target);
+      if (!info) return;
+      if (state.mouseDown && state.anchor) return;
+      setKeys([getClosingCellKey(info)]);
+      state.anchor = info;
+    });
+
+    wrap.addEventListener("click", function (e) {
+      var target = e.target;
+      if (!(target instanceof HTMLInputElement)) return;
+      var info = getClosingInputCellInfo(target);
+      if (!info) return;
+      if (state.mouseDown && state.anchor) return;
+      setKeys([getClosingCellKey(info)]);
+      state.anchor = info;
+    });
+
+    wrap.addEventListener("keydown", function (e) {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      if (!state.keys || !state.keys.length) return;
+      if (state.keys.length < 2) {
+        if (e.key !== "Delete") return;
+      }
+      var cleared = 0;
+      state.keys.forEach(function (key) {
+        var info = parseClosingCellKey(key);
+        if (!info) return;
+        var input = getClosingInputByCellInfo(wrap, info);
+        if (!(input instanceof HTMLInputElement)) return;
+        if (input.readOnly || input.disabled) return;
+        if (String(input.value || "") === "") return;
+        input.value = "";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        cleared++;
+      });
+      if (cleared > 0) {
+        e.preventDefault();
+      }
+    });
+
+    wrap.addEventListener("mousedown", function (e) {
+      var target = e.target;
+      if (target instanceof HTMLInputElement) return;
+      setKeys([]);
+      state.anchor = null;
+    });
+  }
+
   function getClosingDivisionSpans(rows) {
     var spans = {};
     var start = -1;
@@ -12587,6 +12754,7 @@
           var outsourceWrap = app.querySelector(".closing-matrix-wrap");
           if (outsourceWrap) {
             bindClosingInputNavigation(outsourceWrap);
+            bindClosingMultiDeleteSelection(outsourceWrap);
             autoFocusClosingFirstInput(outsourceWrap);
             outsourceWrap.querySelectorAll("[data-remove-outsource-group]").forEach(function (btn) {
               btn.addEventListener("click", function () {
@@ -12673,6 +12841,7 @@
           var employeeWrap = app.querySelector(".closing-matrix-wrap");
           if (employeeWrap) {
             bindClosingInputNavigation(employeeWrap);
+            bindClosingMultiDeleteSelection(employeeWrap);
             autoFocusClosingFirstInput(employeeWrap);
             employeeWrap.querySelectorAll("[data-remove-employee-group]").forEach(function (btn) {
               btn.addEventListener("click", function () {
