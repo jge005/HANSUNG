@@ -45,12 +45,18 @@
     { key: "salesclose", label: "매출마감", icon: "scroll" },
     { key: "purchaseclose", label: "매입마감", icon: "folder" },
   ];
-  var managerTabs = [
+  var managerMainTabs = [
+    { key: "docs", label: "서류", icon: "folder" },
+    { key: "closing", label: "마감", icon: "scroll" },
+  ];
+  var managerDocTabs = [
     { key: "overview", label: "전체요약", icon: "sheet" },
     { key: "due", label: "만료임박", icon: "scroll" },
     { key: "expired", label: "만료됨", icon: "folder" },
     { key: "recent", label: "최근스캔", icon: "clipboard" },
     { key: "certsheet", label: "증명서시트", icon: "sheet" },
+  ];
+  var managerCloseTabs = [
     { key: "sales-analytics", label: "매출분석", icon: "scroll" },
     { key: "purchase-analytics", label: "매입분석", icon: "folder" },
   ];
@@ -78,6 +84,7 @@
     mainTab: null,
     subTab: "manage",
     closingSubTab: "attendance",
+    managerMainTab: "docs",
     managerSubTab: "overview",
   };
 
@@ -124,6 +131,7 @@
     client: "",
   };
   var managerState = {
+    mainTab: "docs",
     subTab: "overview",
     docs: [],
     undatedFolders: [],
@@ -771,6 +779,134 @@
     );
   }
 
+  function calcManagerMonthTotals(monthMap, labels) {
+    var result = {};
+    (labels || []).forEach(function (label) {
+      var companyMap = monthMap && monthMap[label] ? monthMap[label] : {};
+      var total = 0;
+      Object.keys(companyMap).forEach(function (company) {
+        total += parseMoneyCellToNumber(companyMap[company]);
+      });
+      result[label] = total;
+    });
+    return result;
+  }
+
+  function buildManagerCompanyTrendRows(kind) {
+    var info = buildManagerMonthlyCompanyAmountMap(kind);
+    var labels = info.labels || [];
+    var monthMap = info.monthMap || {};
+    var companyNames = {};
+    labels.forEach(function (label) {
+      var map = monthMap[label] || {};
+      Object.keys(map).forEach(function (company) {
+        if (company) companyNames[company] = true;
+      });
+    });
+    var rows = Object.keys(companyNames).map(function (company) {
+      var series = labels.map(function (label) {
+        return parseMoneyCellToNumber((monthMap[label] || {})[company]);
+      });
+      var total = series.reduce(function (sum, v) { return sum + v; }, 0);
+      var latest = series.length ? series[series.length - 1] : 0;
+      var prev = series.length > 1 ? series[series.length - 2] : 0;
+      var delta = latest - prev;
+      var rate = prev > 0 ? (delta / prev) * 100 : null;
+      return {
+        company: company,
+        series: series,
+        total: total,
+        latest: latest,
+        prev: prev,
+        delta: delta,
+        deltaRate: rate,
+      };
+    });
+    rows.sort(function (a, b) {
+      if (b.latest !== a.latest) return b.latest - a.latest;
+      return b.total - a.total;
+    });
+    return {
+      labels: labels,
+      rows: rows,
+      monthMap: monthMap,
+    };
+  }
+
+  function renderManagerTrendBars(series, labels) {
+    var values = Array.isArray(series) ? series : [];
+    var max = 0;
+    values.forEach(function (v) { if (v > max) max = v; });
+    if (max <= 0) max = 1;
+    return (
+      '<div class="manager-trend-bars">' +
+      values.map(function (v, i) {
+        var h = Math.max(8, Math.round((v / max) * 52));
+        var monthText = labels && labels[i] ? labels[i] : (String(i + 1) + "월");
+        return (
+          '<div class="manager-trend-bar-wrap" title="' + escapeAttr(monthText + " / " + formatDisplayNumber(v)) + '">' +
+          '<div class="manager-trend-bar" style="height:' + h + 'px"></div>' +
+          "</div>"
+        );
+      }).join("") +
+      "</div>"
+    );
+  }
+
+  function renderManagerTrendPanel(kind) {
+    var trend = buildManagerCompanyTrendRows(kind);
+    var labels = trend.labels || [];
+    if (!labels.length) {
+      return (
+        '<div class="manager-table-card">' +
+        '<div class="manager-empty">분석할 데이터가 없습니다. 경리 > 마감에서 월별 데이터를 먼저 불러와주세요.</div>' +
+        "</div>"
+      );
+    }
+    var monthTotals = calcManagerMonthTotals(trend.monthMap, labels);
+    var latestMonth = labels[labels.length - 1] || "";
+    var prevMonth = labels.length > 1 ? labels[labels.length - 2] : "";
+    var latestTotal = parseMoneyCellToNumber(monthTotals[latestMonth]);
+    var prevTotal = parseMoneyCellToNumber(monthTotals[prevMonth]);
+    var totalDelta = latestTotal - prevTotal;
+    var totalRate = prevTotal > 0 ? (totalDelta / prevTotal) * 100 : null;
+    var topRows = (trend.rows || []).slice(0, 18).map(function (row) {
+      var rateText = row.deltaRate == null ? "-" : (Math.round(row.deltaRate * 100) / 100).toLocaleString("ko-KR") + "%";
+      var deltaClass = row.delta > 0 ? "warn" : (row.delta < 0 ? "ok" : "");
+      return (
+        "<tr>" +
+        "<td>" + escapeHtml(row.company) + "</td>" +
+        '<td class="manager-trend-cell">' + renderManagerTrendBars(row.series, labels) + "</td>" +
+        '<td class="mono right">' + escapeHtml(formatDisplayNumber(row.latest)) + "</td>" +
+        '<td class="mono right">' + escapeHtml(formatDisplayNumber(row.prev)) + "</td>" +
+        '<td class="mono right ' + deltaClass + '">' + escapeHtml(formatDisplayNumber(row.delta)) + "</td>" +
+        '<td class="mono right ' + deltaClass + '">' + escapeHtml(rateText) + "</td>" +
+        "</tr>"
+      );
+    }).join("");
+    var kindLabel = kind === "purchase" ? "매입" : "매출";
+    var totalRateText = totalRate == null ? "-" : (Math.round(totalRate * 100) / 100).toLocaleString("ko-KR") + "%";
+    var totalDeltaClass = totalDelta > 0 ? "warn" : (totalDelta < 0 ? "ok" : "");
+
+    return (
+      '<div class="manager-summary-row">' +
+      '<div class="manager-summary-card"><div class="manager-summary-label">기준월</div><div class="manager-summary-value">' + escapeHtml(latestMonth || "-") + "</div></div>" +
+      '<div class="manager-summary-card"><div class="manager-summary-label">' + kindLabel + " 합계</div><div class=\"manager-summary-value\">" + escapeHtml(formatDisplayNumber(latestTotal)) + "</div></div>" +
+      '<div class="manager-summary-card"><div class="manager-summary-label">전월 합계</div><div class="manager-summary-value">' + escapeHtml(formatDisplayNumber(prevTotal)) + "</div></div>" +
+      '<div class="manager-summary-card"><div class="manager-summary-label">증감(%)</div><div class="manager-summary-value ' + totalDeltaClass + '">' + escapeHtml(formatDisplayNumber(totalDelta)) + " / " + escapeHtml(totalRateText) + "</div></div>" +
+      "</div>" +
+      '<div class="manager-table-card">' +
+      '<div class="manager-table-wrap">' +
+      '<table class="manager-table manager-trend-table">' +
+      "<thead><tr><th style=\"width:220px\">업체명</th><th>월별 추이</th><th style=\"width:120px\">당월</th><th style=\"width:120px\">전월</th><th style=\"width:120px\">증감</th><th style=\"width:110px\">증감률</th></tr></thead>" +
+      "<tbody>" +
+      (topRows || '<tr><td colspan="6" class="manager-empty">표시할 업체 데이터가 없습니다.</td></tr>') +
+      "</tbody></table></div>" +
+      '<div class="manager-head-meta" style="margin-top:8px;margin-bottom:0"><span>월 축: ' + escapeHtml(labels.join(" / ")) + "</span><span>상위 18개 업체 기준</span></div>" +
+      "</div>"
+    );
+  }
+
   async function ensureManagerNotificationPermission() {
     if (!("Notification" in window)) throw new Error("이 환경은 시스템 알림을 지원하지 않습니다.");
     if (Notification.permission === "granted") return "granted";
@@ -1003,15 +1139,23 @@
   }
 
   function renderManagerDashboard() {
-    var activeSubTab = managerState.subTab || "overview";
-    var docs = getManagerDocsByTab(activeSubTab);
+    var activeMainTab = managerState.mainTab === "closing" ? "closing" : "docs";
+    var activeSubTab = managerState.subTab || (activeMainTab === "closing" ? "sales-analytics" : "overview");
+    var validSubTabs = activeMainTab === "closing" ? managerCloseTabs : managerDocTabs;
+    if (!validSubTabs.some(function (tab) { return tab.key === activeSubTab; })) {
+      activeSubTab = activeMainTab === "closing" ? "sales-analytics" : "overview";
+      managerState.subTab = activeSubTab;
+    }
+
     var allDocs = normalizeManagerDocs(managerState.docs);
+    var certRows = normalizeManagerCertSheetRows(managerState.certSheetRows);
     var dueCount = allDocs.filter(function (doc) {
       return doc.daysLeft >= 0 && doc.daysLeft <= Number(managerState.alertLeadDays || 30);
     }).length;
     var expiredCount = allDocs.filter(function (doc) { return doc.daysLeft < 0; }).length;
     var urgentCount = allDocs.filter(function (doc) { return doc.daysLeft >= 0 && doc.daysLeft <= 7; }).length;
-    var certRows = normalizeManagerCertSheetRows(managerState.certSheetRows);
+
+    var docs = getManagerDocsByTab(activeSubTab);
     var docRowsHtml = docs.map(function (doc) {
       var leftText = doc.daysLeft < 0 ? (Math.abs(doc.daysLeft) + "일 지남") : (doc.daysLeft + "일 남음");
       return (
@@ -1057,65 +1201,87 @@
       "<tbody>" +
       (certRowsHtml || '<tr><td colspan="6" class="manager-empty">증명서를 추가해주세요.</td></tr>') +
       "</tbody></table></div></div>";
-    var salesAnalyticsPanelHtml = renderManagerDeltaTable("sales");
-    var purchaseAnalyticsPanelHtml = renderManagerDeltaTable("purchase");
+
+    var docsContentHtml =
+      (
+        activeSubTab === "certsheet"
+          ? certSheetPanelHtml
+          : (
+            '<div class="manager-table-card">' +
+            '<div class="manager-table-wrap">' +
+            '<table class="manager-table">' +
+            "<thead><tr><th>구분</th><th>발급일</th><th>만료일</th><th>업체/문서명</th><th>기준 폴더</th><th>상태</th><th>남은기간</th></tr></thead>" +
+            "<tbody>" +
+            (docRowsHtml || '<tr><td colspan="7" class="manager-empty">해당 조건의 문서가 없습니다.</td></tr>') +
+            "</tbody></table></div></div>" +
+            '<div class="manager-undated-card">' +
+            '<div class="manager-undated-title">날짜 인식 실패 폴더 (형식: YYYY-MM-DD 폴더명)</div>' +
+            (undatedHtml ? ("<ul>" + undatedHtml + "</ul>") : '<div class="manager-empty small">없음</div>') +
+            "</div>"
+          )
+      );
+
+    var closingContentHtml =
+      (
+        activeSubTab === "purchase-analytics"
+          ? renderManagerTrendPanel("purchase")
+          : renderManagerTrendPanel("sales")
+      ) +
+      '<div class="manager-head-card">' +
+      '<div class="manager-title">' + icon("sheet") + "<strong>업체별 증감 상세</strong></div>" +
+      "</div>" +
+      renderManagerDeltaTable(activeSubTab === "purchase-analytics" ? "purchase" : "sales");
 
     return (
       '<div class="manager-page">' +
-      '<div class="manager-head-card">' +
-      '<div class="manager-title">' + icon("sheet") + "<strong>유해물질 성적서 만료 알림</strong></div>" +
-      '<div class="manager-head-meta">' +
-      "<span>성적서 폴더: " + escapeHtml(managerState.folderLabel || "미연결") + "</span>" +
-      "<span>성적서 스캔: " + escapeHtml(formatManagerDateTime(managerState.lastScanAt) || "-") + "</span>" +
-      "<span>증명서 시트: " + certRows.length + "건</span>" +
-      "</div>" +
-      '<div class="manager-head-actions">' +
-      '<button type="button" class="soft-btn" id="btn-manager-connect-folder">성적서 폴더 연결</button>' +
-      '<button type="button" class="soft-btn" id="btn-manager-rescan">다시 스캔</button>' +
-      '<button type="button" class="soft-btn" id="btn-manager-notify-perm">시스템 알림 권한</button>' +
-      '<button type="button" class="soft-btn" id="btn-manager-test-notify">알림 테스트</button>' +
-      '<label class="manager-inline-control"><input type="checkbox" id="manager-alerts-enabled" ' + (managerState.alertsEnabled ? "checked" : "") + "> 알림 사용</label>" +
-      '<label class="manager-inline-control">임박 기준 <input type="number" min="1" max="120" step="1" id="manager-alert-days" value="' + escapeAttr(String(Number(managerState.alertLeadDays || 30))) + '"> 일</label>' +
-      "</div>" +
-      '<div class="manager-head-meta" style="margin-top:8px;margin-bottom:0">' +
-      "<span>알림 상태: " + escapeHtml((("Notification" in window) ? Notification.permission : "unsupported")) + "</span>" +
-      "</div>" +
+      '<div class="tabs manager-tabs">' +
+      managerMainTabs.map(function (tab) {
+        return '<button type="button" class="sub-tab' + (activeMainTab === tab.key ? " active" : "") + '" data-manager-main="' + tab.key + '">' + escapeHtml(tab.label) + "</button>";
+      }).join("") +
       "</div>" +
 
-      '<div class="manager-summary-row">' +
-      '<div class="manager-summary-card"><div class="manager-summary-label">전체 문서</div><div class="manager-summary-value">' + allDocs.length + "</div></div>" +
-      '<div class="manager-summary-card"><div class="manager-summary-label">만료 임박</div><div class="manager-summary-value warn">' + dueCount + "</div></div>" +
-      '<div class="manager-summary-card"><div class="manager-summary-label">만료됨</div><div class="manager-summary-value danger">' + expiredCount + "</div></div>" +
-      '<div class="manager-summary-card"><div class="manager-summary-label">긴급(7일 이내)</div><div class="manager-summary-value due">' + urgentCount + "</div></div>" +
-      "</div>" +
+      (activeMainTab === "docs"
+        ? (
+          '<div class="manager-head-card">' +
+          '<div class="manager-title">' + icon("sheet") + "<strong>유해물질 성적서 / 증명서 관리</strong></div>" +
+          '<div class="manager-head-meta">' +
+          "<span>성적서 폴더: " + escapeHtml(managerState.folderLabel || "미연결") + "</span>" +
+          "<span>성적서 스캔: " + escapeHtml(formatManagerDateTime(managerState.lastScanAt) || "-") + "</span>" +
+          "<span>증명서 시트: " + certRows.length + "건</span>" +
+          "</div>" +
+          '<div class="manager-head-actions">' +
+          '<button type="button" class="soft-btn" id="btn-manager-connect-folder">성적서 폴더 연결</button>' +
+          '<button type="button" class="soft-btn" id="btn-manager-rescan">다시 스캔</button>' +
+          '<button type="button" class="soft-btn" id="btn-manager-notify-perm">시스템 알림 권한</button>' +
+          '<button type="button" class="soft-btn" id="btn-manager-test-notify">알림 테스트</button>' +
+          '<label class="manager-inline-control"><input type="checkbox" id="manager-alerts-enabled" ' + (managerState.alertsEnabled ? "checked" : "") + "> 알림 사용</label>" +
+          '<label class="manager-inline-control">임박 기준 <input type="number" min="1" max="120" step="1" id="manager-alert-days" value="' + escapeAttr(String(Number(managerState.alertLeadDays || 30))) + '"> 일</label>' +
+          "</div>" +
+          '<div class="manager-head-meta" style="margin-top:8px;margin-bottom:0">' +
+          "<span>알림 상태: " + escapeHtml((("Notification" in window) ? Notification.permission : "unsupported")) + "</span>" +
+          "</div>" +
+          "</div>" +
+          '<div class="manager-summary-row">' +
+          '<div class="manager-summary-card"><div class="manager-summary-label">전체 문서</div><div class="manager-summary-value">' + allDocs.length + "</div></div>" +
+          '<div class="manager-summary-card"><div class="manager-summary-label">만료 임박</div><div class="manager-summary-value warn">' + dueCount + "</div></div>" +
+          '<div class="manager-summary-card"><div class="manager-summary-label">만료됨</div><div class="manager-summary-value danger">' + expiredCount + "</div></div>" +
+          '<div class="manager-summary-card"><div class="manager-summary-label">긴급(7일 이내)</div><div class="manager-summary-value due">' + urgentCount + "</div></div>" +
+          "</div>"
+        )
+        : (
+          '<div class="manager-head-card">' +
+          '<div class="manager-title">' + icon("scroll") + "<strong>마감 추이 분석</strong></div>" +
+          '<div class="manager-head-meta"><span>월별 마감 데이터 기준으로 업체별 증감/추이를 자동 분석합니다.</span></div>' +
+          "</div>"
+        )) +
 
       '<div class="tabs manager-tabs">' +
-      managerTabs.map(function (tab) {
+      validSubTabs.map(function (tab) {
         return '<button type="button" class="sub-tab' + (activeSubTab === tab.key ? " active" : "") + '" data-manager-sub="' + tab.key + '">' + escapeHtml(tab.label) + "</button>";
       }).join("") +
       "</div>" +
 
-      (
-        activeSubTab === "certsheet"
-          ? certSheetPanelHtml
-          : activeSubTab === "sales-analytics"
-            ? salesAnalyticsPanelHtml
-            : activeSubTab === "purchase-analytics"
-              ? purchaseAnalyticsPanelHtml
-              : (
-                '<div class="manager-table-card">' +
-                '<div class="manager-table-wrap">' +
-                '<table class="manager-table">' +
-                "<thead><tr><th>구분</th><th>발급일</th><th>만료일</th><th>업체/문서명</th><th>기준 폴더</th><th>상태</th><th>남은기간</th></tr></thead>" +
-                "<tbody>" +
-                (docRowsHtml || '<tr><td colspan="7" class="manager-empty">해당 조건의 문서가 없습니다.</td></tr>') +
-                "</tbody></table></div></div>" +
-                '<div class="manager-undated-card">' +
-                '<div class="manager-undated-title">날짜 인식 실패 폴더 (형식: YYYY-MM-DD 폴더명)</div>' +
-                (undatedHtml ? ("<ul>" + undatedHtml + "</ul>") : '<div class="manager-empty small">없음</div>') +
-                "</div>"
-              )
-      ) +
+      (activeMainTab === "docs" ? docsContentHtml : closingContentHtml) +
       "</div>"
     );
   }
@@ -5899,6 +6065,7 @@
         workInfo: cloneWorkInfo(workState.info),
       },
       manager: {
+        mainTab: managerState.mainTab === "closing" ? "closing" : "docs",
         subTab: managerState.subTab || "overview",
         docs: normalizeManagerDocs(managerState.docs),
         undatedFolders: normalizeManagerUndatedFolders(managerState.undatedFolders),
@@ -6118,6 +6285,7 @@
     }
 
     if (managerData) {
+      managerState.mainTab = managerData.mainTab === "closing" ? "closing" : "docs";
       managerState.subTab = managerData.subTab || managerState.subTab || "overview";
       managerState.docs = normalizeManagerDocs(managerData.docs).filter(function (doc) {
         return doc.sourceType !== "cert";
@@ -6135,6 +6303,7 @@
         return doc.sourceType !== "certsheet";
       });
       managerState.docs = normalizeManagerDocs(hazardDocs.concat(getManagerCertSheetDocs()));
+      state.managerMainTab = managerState.mainTab;
       state.managerSubTab = managerState.subTab;
     }
 
@@ -10490,7 +10659,21 @@
     }
 
     if (state.role === "manager") {
-      managerState.subTab = managerState.subTab || state.managerSubTab || "overview";
+      managerState.mainTab = managerState.mainTab === "closing" ? "closing" : (state.managerMainTab === "closing" ? "closing" : "docs");
+      state.managerMainTab = managerState.mainTab;
+      if (!managerState.subTab) {
+        managerState.subTab = managerState.mainTab === "closing" ? "sales-analytics" : "overview";
+      }
+      if (managerState.mainTab === "docs") {
+        if (!managerDocTabs.some(function (tab) { return tab.key === managerState.subTab; })) {
+          managerState.subTab = "overview";
+        }
+      } else {
+        if (!managerCloseTabs.some(function (tab) { return tab.key === managerState.subTab; })) {
+          managerState.subTab = "sales-analytics";
+        }
+      }
+      state.managerSubTab = managerState.subTab;
       app.innerHTML = renderTopBar() + '<div class="content">' + renderManagerDashboard() + "</div>";
       wireTopBar();
       var wasManagerLoaded = ledgerState.loadedFromFirebase;
@@ -10504,6 +10687,25 @@
           // ignore background first scan failure
         });
       }
+      app.querySelectorAll("[data-manager-main]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var nextMain = btn.getAttribute("data-manager-main") === "closing" ? "closing" : "docs";
+          managerState.mainTab = nextMain;
+          state.managerMainTab = nextMain;
+          if (nextMain === "docs") {
+            managerState.subTab = managerDocTabs.some(function (tab) { return tab.key === managerState.subTab; })
+              ? managerState.subTab
+              : "overview";
+          } else {
+            managerState.subTab = managerCloseTabs.some(function (tab) { return tab.key === managerState.subTab; })
+              ? managerState.subTab
+              : "sales-analytics";
+          }
+          state.managerSubTab = managerState.subTab;
+          scheduleLedgerDraftSave();
+          render();
+        });
+      });
       app.querySelectorAll("[data-manager-sub]").forEach(function (btn) {
         btn.addEventListener("click", function () {
           managerState.subTab = btn.getAttribute("data-manager-sub") || "overview";
