@@ -892,13 +892,12 @@
     var max = values.reduce(function (m, v) { return v > m ? v : m; }, 0);
     if (max <= 0) max = 1;
     var width = Math.max(96, values.length * 15 + 14);
-    var height = 38;
-    var innerTop = 4;
-    var innerBottom = 5;
+    var height = 30;
+    var innerTop = 3;
+    var innerBottom = 4;
     var usableHeight = height - innerTop - innerBottom;
     var barW = 5;
     var step = values.length > 1 ? Math.max(11, Math.floor((width - 12) / values.length)) : 13;
-    var points = [];
     var linePoints = [];
     var bars = [];
     for (var i = 0; i < values.length; i++) {
@@ -908,7 +907,6 @@
       var h = Math.max(2, Math.round((v / max) * usableHeight));
       var y = height - innerBottom - h;
       var cx = x + Math.floor(barW / 2);
-      points.push(cx + "," + y);
       linePoints.push({ x: cx, y: y });
       var title = formatManagerDeltaTitle(labels && labels[i], v, prev);
       var barClass = v >= prev ? "manager-trend-bar up" : "manager-trend-bar down";
@@ -918,13 +916,9 @@
         "</rect>"
       );
     }
-    var smoothPath = buildManagerSmoothPath(linePoints);
-    var areaPath = "";
-    if (linePoints.length) {
-      var last = linePoints[linePoints.length - 1];
-      var first = linePoints[0];
-      areaPath = smoothPath + " L " + last.x + " " + (height - innerBottom) + " L " + first.x + " " + (height - innerBottom) + " Z";
-    }
+    var polylinePoints = linePoints.map(function (p) {
+      return p.x + "," + p.y;
+    }).join(" ");
     var circles = [];
     for (var j = 0; j < values.length; j++) {
       var cv = values[j] || 0;
@@ -942,8 +936,7 @@
     return (
       '<div class="manager-trend-bars">' +
       '<svg viewBox="0 0 ' + width + " " + height + '" preserveAspectRatio="none" aria-hidden="true">' +
-      (areaPath ? '<path class="manager-trend-area" d="' + areaPath + '" />' : "") +
-      (smoothPath ? '<path class="manager-trend-line" d="' + smoothPath + '" />' : ('<polyline class="manager-trend-line" points="' + points.join(" ") + '" />')) +
+      '<polyline class="manager-trend-line" points="' + polylinePoints + '" />' +
       bars.join("") +
       circles.join("") +
       "</svg>" +
@@ -958,40 +951,24 @@
       return '<div class="manager-main-chart-empty">차트 데이터가 없습니다.</div>';
     }
 
-    var rates = amountSeries.map(function (value, idx) {
-      if (idx === 0) return 0;
-      var prev = amountSeries[idx - 1] || 0;
-      if (prev <= 0) return 0;
-      return ((value - prev) / prev) * 100;
-    });
-
     var amountMax = amountSeries.reduce(function (m, v) { return v > m ? v : m; }, 0);
     if (amountMax <= 0) amountMax = 1;
-    var rateMin = rates.reduce(function (m, v) { return v < m ? v : m; }, rates[0] || 0);
-    var rateMax = rates.reduce(function (m, v) { return v > m ? v : m; }, rates[0] || 0);
-    if (rateMin === rateMax) {
-      rateMin -= 1;
-      rateMax += 1;
-    }
 
     var width = Math.max(560, monthLabels.length * 82 + 90);
-    var height = 228;
+    var height = 188;
     var left = 22;
-    var right = 46;
-    var top = 20;
-    var bottom = 36;
+    var right = 18;
+    var top = 14;
+    var bottom = 34;
     var plotW = Math.max(100, width - left - right);
     var plotH = Math.max(90, height - top - bottom);
     var step = monthLabels.length > 1 ? (plotW / (monthLabels.length - 1)) : 0;
     var barW = Math.min(28, Math.max(12, Math.floor(plotW / (monthLabels.length * 1.85))));
 
     var gridLines = [];
-    var axisLabels = [];
     for (var g = 0; g <= 4; g++) {
       var gy = top + (plotH * g / 4);
-      var gv = rateMax - ((rateMax - rateMin) * g / 4);
       gridLines.push('<line x1="' + left + '" y1="' + gy + '" x2="' + (left + plotW) + '" y2="' + gy + '" class="manager-main-grid" />');
-      axisLabels.push('<text x="' + (left + plotW + 8) + '" y="' + (gy + 3.5) + '" class="manager-main-axis-label">' + escapeHtml((Math.round(gv * 10) / 10).toLocaleString("ko-KR")) + '</text>');
     }
 
     var bars = [];
@@ -1001,12 +978,11 @@
     for (var i = 0; i < amountSeries.length; i++) {
       var amount = amountSeries[i] || 0;
       var prevAmount = i > 0 ? (amountSeries[i - 1] || 0) : 0;
-      var rate = rates[i] || 0;
       var x = monthLabels.length > 1 ? (left + i * step) : (left + plotW / 2);
       var barH = Math.max(2, Math.round((amount / amountMax) * plotH));
       var by = top + plotH - barH;
       var bx = Math.round(x - barW / 2);
-      var ly = top + ((rateMax - rate) / (rateMax - rateMin)) * plotH;
+      var ly = by;
       var title = formatManagerDeltaTitle(monthLabels[i], amount, prevAmount);
 
       bars.push(
@@ -1025,12 +1001,12 @@
       xLabels.push('<text x="' + x + '" y="' + (top + plotH + 20) + '" text-anchor="middle" class="manager-main-month-label">' + escapeHtml(labelText) + '</text>');
     }
 
-    var linePath = buildManagerSmoothPath(points.map(function (p) { return { x: p.x, y: p.y }; }));
+    var polylinePoints = points.map(function (p) { return p.x + "," + p.y; }).join(" ");
 
     return (
       '<div class="manager-main-chart">' +
         '<div class="manager-main-legend">' +
-          '<span class="manager-main-legend-item"><i class="line"></i>증감률(%)</span>' +
+          '<span class="manager-main-legend-item"><i class="line"></i>추이선</span>' +
           '<span class="manager-main-legend-item"><i class="bar"></i>월 합계</span>' +
         '</div>' +
         '<div class="manager-main-chart-wrap">' +
@@ -1038,11 +1014,9 @@
             gridLines.join("") +
             '<line x1="' + left + '" y1="' + (top + plotH) + '" x2="' + (left + plotW) + '" y2="' + (top + plotH) + '" class="manager-main-axis" />' +
             bars.join("") +
-            (linePath ? '<path class="manager-main-line" d="' + linePath + '" />' : "") +
+            '<polyline class="manager-main-line" points="' + polylinePoints + '" />' +
             dots.join("") +
             xLabels.join("") +
-            axisLabels.join("") +
-            '<text x="' + (left + plotW + 8) + '" y="' + (top - 6) + '" class="manager-main-axis-title">증감률</text>' +
           '</svg>' +
         '</div>' +
       '</div>'
