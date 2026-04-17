@@ -136,6 +136,8 @@
     rows: [],
     colWidths: [],
     rowHeights: [],
+    extractionText: "",
+    lastExtraction: null,
   };
   var manageState = {
     startMonth: "",
@@ -6088,6 +6090,143 @@
     if (holdEl) holdEl.textContent = formatDisplayNumber(summary.hold);
   }
 
+  function findOrderFirstEmptyRow(rows) {
+    var normalized = normalizeOrderRows(rows, 50);
+    for (var i = 0; i < normalized.length; i++) {
+      if (!rowHasAnyValue(normalized[i], orderGridFields)) return i;
+    }
+    return normalized.length;
+  }
+
+  function mapExtractionItemsToOrderRows(extraction) {
+    if (!extraction || !Array.isArray(extraction.items)) return [];
+    var orderDate = extraction.order && extraction.order.order_date ? extraction.order.order_date : "";
+    var dueDate = extraction.order && extraction.order.due_date ? extraction.order.due_date : "";
+    var shipDate = extraction.order && extraction.order.current_ship_date ? extraction.order.current_ship_date : "";
+    var customer = extraction.order && extraction.order.customer_name ? extraction.order.customer_name : "";
+    return extraction.items.map(function (item) {
+      return {
+        orderDate: orderDate || "",
+        vendor: customer || "",
+        itemCode: "",
+        itemName: item && item.product_name ? String(item.product_name) : "",
+        spec: item && item.spec ? String(item.spec) : "",
+        qty: item && item.quantity != null ? String(item.quantity) : "",
+        unit: item && item.unit ? String(item.unit) : "",
+        dueDate: dueDate || shipDate || "",
+        status: "요청",
+        note: item && item.remarks ? String(item.remarks) : "",
+      };
+    });
+  }
+
+  function applyExtractionToOrderGrid(extraction) {
+    if (!extraction || !Array.isArray(extraction.items) || !extraction.items.length) {
+      showAppToast("추출된 품목이 없어요. 원문 텍스트를 확인해주세요.", "warning");
+      return;
+    }
+    var mappedRows = mapExtractionItemsToOrderRows(extraction);
+    var rows = normalizeOrderRows(orderState.rows, 50);
+    var start = findOrderFirstEmptyRow(rows);
+    while (rows.length < start + mappedRows.length + 1) rows.push(emptyOrderRow());
+    for (var i = 0; i < mappedRows.length; i++) {
+      rows[start + i] = Object.assign(emptyOrderRow(), mappedRows[i]);
+    }
+    orderState.rows = normalizeOrderRows(rows, 50);
+    if (orderSheetEngine) orderSheetEngine.refresh();
+    refreshOrderSummaryUi();
+    scheduleLedgerDraftSave();
+    showAppToast("자동추출 결과를 발주 시트에 반영했어요.", "success");
+  }
+
+  function setOrderExtractionResult(extraction) {
+    orderState.lastExtraction = extraction || null;
+    var resultEl = document.getElementById("order-extract-result");
+    if (!resultEl) return;
+    var unresolved = extraction && Array.isArray(extraction.unresolved_fields) ? extraction.unresolved_fields : [];
+    if (!extraction) {
+      resultEl.textContent = "아직 추출 결과가 없습니다.";
+      return;
+    }
+    var customer = extraction.order && extraction.order.customer_name ? extraction.order.customer_name : "-";
+    var count = Array.isArray(extraction.items) ? extraction.items.length : 0;
+    var conf = extraction.confidence && typeof extraction.confidence.overall === "number"
+      ? extraction.confidence.overall
+      : 0;
+    resultEl.textContent =
+      "고객사: " +
+      customer +
+      " / 품목: " +
+      count +
+      " / confidence: " +
+      conf.toFixed(2) +
+      " / 미해결: " +
+      (unresolved.length ? unresolved.join(", ") : "없음");
+  }
+
+  function runOrderTextExtraction() {
+    var model = window.OrderModel;
+    if (!model || typeof model.runExtractionFromInput !== "function") {
+      showAppToast("OrderModel 자동추출 모듈을 찾을 수 없어요.", "warning");
+      return;
+    }
+    var textEl = document.getElementById("order-extract-text");
+    var byEl = document.getElementById("order-received-by");
+    var channelEl = document.getElementById("order-received-channel");
+    var rawText = textEl ? String(textEl.value || "") : "";
+    orderState.extractionText = rawText;
+    model
+      .runExtractionFromInput(rawText, {
+        input_method: "manual_entry",
+        source_type: "text",
+        received_by: byEl ? String(byEl.value || "") : "",
+        received_channel: channelEl ? String(channelEl.value || "direct") : "direct",
+      })
+      .then(function (res) {
+        setOrderExtractionResult(res);
+        scheduleLedgerDraftSave();
+        showAppToast("텍스트 자동추출을 완료했어요.", "success");
+      })
+      .catch(function (err) {
+        showAppToast(err && err.message ? err.message : "텍스트 추출 실패", "warning");
+      });
+  }
+
+  function runOrderFileExtraction() {
+    var model = window.OrderModel;
+    if (!model || typeof model.runExtractionFromInput !== "function") {
+      showAppToast("OrderModel 자동추출 모듈을 찾을 수 없어요.", "warning");
+      return;
+    }
+    var fileEl = document.getElementById("order-extract-file");
+    var byEl = document.getElementById("order-received-by");
+    var channelEl = document.getElementById("order-received-channel");
+    var file = fileEl && fileEl.files && fileEl.files[0] ? fileEl.files[0] : null;
+    if (!file) {
+      showAppToast("먼저 파일을 선택해주세요.", "warning");
+      return;
+    }
+    model
+      .runExtractionFromInput(file, {
+        input_method: "auto_upload",
+        received_by: byEl ? String(byEl.value || "") : "",
+        received_channel: channelEl ? String(channelEl.value || "file_upload") : "file_upload",
+      })
+      .then(function (res) {
+        setOrderExtractionResult(res);
+        if (res && res.order && res.order.raw_text) {
+          orderState.extractionText = String(res.order.raw_text || "");
+          var textEl = document.getElementById("order-extract-text");
+          if (textEl) textEl.value = orderState.extractionText;
+        }
+        scheduleLedgerDraftSave();
+        showAppToast("파일 자동추출을 완료했어요.", "success");
+      })
+      .catch(function (err) {
+        showAppToast(err && err.message ? err.message : "파일 추출 실패", "warning");
+      });
+  }
+
   function createMiniSheetEngine(options) {
     var engine = {
       host: null,
@@ -11145,8 +11284,41 @@
   function renderOrdersStatusTab() {
     orderState.rows = normalizeOrderRows(orderState.rows, 50);
     var summary = getOrderSummary(orderState.rows);
+    var extraction = orderState.lastExtraction && typeof orderState.lastExtraction === "object" ? orderState.lastExtraction : null;
+    var extractionUnresolved = extraction && Array.isArray(extraction.unresolved_fields) ? extraction.unresolved_fields : [];
     return (
       '<div class="clientdoc">' +
+        '<div class="clientdoc-card" style="margin-bottom:12px">' +
+          '<div class="clientdoc-head">' +
+            '<div class="clientdoc-title">' + icon("clipboard") + ' 발주 자동추출</div>' +
+            '<div class="sub">엑셀/텍스트 업로드 또는 붙여넣기로 발주 정보 해석</div>' +
+          '</div>' +
+          '<div style="display:grid;grid-template-columns:minmax(220px,1fr) minmax(220px,1fr) minmax(220px,2fr) auto;gap:8px;align-items:center;margin-bottom:8px">' +
+            '<input type="text" class="field" id="order-received-by" placeholder="접수자 (received_by)" style="height:36px" />' +
+            '<select id="order-received-channel" class="field" style="height:36px">' +
+              '<option value="file_upload">file_upload</option>' +
+              '<option value="email">email</option>' +
+              '<option value="kakao">kakao</option>' +
+              '<option value="phone">phone</option>' +
+              '<option value="direct">direct</option>' +
+            '</select>' +
+            '<input type="file" id="order-extract-file" accept=".xlsx,.xls,.csv,.tsv,.txt,.pdf,.png,.jpg,.jpeg,.bmp,.gif,.webp" class="field" style="height:36px;padding:6px" />' +
+            '<button type="button" class="soft-btn" id="btn-order-extract-file">파일 추출</button>' +
+          '</div>' +
+          '<div style="display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:start">' +
+            '<textarea id="order-extract-text" class="field" style="min-height:92px;resize:vertical" placeholder="복붙 텍스트 또는 카톡/메일 내용 붙여넣기">' + escapeHtml(orderState.extractionText || "") + '</textarea>' +
+            '<button type="button" class="soft-btn" id="btn-order-extract-text">텍스트 추출</button>' +
+            '<button type="button" class="soft-btn" id="btn-order-apply-extraction">시트에 반영</button>' +
+          '</div>' +
+          '<div class="sub" id="order-extract-result" style="margin-top:8px">' +
+            (extraction
+              ? ('고객사: ' + escapeHtml(extraction.order && extraction.order.customer_name ? extraction.order.customer_name : '-') +
+                ' / 품목: ' + escapeHtml(String((extraction.items || []).length)) +
+                ' / confidence: ' + escapeHtml(((extraction.confidence && extraction.confidence.overall) || 0).toFixed(2)) +
+                (extractionUnresolved.length ? (' / 미해결: ' + escapeHtml(extractionUnresolved.join(", "))) : " / 미해결: 없음"))
+              : "아직 추출 결과가 없습니다.") +
+          '</div>' +
+        '</div>' +
         '<div class="toolbar-card" style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">' +
           '<span class="chip">전체 <strong id="order-summary-total">' + escapeHtml(formatDisplayNumber(summary.total)) + '</strong></span>' +
           '<span class="chip">요청 <strong id="order-summary-requested">' + escapeHtml(formatDisplayNumber(summary.requested)) + '</strong></span>' +
@@ -12521,6 +12693,30 @@
           render();
         });
       });
+      var extractTextEl = document.getElementById("order-extract-text");
+      if (extractTextEl) {
+        extractTextEl.addEventListener("input", function () {
+          orderState.extractionText = String(extractTextEl.value || "");
+        });
+      }
+      var extractTextBtn = document.getElementById("btn-order-extract-text");
+      if (extractTextBtn) {
+        extractTextBtn.addEventListener("click", function () {
+          runOrderTextExtraction();
+        });
+      }
+      var extractFileBtn = document.getElementById("btn-order-extract-file");
+      if (extractFileBtn) {
+        extractFileBtn.addEventListener("click", function () {
+          runOrderFileExtraction();
+        });
+      }
+      var applyExtractionBtn = document.getElementById("btn-order-apply-extraction");
+      if (applyExtractionBtn) {
+        applyExtractionBtn.addEventListener("click", function () {
+          applyExtractionToOrderGrid(orderState.lastExtraction);
+        });
+      }
       return;
     }
 

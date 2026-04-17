@@ -13,7 +13,7 @@
     "completed",
     "cancelled",
   ];
-  var SCHEDULE_CHANGE_DIRECTIONS = ["advanced", "delayed"];
+  var SCHEDULE_CHANGE_DIRECTIONS = ["advanced", "delayed", "unknown"];
   var SCHEDULE_CHANGE_REQUESTERS = ["customer", "internal", "unknown"];
 
   function nowIso() {
@@ -364,6 +364,384 @@
     return order;
   }
 
+  function detectOrderSourceType(input) {
+    if (typeof input === "string") {
+      var trimmed = input.trim();
+      if (!trimmed) return "text";
+      if (trimmed.indexOf("%PDF") === 0) return "pdf";
+      return "text";
+    }
+    if (!input || typeof input !== "object") return "manual";
+
+    var explicit = normalizeEnum(input.source_type, ORDER_SOURCE_TYPES, "");
+    if (explicit) return explicit;
+
+    var name = toCleanString(input.name || input.fileName).toLowerCase();
+    var mime = toCleanString(input.type || input.mimeType).toLowerCase();
+    if (mime.indexOf("sheet") >= 0 || /\.(xlsx|xls|csv|tsv)$/i.test(name)) return "excel";
+    if (mime.indexOf("pdf") >= 0 || /\.pdf$/i.test(name)) return "pdf";
+    if (mime.indexOf("image") >= 0 || /\.(png|jpg|jpeg|bmp|gif|webp|tif|tiff)$/i.test(name)) return "image";
+    if (mime.indexOf("text") >= 0 || /\.(txt|md|log|json)$/i.test(name)) return "text";
+    return "manual";
+  }
+
+  function normalizeText(rawText) {
+    var text = String(rawText || "");
+    text = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    text = text.replace(/\u00a0/g, " ");
+    text = text.replace(/[ \t]+/g, " ");
+    text = text.replace(/\n{3,}/g, "\n\n");
+    return text.trim();
+  }
+
+  function extractRawText(input) {
+    return new Promise(function (resolve, reject) {
+      try {
+        var sourceType = detectOrderSourceType(input);
+
+        if (typeof input === "string") {
+          resolve({
+            source_type: sourceType,
+            raw_text: normalizeText(input),
+            meta: { mode: "direct_text" },
+          });
+          return;
+        }
+
+        if (isObject(input) && typeof input.raw_text === "string") {
+          resolve({
+            source_type: sourceType,
+            raw_text: normalizeText(input.raw_text),
+            meta: { mode: "raw_text_field" },
+          });
+          return;
+        }
+
+        var file = input && input.file ? input.file : input;
+        if (!file || typeof FileReader === "undefined") {
+          resolve({
+            source_type: sourceType,
+            raw_text: "",
+            meta: { mode: "no_file_reader" },
+          });
+          return;
+        }
+
+        if (sourceType === "excel" && global.XLSX && typeof file.arrayBuffer === "function") {
+          file
+            .arrayBuffer()
+            .then(function (buffer) {
+              var wb = global.XLSX.read(buffer, { type: "array" });
+              var lines = [];
+              (wb.SheetNames || []).forEach(function (sheetName) {
+                var ws = wb.Sheets[sheetName];
+                if (!ws) return;
+                var rows = global.XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+                lines.push("#" + sheetName);
+                rows.forEach(function (row) {
+                  if (!Array.isArray(row)) return;
+                  var line = row.map(function (v) { return String(v == null ? "" : v).trim(); }).join("\t").trim();
+                  if (line) lines.push(line);
+                });
+              });
+              resolve({
+                source_type: sourceType,
+                raw_text: normalizeText(lines.join("\n")),
+                meta: { mode: "xlsx_sheet_to_text" },
+              });
+            })
+            .catch(reject);
+          return;
+        }
+
+        if ((sourceType === "text" || sourceType === "manual" || sourceType === "kakao") && typeof file.text === "function") {
+          file
+            .text()
+            .then(function (text) {
+              resolve({
+                source_type: sourceType,
+                raw_text: normalizeText(text),
+                meta: { mode: "file_text" },
+              });
+            })
+            .catch(reject);
+          return;
+        }
+
+        // PDF/Image는 OCR 엔진 연결 전까지 raw_text 없이 반환
+        resolve({
+          source_type: sourceType,
+          raw_text: "",
+          meta: { mode: "no_ocr_stub" },
+        });
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
+  function parseCustomerName(text) {
+    var normalized = normalizeText(text);
+    var lines = normalized.split("\n");
+    var patterns = [
+      /(?:거래처|발주처|수신|업체명|고객명|customer)\s*[:：]\s*(.+)$/i,
+      /(?:to|buyer)\s*[:：]\s*(.+)$/i,
+    ];
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (!line) continue;
+      for (var j = 0; j < patterns.length; j++) {
+        var m = line.match(patterns[j]);
+        if (m && toCleanString(m[1])) {
+          return toCleanString(m[1]).replace(/[)\]]+$/, "").trim();
+        }
+      }
+    }
+    return "";
+  }
+
+  function extractDateCandidates(text) {
+    var out = [];
+    var normalized = normalizeText(text);
+    var lines = normalized.split("\n");
+    var dateRegex = /(\d{4}[.\-/년]\s*\d{1,2}[.\-/월]\s*\d{1,2}\s*일?|\d{8})/g;
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      var match;
+      while ((match = dateRegex.exec(line))) {
+        var raw = toCleanString(match[1]).replace(/년|월/g, "-").replace(/일/g, "").replace(/[.\/]/g, "-").replace(/\s+/g, "");
+        var date = normalizeDate(raw);
+        if (!date) continue;
+        out.push({ date: date, line: line, lineIndex: i });
+      }
+    }
+    return out;
+  }
+
+  function parseDates(text) {
+    var candidates = extractDateCandidates(text);
+    var result = {
+      order_date: null,
+      requested_ship_date: null,
+      due_date: null,
+      current_ship_date: null,
+      original_ship_date: null,
+      candidates: candidates,
+    };
+    if (!candidates.length) return result;
+
+    var lowerLines = normalizeText(text).toLowerCase().split("\n");
+    function pickByLabel(labels) {
+      for (var i = 0; i < candidates.length; i++) {
+        var c = candidates[i];
+        var l = lowerLines[c.lineIndex] || "";
+        for (var j = 0; j < labels.length; j++) {
+          if (l.indexOf(labels[j]) >= 0) return c.date;
+        }
+      }
+      return null;
+    }
+
+    result.order_date =
+      pickByLabel(["발주일", "작성일", "order date", "order_date"]) ||
+      candidates[0].date;
+    result.requested_ship_date =
+      pickByLabel(["납기", "요청출고", "출고요청", "희망출고", "ship", "납품요청"]) ||
+      (candidates[1] ? candidates[1].date : null);
+    result.due_date =
+      pickByLabel(["due", "마감", "납기일"]) ||
+      result.requested_ship_date;
+    result.current_ship_date = result.requested_ship_date;
+    result.original_ship_date = result.requested_ship_date;
+    return result;
+  }
+
+  function parseUrgency(text) {
+    var t = normalizeText(text).toLowerCase();
+    return /긴급|급함|당일|최우선|urgent|asap|rush/.test(t);
+  }
+
+  function parseItems(text) {
+    var normalized = normalizeText(text);
+    var lines = normalized.split("\n");
+    var items = [];
+
+    function tryMakeItemFromParts(parts) {
+      if (!parts || !parts.length) return null;
+      var cleaned = parts.map(function (p) { return toCleanString(p); }).filter(Boolean);
+      if (cleaned.length < 2) return null;
+
+      var qty = null;
+      var unit = "";
+      var unitPrice = null;
+      var qtyMatch = cleaned.join(" ").match(/(?:수량|qty)?\s*[:：]?\s*([0-9][0-9,\.]*)\s*(EA|PCS|SET|KG|M|ROLL|BOX|개|박스|롤|kg|m)?/i);
+      if (qtyMatch) {
+        qty = normalizeNumber(qtyMatch[1], null);
+        unit = toCleanString(qtyMatch[2] || "");
+      }
+      var priceMatch = cleaned.join(" ").match(/(?:단가|price|unit\s*price)\s*[:：]?\s*([0-9][0-9,\.]*)/i);
+      if (priceMatch) unitPrice = normalizeNumber(priceMatch[1], null);
+
+      var codeLike = cleaned.find(function (p) { return /^[A-Z]{1,4}\d{2,}[-A-Z0-9]*$/i.test(p); }) || "";
+      var productName = cleaned[0];
+      if (productName.length <= 2 && cleaned[1]) productName = cleaned[1];
+
+      if (!productName) return null;
+      if (qty == null && !/\t|,|\|/.test(parts.join(" "))) return null;
+
+      return {
+        product_name: codeLike ? productName + " " + codeLike : productName,
+        spec: cleaned.length >= 3 ? cleaned[1] : "",
+        quantity: qty == null ? 0 : qty,
+        unit: unit,
+        unit_price: unitPrice,
+        remarks: "",
+      };
+    }
+
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      var lower = line.toLowerCase();
+      if (!line.trim()) continue;
+      if (/발주일|작성일|거래처|납기|긴급|customer|order date/.test(lower)) continue;
+
+      var parts;
+      if (line.indexOf("\t") >= 0) parts = line.split("\t");
+      else if (line.indexOf("|") >= 0) parts = line.split("|");
+      else if (line.indexOf(",") >= 0) parts = line.split(",");
+      else parts = line.split(/\s{2,}/);
+
+      var item = tryMakeItemFromParts(parts);
+      if (item) items.push(item);
+    }
+
+    if (!items.length) {
+      // fallback: 품목명 + 수량 패턴
+      var fallbackRegex = /([A-Za-z0-9가-힣\-\(\)\/\.\s]{3,}?)\s+([0-9][0-9,\.]*)\s*(EA|PCS|SET|KG|M|ROLL|BOX|개|박스|롤)?/g;
+      var m;
+      while ((m = fallbackRegex.exec(normalized))) {
+        items.push({
+          product_name: toCleanString(m[1]),
+          spec: "",
+          quantity: normalizeNumber(m[2], 0),
+          unit: toCleanString(m[3] || ""),
+          unit_price: null,
+          remarks: "",
+        });
+        if (items.length >= 200) break;
+      }
+    }
+
+    return items;
+  }
+
+  function parseScheduleChange(text, currentShipDate) {
+    var normalized = normalizeText(text);
+    if (!/변경|연기|앞당김|납기변경|reschedule|delay|advance/i.test(normalized)) {
+      return null;
+    }
+    var dates = extractDateCandidates(normalized);
+    if (!dates.length) return null;
+    var previous = currentShipDate || (dates[0] ? dates[0].date : null);
+    var newer = dates[1] ? dates[1].date : dates[0].date;
+    var dir = computeDirection(previous, newer);
+    var requester = /요청|customer|고객|거래처/i.test(normalized) ? "customer" : "unknown";
+    if (/내부|생산|자재|internal/i.test(normalized)) requester = "internal";
+    return normalizeScheduleChange(
+      {
+        previous_ship_date: previous,
+        new_ship_date: newer,
+        change_direction: dir === "unknown" ? "delayed" : dir,
+        change_requested_by: requester,
+        change_reason: "텍스트에서 일정 변경 키워드 감지",
+        note: normalized.slice(0, 300),
+      },
+      null
+    );
+  }
+
+  function buildNormalizedOrder(options) {
+    var opts = isObject(options) ? options : {};
+    var rawText = normalizeText(opts.raw_text || "");
+    var sourceType = normalizeEnum(opts.source_type, ORDER_SOURCE_TYPES, detectOrderSourceType(opts.file || rawText || "text"));
+    var inputMethod = normalizeEnum(opts.input_method, ORDER_INPUT_METHODS, "auto_upload");
+    var receivedChannel = normalizeEnum(opts.received_channel, ORDER_RECEIVED_CHANNELS, "file_upload");
+
+    var customerName = parseCustomerName(rawText);
+    var dates = parseDates(rawText);
+    var items = parseItems(rawText);
+    var urgent = parseUrgency(rawText);
+    var scheduleChange = parseScheduleChange(rawText, dates.current_ship_date);
+
+    var unresolved = [];
+    var confidence = {
+      overall: 0,
+      customer_name: customerName ? 0.9 : 0.2,
+      dates: dates.order_date || dates.requested_ship_date ? 0.75 : 0.2,
+      items: items.length ? 0.8 : 0.2,
+      urgency: urgent ? 0.9 : 0.6,
+    };
+
+    if (!customerName) unresolved.push("customer_name");
+    if (!dates.order_date) unresolved.push("order_date");
+    if (!dates.requested_ship_date) unresolved.push("requested_ship_date");
+    if (!items.length) unresolved.push("order_items");
+    if (!rawText) unresolved.push("raw_text");
+
+    confidence.overall =
+      (confidence.customer_name + confidence.dates + confidence.items + confidence.urgency) / 4;
+
+    var baseOrder = normalizeOrder({
+      source_type: sourceType,
+      input_method: inputMethod,
+      received_channel: receivedChannel,
+      received_by: toCleanString(opts.received_by),
+      customer_name: customerName,
+      order_date: dates.order_date,
+      requested_ship_date: dates.requested_ship_date,
+      current_ship_date: dates.current_ship_date,
+      original_ship_date: dates.original_ship_date,
+      due_date: dates.due_date,
+      is_urgent: urgent,
+      status: unresolved.length ? "review_required" : "received",
+      notes: toCleanString(opts.notes),
+      raw_text: rawText,
+      unresolved_fields: unresolved,
+      confidence: confidence.overall,
+      order_items: items.map(function (row) { return normalizeOrderItem(row, null); }),
+      schedule_changes: scheduleChange ? [scheduleChange] : [],
+    });
+
+    baseOrder.order_items = baseOrder.order_items.map(function (it) {
+      return normalizeOrderItem(it, baseOrder.id);
+    });
+    baseOrder.schedule_changes = baseOrder.schedule_changes.map(function (sc) {
+      return normalizeScheduleChange(sc, baseOrder.id);
+    });
+
+    return {
+      order: baseOrder,
+      items: baseOrder.order_items.slice(),
+      confidence: confidence,
+      unresolved_fields: unresolved.slice(),
+    };
+  }
+
+  function runExtractionFromInput(input, context) {
+    var ctx = isObject(context) ? context : {};
+    return extractRawText(input).then(function (rawResult) {
+      return buildNormalizedOrder({
+        source_type: rawResult.source_type,
+        input_method: ctx.input_method || "auto_upload",
+        received_channel: ctx.received_channel || (rawResult.source_type === "phone" ? "phone" : "file_upload"),
+        received_by: ctx.received_by || "",
+        notes: ctx.notes || "",
+        raw_text: rawResult.raw_text || "",
+        file: input && input.file ? input.file : input,
+      });
+    });
+  }
+
   global.OrderModel = {
     ORDER_SOURCE_TYPES: ORDER_SOURCE_TYPES.slice(),
     ORDER_INPUT_METHODS: ORDER_INPUT_METHODS.slice(),
@@ -385,6 +763,15 @@
     mergeExtractionResult: mergeExtractionResult,
     toFirestoreWriteBundle: toFirestoreWriteBundle,
     sampleOrderStructure: sampleOrderStructure,
+    detectOrderSourceType: detectOrderSourceType,
+    extractRawText: extractRawText,
+    normalizeText: normalizeText,
+    parseCustomerName: parseCustomerName,
+    parseDates: parseDates,
+    parseItems: parseItems,
+    parseUrgency: parseUrgency,
+    parseScheduleChange: parseScheduleChange,
+    buildNormalizedOrder: buildNormalizedOrder,
+    runExtractionFromInput: runExtractionFromInput,
   };
 })(window);
-
