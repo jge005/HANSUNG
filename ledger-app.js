@@ -4312,7 +4312,8 @@
 
     data.rows = normalizeClosingMealRows(rows, 1200);
     data.issues = normalizeClosingMealIssues(issues).slice(0, 600);
-    data.sources = { summary: [], daily: [], count: [] };
+    // 업로드한 원본 소스(summary/daily/count)는 유지해야
+    // "분석 실행" 버튼 재실행 시에도 동일 데이터로 다시 검증할 수 있다.
     data.updatedAt = new Date().toISOString();
     return data;
   }
