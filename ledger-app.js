@@ -3804,7 +3804,7 @@
         breakfast: 0,
         lunch: lunch + manual,
         dinner: dinner,
-        source: String(sourceLabel || ""),
+        source: String(sourceLabel || "") + (manual > 0 ? ":manual" : ""),
       });
     }
     return rows;
@@ -4048,6 +4048,9 @@
     var countRows = countRowsRaw.filter(function (row) {
       return row.day > 0 && row.name === "__DAY_TOTAL__";
     });
+    var hasSummarySource = summaryRowsRaw.length > 0;
+    var hasDailySource = dailyRowsRaw.length > 0;
+    var hasCountSource = countRowsRaw.length > 0;
 
     var merged = {};
     var issues = [];
@@ -4093,6 +4096,34 @@
       merged[keyBase].dinner += parseMealCountValue(row.dinner);
     });
 
+    if (!hasDailySource) {
+      issues.push({
+        level: "warning",
+        type: "missing_daily_source",
+        day: 0,
+        name: "일별파일",
+        message: "일별 파일 데이터가 없어 사람별/날짜별 대조를 수행할 수 없습니다.",
+      });
+    }
+    if (!hasSummarySource) {
+      issues.push({
+        level: "warning",
+        type: "missing_summary_source",
+        day: 0,
+        name: "합계파일",
+        message: "합계 파일 데이터가 없어 일별 사람합계 대조를 수행할 수 없습니다.",
+      });
+    }
+    if (!hasCountSource) {
+      issues.push({
+        level: "warning",
+        type: "missing_count_source",
+        day: 0,
+        name: "식수파일",
+        message: "식수 파일 데이터가 없어 날짜별/금액 대조를 수행할 수 없습니다.",
+      });
+    }
+
     var rows = Object.keys(merged).map(function (key) {
       return merged[key];
     }).sort(function (a, b) {
@@ -4122,26 +4153,28 @@
       personTotalsSummary[token].lunch += parseMealCountValue(row.lunch);
       personTotalsSummary[token].dinner += parseMealCountValue(row.dinner);
     });
-    var personKeys = {};
-    Object.keys(personTotalsDaily).forEach(function (k) { personKeys[k] = true; });
-    Object.keys(personTotalsSummary).forEach(function (k) { personKeys[k] = true; });
-    Object.keys(personKeys).forEach(function (key) {
-      var d = personTotalsDaily[key] || { name: "", breakfast: 0, lunch: 0, dinner: 0 };
-      var s = personTotalsSummary[key] || { name: "", breakfast: 0, lunch: 0, dinner: 0 };
-      var dailyTotal = d.breakfast + d.lunch + d.dinner;
-      var summaryTotal = s.breakfast + s.lunch + s.dinner;
-      if (dailyTotal !== summaryTotal || d.breakfast !== s.breakfast || d.lunch !== s.lunch || d.dinner !== s.dinner) {
-        issues.push({
-          level: "warning",
-          type: "summary_mismatch",
-          day: 0,
-          name: s.name || d.name || "",
-          message:
-            "일별↔합계 불일치 (일별 조/중/석 " + d.breakfast + "/" + d.lunch + "/" + d.dinner +
-            ", 합계파일 " + s.breakfast + "/" + s.lunch + "/" + s.dinner + ")",
-        });
-      }
-    });
+    if (hasDailySource && hasSummarySource) {
+      var personKeys = {};
+      Object.keys(personTotalsDaily).forEach(function (k) { personKeys[k] = true; });
+      Object.keys(personTotalsSummary).forEach(function (k) { personKeys[k] = true; });
+      Object.keys(personKeys).forEach(function (key) {
+        var d = personTotalsDaily[key] || { name: "", breakfast: 0, lunch: 0, dinner: 0 };
+        var s = personTotalsSummary[key] || { name: "", breakfast: 0, lunch: 0, dinner: 0 };
+        var dailyTotal = d.breakfast + d.lunch + d.dinner;
+        var summaryTotal = s.breakfast + s.lunch + s.dinner;
+        if (dailyTotal !== summaryTotal || d.breakfast !== s.breakfast || d.lunch !== s.lunch || d.dinner !== s.dinner) {
+          issues.push({
+            level: "warning",
+            type: "summary_mismatch",
+            day: 0,
+            name: s.name || d.name || "",
+            message:
+              "일별↔합계 불일치 (일별 조/중/석 " + d.breakfast + "/" + d.lunch + "/" + d.dinner +
+              ", 합계파일 " + s.breakfast + "/" + s.lunch + "/" + s.dinner + ")",
+          });
+        }
+      });
+    }
 
     var dayTotalsDaily = {};
     dailyRows.forEach(function (row) {
@@ -4155,29 +4188,45 @@
       if (!dayTotalsCount[row.day]) dayTotalsCount[row.day] = 0;
       dayTotalsCount[row.day] += parseMealCountValue(row.breakfast) + parseMealCountValue(row.lunch) + parseMealCountValue(row.dinner);
     });
-    var dayKeys = {};
-    Object.keys(dayTotalsDaily).forEach(function (k) { dayKeys[k] = true; });
-    Object.keys(dayTotalsCount).forEach(function (k) { dayKeys[k] = true; });
-    Object.keys(dayKeys).forEach(function (key) {
-      var day = Number(key) || 0;
-      if (!day) return;
-      var fromDaily = dayTotalsDaily[day] || 0;
-      var fromCount = dayTotalsCount[day] || 0;
-      if (fromDaily !== fromCount) {
-        issues.push({
-          level: "warning",
-          type: "day_total_mismatch",
-          day: day,
-          name: "일자합계",
-          message: day + "일 식수 불일치 (일별 합계 " + fromDaily + ", 식수파일 " + fromCount + ")",
-        });
-      }
-    });
+    if (hasDailySource && hasCountSource) {
+      var dayKeys = {};
+      Object.keys(dayTotalsDaily).forEach(function (k) { dayKeys[k] = true; });
+      Object.keys(dayTotalsCount).forEach(function (k) { dayKeys[k] = true; });
+      Object.keys(dayKeys).forEach(function (key) {
+        var day = Number(key) || 0;
+        if (!day) return;
+        var fromDaily = dayTotalsDaily[day] || 0;
+        var fromCount = dayTotalsCount[day] || 0;
+        if (fromDaily !== fromCount) {
+          issues.push({
+            level: "warning",
+            type: "day_total_mismatch",
+            day: day,
+            name: "일자합계",
+            message: day + "일 식수 불일치 (일별 합계 " + fromDaily + ", 식수파일 " + fromCount + ")",
+          });
+        }
+      });
+    }
 
     var monthDailyCount = 0;
     Object.keys(dayTotalsDaily).forEach(function (k) { monthDailyCount += dayTotalsDaily[k] || 0; });
+    var monthSummaryCount = 0;
+    Object.keys(personTotalsSummary).forEach(function (k) {
+      var s = personTotalsSummary[k] || { breakfast: 0, lunch: 0, dinner: 0 };
+      monthSummaryCount += (s.breakfast || 0) + (s.lunch || 0) + (s.dinner || 0);
+    });
     var monthCountFileCount = 0;
     Object.keys(dayTotalsCount).forEach(function (k) { monthCountFileCount += dayTotalsCount[k] || 0; });
+    if (monthSummaryCount > 0 && monthCountFileCount > 0 && monthSummaryCount !== monthCountFileCount) {
+      issues.push({
+        level: "warning",
+        type: "summary_count_month_mismatch",
+        day: 0,
+        name: "월합계검증",
+        message: "합계파일 월 총 식수(" + monthSummaryCount + ")와 식수파일 월 총 식수(" + monthCountFileCount + ")가 다릅니다.",
+      });
+    }
     if (monthCountFileCount > 0) {
       var unitPrice = 6500;
       var calculatedAmount = monthCountFileCount * unitPrice;
@@ -4198,6 +4247,17 @@
         });
       }
     }
+    countRows.forEach(function (row) {
+      if (String(row.source || "").indexOf(":manual") >= 0) {
+        issues.push({
+          level: "warning",
+          type: "manual_count_present",
+          day: row.day || 0,
+          name: "일자합계",
+          message: (row.day || "-") + "일 식수에 수기 입력이 포함되어 수동 확인이 필요합니다.",
+        });
+      }
+    });
 
     var attendanceLookup = buildClosingAttendanceLookupByMonth(monthLabel);
     rows.forEach(function (row) {
