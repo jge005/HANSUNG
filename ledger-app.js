@@ -83,6 +83,7 @@
     role: null,
     mainTab: null,
     subTab: "manage",
+    ordersSubTab: "status",
     closingSubTab: "attendance",
     managerMainTab: "docs",
     managerSubTab: "overview",
@@ -131,6 +132,11 @@
     activeClient: "",
     sidebarScrollTop: 0,
   };
+  var orderState = {
+    rows: [],
+    colWidths: orderSheetColumns.map(function (col) { return Number(col.width || 100); }),
+    rowHeights: [],
+  };
   var manageState = {
     startMonth: "",
     endMonth: "",
@@ -174,6 +180,7 @@
   var clientDataFields = ["supplierMode", "company", "businessNo", "ceoName", "address", "businessType", "businessItem"];
   var priceGridFields = ["client", "code", "price", "name"];
   var priceEditorFields = ["code", "price", "name"];
+  var orderGridFields = ["orderDate", "vendor", "itemCode", "itemName", "spec", "qty", "unit", "dueDate", "status", "note"];
   var closingAttendanceDayFields = [];
   for (var closingDayIndex = 1; closingDayIndex <= 31; closingDayIndex++) {
     closingAttendanceDayFields.push("d" + closingDayIndex);
@@ -271,9 +278,22 @@
     { key: "price", label: "단가", width: 100 },
     { key: "name", label: "품목명", width: 360 },
   ];
+  var orderSheetColumns = [
+    { key: "orderDate", label: "발주일", width: 92 },
+    { key: "vendor", label: "업체", width: 150 },
+    { key: "itemCode", label: "품목코드", width: 120 },
+    { key: "itemName", label: "품목명", width: 250 },
+    { key: "spec", label: "규격", width: 130 },
+    { key: "qty", label: "수량", width: 82 },
+    { key: "unit", label: "단위", width: 68 },
+    { key: "dueDate", label: "납기", width: 92 },
+    { key: "status", label: "상태", width: 106 },
+    { key: "note", label: "비고", width: 190 },
+  ];
   var workSheetEngine = null;
   var clientSheetEngine = null;
   var priceSheetEngine = null;
+  var orderSheetEngine = null;
   var closingAttendanceSheetEngine = null;
   var closingOutsourceSheetEngine = null;
   var closingFingerprintSourceFile = null;
@@ -914,13 +934,13 @@
     if (!values.length) return '<div class="manager-trend-bars"></div>';
     var max = values.reduce(function (m, v) { return v > m ? v : m; }, 0);
     if (max <= 0) max = 1;
-    var width = Math.max(220, values.length * 34 + 26);
-    var height = 46;
-    var innerTop = 4;
-    var innerBottom = 6;
+    var width = Math.max(380, values.length * 56 + 36);
+    var height = 84;
+    var innerTop = 8;
+    var innerBottom = 10;
     var usableHeight = height - innerTop - innerBottom;
-    var barW = 8;
-    var step = values.length > 1 ? Math.max(24, Math.floor((width - 18) / values.length)) : 26;
+    var barW = 12;
+    var step = values.length > 1 ? Math.max(36, Math.floor((width - 24) / values.length)) : 40;
     var linePoints = [];
     var bars = [];
     for (var i = 0; i < values.length; i++) {
@@ -951,7 +971,7 @@
       var cy = height - innerBottom - ch;
       var ctitle = formatManagerDeltaTitle(labels && labels[j], cv, cp);
       circles.push(
-        '<circle cx="' + cx + '" cy="' + cy + '" r="1.3" class="manager-trend-dot">' +
+        '<circle cx="' + cx + '" cy="' + cy + '" r="1.8" class="manager-trend-dot">' +
           "<title>" + escapeHtml(ctitle) + "</title>" +
         "</circle>"
       );
@@ -977,16 +997,16 @@
     var amountMax = amountSeries.reduce(function (m, v) { return v > m ? v : m; }, 0);
     if (amountMax <= 0) amountMax = 1;
 
-    var width = Math.max(760, monthLabels.length * 92 + 120);
-    var height = 220;
-    var left = 22;
-    var right = 18;
-    var top = 14;
-    var bottom = 32;
+    var width = Math.max(520, monthLabels.length * 56 + 90);
+    var height = 120;
+    var left = 16;
+    var right = 14;
+    var top = 10;
+    var bottom = 24;
     var plotW = Math.max(100, width - left - right);
-    var plotH = Math.max(90, height - top - bottom);
+    var plotH = Math.max(50, height - top - bottom);
     var step = monthLabels.length > 1 ? (plotW / (monthLabels.length - 1)) : 0;
-    var barW = Math.min(22, Math.max(10, Math.floor(plotW / (monthLabels.length * 2.15))));
+    var barW = Math.min(14, Math.max(6, Math.floor(plotW / (monthLabels.length * 2.5))));
 
     var gridLines = [];
     for (var g = 0; g <= 4; g++) {
@@ -1015,7 +1035,7 @@
       );
       points.push({ x: x, y: ly, title: title });
       dots.push(
-        '<circle cx="' + x + '" cy="' + ly + '" r="2.1" class="manager-main-dot">' +
+        '<circle cx="' + x + '" cy="' + ly + '" r="1.6" class="manager-main-dot">' +
           "<title>" + escapeHtml(title) + "</title>" +
         "</circle>"
       );
@@ -1094,7 +1114,7 @@
       '<div class="manager-table-card">' +
       '<div class="manager-table-wrap manager-trend-table-wrap">' +
       '<table class="manager-table manager-trend-table">' +
-      "<thead><tr><th style=\"width:260px\">업체명</th><th style=\"min-width:760px\">월별 추이</th><th style=\"width:140px\">당월</th><th style=\"width:140px\">전월</th><th style=\"width:140px\">증감</th><th style=\"width:120px\">증감률</th></tr></thead>" +
+      "<thead><tr><th style=\"width:260px\">업체명</th><th style=\"min-width:980px\">월별 추이</th><th style=\"width:140px\">당월</th><th style=\"width:140px\">전월</th><th style=\"width:140px\">증감</th><th style=\"width:120px\">증감률</th></tr></thead>" +
       "<tbody>" +
       (topRows || '<tr><td colspan="6" class="manager-empty">표시할 업체 데이터가 없습니다.</td></tr>') +
       "</tbody></table></div>" +
@@ -5889,6 +5909,43 @@
     return normalized;
   }
 
+  function emptyOrderRow() {
+    return {
+      orderDate: "",
+      vendor: "",
+      itemCode: "",
+      itemName: "",
+      spec: "",
+      qty: "",
+      unit: "",
+      dueDate: "",
+      status: "",
+      note: "",
+    };
+  }
+
+  function normalizeOrderRows(rows, minCount) {
+    var normalized = Array.isArray(rows)
+      ? rows.map(function (row) { return Object.assign(emptyOrderRow(), row || {}); })
+      : [];
+    var lastUsed = -1;
+    for (var i = normalized.length - 1; i >= 0; i--) {
+      if (rowHasAnyValue(normalized[i], orderGridFields)) {
+        lastUsed = i;
+        break;
+      }
+    }
+    var target = Math.max(minCount || 50, lastUsed + 21);
+    for (var j = 0; j < target; j++) {
+      normalized[j] = Object.assign(emptyOrderRow(), normalized[j] || {});
+      normalized[j].status = String(normalized[j].status || "").trim();
+    }
+    while (normalized.length < target) {
+      normalized.push(emptyOrderRow());
+    }
+    return normalized;
+  }
+
   function createLedgerBundle() {
     return {
       rows: normalizeSalesRows([], MIN_ROW_COUNT),
@@ -5995,6 +6052,40 @@
     if (taxEl) taxEl.textContent = formatDisplayNumber(totals.tax);
     if (grandEl) grandEl.textContent = formatDisplayNumber(totals.grand);
     if (qtyEl) qtyEl.textContent = formatDisplayNumber(totals.qty);
+  }
+
+  function getOrderSummary(rows) {
+    var summary = {
+      total: 0,
+      requested: 0,
+      ordered: 0,
+      received: 0,
+      hold: 0,
+    };
+    (rows || []).forEach(function (row) {
+      if (!rowHasAnyValue(row, orderGridFields)) return;
+      summary.total += 1;
+      var status = String((row && row.status) || "").trim();
+      if (status === "발주완료") summary.ordered += 1;
+      else if (status === "입고완료") summary.received += 1;
+      else if (status === "보류") summary.hold += 1;
+      else summary.requested += 1;
+    });
+    return summary;
+  }
+
+  function refreshOrderSummaryUi() {
+    var summary = getOrderSummary(orderState.rows || []);
+    var totalEl = document.getElementById("order-summary-total");
+    var requestedEl = document.getElementById("order-summary-requested");
+    var orderedEl = document.getElementById("order-summary-ordered");
+    var receivedEl = document.getElementById("order-summary-received");
+    var holdEl = document.getElementById("order-summary-hold");
+    if (totalEl) totalEl.textContent = formatDisplayNumber(summary.total);
+    if (requestedEl) requestedEl.textContent = formatDisplayNumber(summary.requested);
+    if (orderedEl) orderedEl.textContent = formatDisplayNumber(summary.ordered);
+    if (receivedEl) receivedEl.textContent = formatDisplayNumber(summary.received);
+    if (holdEl) holdEl.textContent = formatDisplayNumber(summary.hold);
   }
 
   function createMiniSheetEngine(options) {
@@ -7126,6 +7217,62 @@
     getPriceSheetEngine().attach(container);
   }
 
+  function getOrderSheetEngine() {
+    if (orderSheetEngine) return orderSheetEngine;
+    var createSheetEngine = window.createSheetEngine || createMiniSheetEngine;
+    orderSheetEngine = createSheetEngine({
+      idPrefix: "order-grid",
+      title: "발주 시트",
+      subtitle: "엑셀처럼 셀 선택/다중 복사/붙여넣기",
+      maxHeight: 620,
+      minRows: 50,
+      columns: orderSheetColumns,
+      emptyRow: function () { return emptyOrderRow(); },
+      getRows: function () { return normalizeOrderRows(orderState.rows, 50); },
+      setRows: function (rows) { orderState.rows = normalizeOrderRows(rows, 50); },
+      normalizeRows: function (rows, minCount) { return normalizeOrderRows(rows, minCount || 50); },
+      getCellEditor: function (rowIndex, colIndex) {
+        var key = orderSheetColumns[colIndex].key;
+        if (key !== "status") return null;
+        return {
+          type: "select",
+          options: [
+            { value: "", label: "요청" },
+            { value: "요청", label: "요청" },
+            { value: "발주완료", label: "발주완료" },
+            { value: "입고완료", label: "입고완료" },
+            { value: "보류", label: "보류" },
+          ]
+        };
+      },
+      normalizeValue: function (rowIndex, colIndex, value) {
+        var key = orderSheetColumns[colIndex].key;
+        if (key === "status") {
+          var text = String(value || "").trim();
+          if (text === "발주완료" || text === "입고완료" || text === "보류" || text === "요청") return text;
+          return text ? "요청" : "";
+        }
+        return value;
+      },
+      onRowsChange: function () {
+        scheduleLedgerDraftSave();
+        refreshOrderSummaryUi();
+      },
+    });
+    if (Array.isArray(orderState.colWidths) && orderState.colWidths.length) {
+      orderSheetEngine.colWidths = orderState.colWidths.slice();
+    }
+    if (Array.isArray(orderState.rowHeights) && orderState.rowHeights.length) {
+      orderSheetEngine.rowHeights = orderState.rowHeights.slice();
+    }
+    return orderSheetEngine;
+  }
+
+  function attachOrderGridWhenNeeded(container) {
+    if (!container) return;
+    getOrderSheetEngine().attach(container);
+  }
+
   function getClosingAttendanceSheetEngine() {
     if (closingAttendanceSheetEngine) return closingAttendanceSheetEngine;
     var createSheetEngine = window.createSheetEngine || createMiniSheetEngine;
@@ -7242,6 +7389,18 @@
         workItems: cloneItems(trimmedWorkItems),
         workInfo: cloneWorkInfo(workState.info),
       },
+      orders: {
+        subTab: state.ordersSubTab || "status",
+        rows: normalizeOrderRows(orderState.rows, 50),
+        sheetLayout: {
+          colWidths: (orderSheetEngine && Array.isArray(orderSheetEngine.colWidths) && orderSheetEngine.colWidths.length
+            ? orderSheetEngine.colWidths
+            : orderState.colWidths || []).slice(),
+          rowHeights: (orderSheetEngine && Array.isArray(orderSheetEngine.rowHeights) && orderSheetEngine.rowHeights.length
+            ? orderSheetEngine.rowHeights
+            : orderState.rowHeights || []).slice(),
+        },
+      },
       manager: {
         mainTab: managerState.mainTab === "closing" ? "closing" : "docs",
         subTab: managerState.subTab || "overview",
@@ -7351,6 +7510,7 @@
     var salesData = data.sales && typeof data.sales === "object" ? data.sales : data;
     var purchaseData = data.purchase && typeof data.purchase === "object" ? data.purchase : null;
     var sharedData = data.shared && typeof data.shared === "object" ? data.shared : data;
+    var ordersData = data.orders && typeof data.orders === "object" ? data.orders : null;
     var managerData = data.manager && typeof data.manager === "object" ? data.manager : null;
     var closingData = data.closing && typeof data.closing === "object" ? data.closing : null;
 
@@ -7371,6 +7531,37 @@
 
     if (sharedData.workInfo && typeof sharedData.workInfo === "object") {
       workState.info = cloneWorkInfo(sharedData.workInfo);
+    }
+
+    if (ordersData && Array.isArray(ordersData.rows)) {
+      orderState.rows = normalizeOrderRows(ordersData.rows, 50);
+    } else if (Array.isArray(data.orderRows)) {
+      orderState.rows = normalizeOrderRows(data.orderRows, 50);
+    }
+    if (ordersData && ordersData.sheetLayout && typeof ordersData.sheetLayout === "object") {
+      if (Array.isArray(ordersData.sheetLayout.colWidths)) {
+        orderState.colWidths = ordersData.sheetLayout.colWidths.slice(0, orderSheetColumns.length);
+      }
+      if (Array.isArray(ordersData.sheetLayout.rowHeights)) {
+        orderState.rowHeights = ordersData.sheetLayout.rowHeights.slice();
+      }
+    } else {
+      if (Array.isArray(data.orderColWidths)) orderState.colWidths = data.orderColWidths.slice(0, orderSheetColumns.length);
+      if (Array.isArray(data.orderRowHeights)) orderState.rowHeights = data.orderRowHeights.slice();
+    }
+    if (ordersData && typeof ordersData.subTab === "string" && ordersData.subTab) {
+      state.ordersSubTab = ordersData.subTab;
+    } else if (typeof data.ordersSubTab === "string" && data.ordersSubTab) {
+      state.ordersSubTab = data.ordersSubTab;
+    }
+    if (orderSheetEngine) {
+      if (Array.isArray(orderState.colWidths) && orderState.colWidths.length) {
+        orderSheetEngine.colWidths = orderState.colWidths.slice();
+      }
+      if (Array.isArray(orderState.rowHeights) && orderState.rowHeights.length) {
+        orderSheetEngine.rowHeights = orderState.rowHeights.slice();
+      }
+      orderSheetEngine.refresh();
     }
 
     if (salesData && Array.isArray(salesData.clientRows)) {
@@ -10951,6 +11142,29 @@
     );
   }
 
+  function renderOrdersStatusTab() {
+    orderState.rows = normalizeOrderRows(orderState.rows, 50);
+    var summary = getOrderSummary(orderState.rows);
+    return (
+      '<div class="clientdoc">' +
+        '<div class="toolbar-card" style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">' +
+          '<span class="chip">전체 <strong id="order-summary-total">' + escapeHtml(formatDisplayNumber(summary.total)) + '</strong></span>' +
+          '<span class="chip">요청 <strong id="order-summary-requested">' + escapeHtml(formatDisplayNumber(summary.requested)) + '</strong></span>' +
+          '<span class="chip">발주완료 <strong id="order-summary-ordered">' + escapeHtml(formatDisplayNumber(summary.ordered)) + '</strong></span>' +
+          '<span class="chip">입고완료 <strong id="order-summary-received">' + escapeHtml(formatDisplayNumber(summary.received)) + '</strong></span>' +
+          '<span class="chip">보류 <strong id="order-summary-hold">' + escapeHtml(formatDisplayNumber(summary.hold)) + '</strong></span>' +
+        '</div>' +
+        '<div class="clientdoc-card">' +
+          '<div class="clientdoc-head">' +
+            '<div class="clientdoc-title">' + icon("folder") + ' 발주 현황</div>' +
+            '<div class="sub">발주일/업체/품목/납기/상태를 한 시트에서 관리</div>' +
+          '</div>' +
+          '<div id="order-grid-host"></div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
   function capturePriceSidebarScroll() {
     var listEl = document.querySelector(".price-client-list");
     if (!listEl) return;
@@ -12265,6 +12479,48 @@
             });
         });
       }
+      return;
+    }
+
+    if (state.role === "orders") {
+      var ordersTabs = [
+        { key: "status", label: "발주현황", icon: "folder" },
+      ];
+      if (!ordersTabs.some(function (tab) { return tab.key === state.ordersSubTab; })) {
+        state.ordersSubTab = "status";
+      }
+      var ordersTabHtml = '<div class="tabs">';
+      ordersTabs.forEach(function (tab) {
+        ordersTabHtml +=
+          '<button type="button" class="sub-tab' +
+          (state.ordersSubTab === tab.key ? " active" : "") +
+          '" data-orders-sub="' +
+          tab.key +
+          '">' +
+          icon(tab.icon) +
+          tab.label +
+          "</button>";
+      });
+      ordersTabHtml += "</div>";
+
+      var ordersBody = renderOrdersStatusTab();
+      app.innerHTML = renderTopBar() + '<div class="content">' + ordersTabHtml + ordersBody + "</div>";
+      wireTopBar();
+      attachOrderGridWhenNeeded(document.getElementById("order-grid-host"));
+      refreshOrderSummaryUi();
+
+      var wasOrdersLoaded = ledgerState.loadedFromFirebase;
+      ensureLedgerLoadedFromFirebase().then(function () {
+        if (!wasOrdersLoaded && state.role === "orders") render();
+      });
+
+      app.querySelectorAll("[data-orders-sub]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          state.ordersSubTab = btn.getAttribute("data-orders-sub") || "status";
+          scheduleLedgerDraftSave();
+          render();
+        });
+      });
       return;
     }
 
