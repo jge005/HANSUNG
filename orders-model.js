@@ -766,6 +766,179 @@
     return normalizeText(text);
   }
 
+  function detectSummaryRowsGeneric(rowValues) {
+    var joined = (rowValues || [])
+      .map(function (v) { return toCleanString(v); })
+      .join(" ")
+      .toLowerCase()
+      .replace(/\s+/g, "");
+    if (!joined) return false;
+    return /(합계수량|합계금액|세액|총액|공급가액|부가세|합계|소계|subtotal|total|tax|vat)/i.test(joined);
+  }
+
+  function detectHeaderSectionGeneric(rows) {
+    var header = { orderDate: null, customerName: "" };
+    for (var r = 0; r < Math.min(rows.length, 30); r++) {
+      var row = Array.isArray(rows[r]) ? rows[r] : [];
+      for (var c = 0; c < row.length; c++) {
+        var cell = toCleanString(row[c]).toLowerCase();
+        if (!cell) continue;
+        if (!header.orderDate && /(발주일|작성일|order\s*date)/i.test(cell)) {
+          var cand =
+            normalizeDate(row[c + 1]) ||
+            normalizeDate(row[c + 2]) ||
+            normalizeDate((rows[r + 1] && rows[r + 1][c]) || "") ||
+            normalizeDate((rows[r + 1] && rows[r + 1][c + 1]) || "");
+          if (cand) header.orderDate = cand;
+        }
+        if (!header.customerName && /(거래처|발주처|업체명|customer|buyer|to)/i.test(cell)) {
+          var name = toCleanString(row[c + 1]) || toCleanString(row[c + 2]);
+          if (name && !detectSummaryRowsGeneric([name])) header.customerName = name;
+        }
+      }
+    }
+    return header;
+  }
+
+  function normalizeExcelHeaderKeyGeneric(cellText) {
+    var t = toCleanString(cellText).toLowerCase().replace(/\s+/g, "");
+    if (!t) return "";
+    if (/^(no|번호|순번)$/.test(t)) return "no";
+    if (/(구매품번|품번|품목코드|코드|itemcode|partno|model|자재코드)/.test(t)) return "code";
+    if (/(구매품명|품명|품목명|itemname|item|material|자재명)/.test(t)) return "name";
+    if (/(규격|spec|size)/.test(t)) return "spec";
+    if (/(단위|unit)/.test(t)) return "unit";
+    if (/(발주수량|주문수량|수량|qty|quantity)/.test(t)) return "qty";
+    if (/(납기일|납기|due|shipdate|요청출고|요청일|출고일)/.test(t)) return "due";
+    if (/(단가|price|unitprice)/.test(t)) return "price";
+    return "";
+  }
+
+  function detectItemTableGeneric(rows) {
+    var best = null;
+    for (var r = 0; r < Math.min(rows.length, 90); r++) {
+      var row = Array.isArray(rows[r]) ? rows[r] : [];
+      var map = {};
+      var score = 0;
+      for (var c = 0; c < row.length; c++) {
+        var key = normalizeExcelHeaderKeyGeneric(row[c]);
+        if (!key || map[key] != null) continue;
+        map[key] = c;
+        score += 1;
+      }
+      if ((map.name != null || map.code != null) && (map.qty != null || map.due != null || map.spec != null)) {
+        if (!best || score > best.score) best = { headerRow: r, colMap: map, score: score };
+      }
+    }
+    return best;
+  }
+
+  function parseOrderItemsGeneric(rows, tableInfo) {
+    if (!tableInfo) return [];
+    var items = [];
+    var map = tableInfo.colMap;
+    var blankStreak = 0;
+    for (var r = tableInfo.headerRow + 1; r < rows.length; r++) {
+      var row = Array.isArray(rows[r]) ? rows[r] : [];
+      var hasAny = row.some(function (v) { return toCleanString(v) !== ""; });
+      if (!hasAny) {
+        blankStreak += 1;
+        if (blankStreak >= 3) break;
+        continue;
+      }
+      blankStreak = 0;
+      if (detectSummaryRowsGeneric(row)) continue;
+      var product = toCleanString(row[map.name]);
+      var code = toCleanString(row[map.code]);
+      var qty = normalizeNumber(row[map.qty], null);
+      var due = normalizeDate(row[map.due]);
+      var spec = toCleanString(row[map.spec]);
+      var rowJoined = row.map(function (v) { return toCleanString(v); }).join(" ");
+      if (/^\s*(합계|소계|총액|세액|부가세|공급가액)\s*$/i.test(product) || /^\s*(합계|소계|총액|세액|부가세|공급가액)\s*$/i.test(code)) continue;
+      if (/(합계|소계|총액|세액|부가세|공급가액|subtotal|total|tax|vat)/i.test(rowJoined) && !(product || code)) continue;
+      if (!(product || code)) continue;
+      if (qty == null && !due && !spec) continue;
+      items.push({
+        product_name: product || code,
+        spec: spec,
+        quantity: qty == null ? 0 : qty,
+        unit: toCleanString(row[map.unit]),
+        unit_price: normalizeNumber(row[map.price], null),
+        due_date: due,
+        remarks: "",
+      });
+      if (items.length >= 500) break;
+    }
+    return items;
+  }
+
+  function parseDatesGeneric(text) {
+    var normalized = normalizeExtractedText(text);
+    var lines = normalized.split("\n");
+    var result = {
+      order_date: null,
+      requested_ship_date: null,
+      due_date: null,
+      current_ship_date: null,
+      original_ship_date: null,
+      candidates: [],
+    };
+    var reg = /(\d{4}[.\-/년]\s*\d{1,2}[.\-/월]\s*\d{1,2}\s*(?:일)?|\d{8})/g;
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      var hit;
+      while ((hit = reg.exec(line))) {
+        var raw = toCleanString(hit[1])
+          .replace(/년|\/|\./g, "-")
+          .replace(/월/g, "-")
+          .replace(/일/g, "")
+          .replace(/\s+/g, "");
+        var d = normalizeDate(raw);
+        if (!d) continue;
+        result.candidates.push({ date: d, line: line, index: i });
+        var low = line.toLowerCase();
+        if (!result.order_date && /(발주일|작성일|order\s*date)/i.test(low)) result.order_date = d;
+        if (!result.requested_ship_date && /(납기|요청출고|출고요청|ship|due)/i.test(low)) result.requested_ship_date = d;
+      }
+    }
+    if (!result.order_date && result.candidates[0]) result.order_date = result.candidates[0].date;
+    if (!result.requested_ship_date && result.candidates[1]) result.requested_ship_date = result.candidates[1].date;
+    result.due_date = result.requested_ship_date || null;
+    result.current_ship_date = result.requested_ship_date || null;
+    result.original_ship_date = result.requested_ship_date || null;
+    return result;
+  }
+
+  function parseItemsGeneric(text) {
+    var lines = normalizeExtractedText(text).split("\n");
+    var items = [];
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (!line.trim()) continue;
+      if (/(합계|총액|세액|금액합계|공급가액|부가세|subtotal|total|tax|vat)/i.test(line)) continue;
+      var parts = line.indexOf("\t") >= 0 ? line.split("\t") : line.split(/\s{2,}/);
+      if (!parts || parts.length < 2) continue;
+      var qty = null;
+      for (var c = 0; c < parts.length; c++) {
+        var n = normalizeNumber(parts[c], null);
+        if (n != null) { qty = n; break; }
+      }
+      if (qty == null) continue;
+      var name = toCleanString(parts[0]);
+      if (!name) continue;
+      items.push({
+        product_name: name,
+        spec: toCleanString(parts[1]),
+        quantity: qty,
+        unit: "",
+        unit_price: null,
+        remarks: "",
+      });
+      if (items.length >= 200) break;
+    }
+    return items;
+  }
+
   function detectSummaryRows(rowValues) {
     var joined = (rowValues || []).map(function (v) { return toCleanString(v); }).join(" ").toLowerCase();
     if (!joined) return false;
@@ -875,9 +1048,9 @@
       var ws = workbook.Sheets[name];
       if (!ws) return;
       var rows = global.XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
-      var header = detectHeaderSection(rows);
-      var table = detectItemTable(rows);
-      var items = parseOrderItems(rows, table);
+      var header = detectHeaderSectionGeneric(rows);
+      var table = detectItemTableGeneric(rows);
+      var items = parseOrderItemsGeneric(rows, table);
       var nonEmptyRows = 0;
       for (var i = 0; i < rows.length; i++) {
         if (Array.isArray(rows[i]) && rows[i].some(function (v) { return toCleanString(v) !== ""; })) nonEmptyRows += 1;
@@ -911,8 +1084,9 @@
       if (line) lines.push(line);
     });
     var rawText = normalizeExtractedText(lines.join("\n"));
+    var parsedDates = parseDatesGeneric(rawText);
     if (!items.length && rawText) {
-      items = parseItems(rawText);
+      items = parseItemsGeneric(rawText);
     }
     var firstDue = null;
     for (var k = 0; k < items.length; k++) {
@@ -928,9 +1102,9 @@
       sheetName: best && best.sheetName ? best.sheetName : "",
       raw_text: rawText,
       customer_name: header.customerName || "",
-      order_date: parseOrderDate(header),
-      requested_ship_date: firstDue,
-      due_date: firstDue,
+      order_date: parseOrderDate(header) || parsedDates.order_date,
+      requested_ship_date: firstDue || parsedDates.requested_ship_date,
+      due_date: firstDue || parsedDates.due_date || parsedDates.requested_ship_date,
       order_items: items,
       unresolved_fields: unresolved,
       parse_debug: {
@@ -1098,12 +1272,12 @@
       current_ship_date: normalizeDate(parsed.requested_ship_date || parsed.due_date),
       original_ship_date: normalizeDate(parsed.requested_ship_date || parsed.due_date),
       candidates: [],
-    } : parseDates(rawText);
+    } : parseDatesGeneric(rawText);
     var parsedItems =
       parsed && Array.isArray(parsed.order_items)
         ? parsed.order_items.map(function (r) { return normalizeOrderItem(r, null); })
         : [];
-    var items = parsedItems.length ? parsedItems : parseItems(rawText);
+    var items = parsedItems.length ? parsedItems : parseItemsGeneric(rawText);
     var urgent = parseUrgency(rawText);
     var scheduleChange = parseScheduleChange(rawText, dates.current_ship_date);
     var unresolved = [];

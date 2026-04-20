@@ -14,9 +14,9 @@
   var roleCards = [
     { key: "accounting", title: "경리", icon: "scroll" },
     { key: "manager", title: "관리/분석", icon: "sheet" },
-    { key: "ai", title: "AI", icon: "settings" },
     { key: "orders", title: "발주", icon: "folder" },
     { key: "work", title: "SCM", icon: "settings" },
+    { key: "ai", title: "AI", icon: "settings" },
   ];
 
   function getRoleTitle(roleKey) {
@@ -202,6 +202,56 @@
   var priceGridFields = ["client", "code", "price", "name"];
   var priceEditorFields = ["code", "price", "name"];
   var orderGridFields = ["orderDate", "vendor", "itemCode", "itemName", "spec", "qty", "unit", "dueDate", "status", "note"];
+  var orderWorkflowProfiles = [
+    {
+      key: "kgl_vsl",
+      label: "KGL VSL",
+      keywords: ["kgl vsl", "kgl(vsl)", "vsl"],
+      tasks: ["월요일 가부킹 송부", "화요일 확정서류 송부", "CARGO 확인 후 KGL 입고 신청", "운송비 문자 수신 시 실장 전달"],
+    },
+    {
+      key: "kgl_air",
+      label: "KGL AIR",
+      keywords: ["kgl air", "kgl(air)", "air"],
+      tasks: ["박스 수/사이즈 확정 후 AIR팀 송부", "택배 출고 후 운송장 번호 메일 송부"],
+    },
+    {
+      key: "dgt",
+      label: "DGT",
+      keywords: ["dgt", "디지티"],
+      tasks: ["오퍼시트/라벨양식/패킹양식 메일 송부", "출고 후 운송장 번호 메일 송부"],
+    },
+    {
+      key: "rb_korea",
+      label: "알비코리아",
+      keywords: ["알비코리아", "알.비.코리아", "rb"],
+      tasks: ["메일 발주서에서 출고수량 입력/인쇄", "출하성적서 인쇄", "업체주소 출력"],
+    },
+    {
+      key: "haengsung_site",
+      label: "행성",
+      keywords: ["행성"],
+      tasks: ["전용 사이트에서 출고 처리 진행"],
+    },
+    {
+      key: "youngtech_quick",
+      label: "영테크(퀵)",
+      keywords: ["영테크"],
+      tasks: ["퀵 호출 여부/비용 기록"],
+    },
+    {
+      key: "daily_demand_snapshot",
+      label: "대영전자 수요표",
+      keywords: ["대영전자", "da64-"],
+      tasks: ["최신 수요표(소요량/과부족) 갱신 확인", "전일 대비 변경 품목 점검"],
+    },
+    {
+      key: "standard",
+      label: "일반",
+      keywords: [],
+      tasks: ["거래명세서 출력 또는 메일 송부"],
+    },
+  ];
   var closingAttendanceDayFields = [];
   for (var closingDayIndex = 1; closingDayIndex <= 31; closingDayIndex++) {
     closingAttendanceDayFields.push("d" + closingDayIndex);
@@ -668,7 +718,7 @@
       scheduleLedgerDraftSave();
       return { answer: managerState.aiLastAnswer, contexts: managerState.aiLastContexts, mode: "local_no_context" };
     }
-    var endpoint = String(managerState.aiEndpoint || "").trim();
+    var endpoint = String(managerState.aiEndpoint || "").trim() || getDefaultAiEndpoint();
     if (endpoint) {
       try {
         var payload = {
@@ -706,6 +756,18 @@
     managerState.aiLastAnswer = localAnswer;
     scheduleLedgerDraftSave();
     return { answer: localAnswer, contexts: managerState.aiLastContexts, mode: "local_fallback" };
+  }
+
+  function getDefaultAiEndpoint() {
+    try {
+      var appObj = window.firebaseApp || null;
+      var projectId = appObj && appObj.options ? String(appObj.options.projectId || "").trim() : "";
+      if (!projectId) return "";
+      var region = String(window.AI_FUNCTION_REGION || "asia-northeast3").trim() || "asia-northeast3";
+      return "https://" + region + "-" + projectId + ".cloudfunctions.net/api/ai/chat";
+    } catch (err) {
+      return "";
+    }
   }
 
   function normalizeManagerKey(name) {
@@ -1731,7 +1793,7 @@
     var aiHubPanelHtml =
       '<div class="manager-table-card">' +
         '<div class="manager-head-actions" style="padding:0 0 10px 0;gap:8px;flex-wrap:wrap">' +
-          '<input type="text" class="field" id="manager-ai-endpoint" placeholder="AI 서버 URL (예: https://.../askCompanyAI)" value="' + escapeAttr(String(managerState.aiEndpoint || "")) + '" style="max-width:520px" />' +
+          '<input type="text" class="field" id="manager-ai-endpoint" placeholder="AI 서버 URL (예: https://.../api/ai/chat)" value="' + escapeAttr(String(managerState.aiEndpoint || getDefaultAiEndpoint() || "")) + '" style="max-width:520px" />' +
           '<input type="file" id="manager-ai-upload" class="field" multiple style="max-width:360px;padding:6px 10px;height:36px" accept=".xlsx,.xls,.csv,.txt,.md,.json,.pdf,.png,.jpg,.jpeg,.bmp,.gif,.webp" />' +
           '<button type="button" class="soft-btn" id="btn-manager-ai-upload">문서 업로드</button>' +
         "</div>" +
@@ -6680,6 +6742,7 @@
       var noteLower = note.toLowerCase();
       var urgent = /긴급|urgent|asap|rush/i.test(note) || /긴급/.test(status);
       var changed = /변경|연기|앞당김|리스케줄|reschedule|delay|advance/i.test(noteLower);
+      var workflow = inferOrderWorkflowProfile(String(row.vendor || "").trim(), String(row.itemCode || "").trim(), String(row.itemName || "").trim());
       var requester = "-";
       if (/고객|거래처|customer/i.test(note)) requester = "customer";
       else if (/내부|생산|구매|internal/i.test(note)) requester = "internal";
@@ -6692,6 +6755,9 @@
         rowIndex: i,
         order_id: "row_" + i,
         customer_name: String(row.vendor || "").trim(),
+        workflow_type: workflow.key,
+        workflow_label: workflow.label,
+        workflow_tasks: workflow.tasks.slice(),
         item_summary: String(row.itemName || "").trim() + (String(row.spec || "").trim() ? " (" + String(row.spec || "").trim() + ")" : ""),
         quantity_summary: quantitySummary.trim(),
         due_date: dueDate,
@@ -6705,6 +6771,180 @@
       });
     }
     return records;
+  }
+
+  function inferOrderWorkflowProfile(customerName, itemCode, itemName) {
+    var text = normalizeCompanyMatchText(
+      [customerName || "", itemCode || "", itemName || ""].join(" ")
+    );
+    for (var i = 0; i < orderWorkflowProfiles.length; i++) {
+      var profile = orderWorkflowProfiles[i];
+      if (!profile || !Array.isArray(profile.keywords) || !profile.keywords.length) continue;
+      var matched = profile.keywords.some(function (keyword) {
+        return keyword && text.indexOf(normalizeCompanyMatchText(keyword)) >= 0;
+      });
+      if (matched) return profile;
+    }
+    return orderWorkflowProfiles[orderWorkflowProfiles.length - 1];
+  }
+
+  function isOrderStatusDone(statusText) {
+    var text = String(statusText || "").trim().toLowerCase();
+    return /완료|종결|close|closed|done/.test(text);
+  }
+
+  function getTodayIsoDate() {
+    var now = new Date();
+    var m = now.getMonth() + 1;
+    var d = now.getDate();
+    return now.getFullYear() + "-" + (m < 10 ? "0" + m : m) + "-" + (d < 10 ? "0" + d : d);
+  }
+
+  function getTodaySalesMonthDayText() {
+    var now = new Date();
+    return now.getMonth() + 1 + "월 " + now.getDate() + "일";
+  }
+
+  function findMatchingSalesRowsForOrder(record) {
+    var rows = Array.isArray(ST.rows) ? ST.rows : [];
+    var vendorToken = normalizeCompanyMatchText(record.customer_name || "");
+    var codeToken = normalizeCompanyMatchText((record.item_summary || "").split(" ")[0] || "");
+    var nameToken = normalizeCompanyMatchText(record.item_summary || "");
+    var dateToken = normalizeOrderDateText(record.order_date || "") || normalizeOrderDateText(record.due_date || "");
+    return rows.filter(function (row) {
+      if (!rowHasAnyValue(row, salesColumns.map(function (c) { return c.key; }))) return false;
+      if (vendorToken && normalizeCompanyMatchText(row.client || "").indexOf(vendorToken) < 0) return false;
+      var rowDate = convertSalesDateToIso(String(row.date || "").trim());
+      if (dateToken && rowDate && rowDate !== dateToken) return false;
+      var rowCode = normalizeCompanyMatchText(row.code || "");
+      var rowName = normalizeCompanyMatchText(row.name || "");
+      if (codeToken && rowCode && rowCode.indexOf(codeToken) >= 0) return true;
+      if (nameToken && rowName && rowName.indexOf(nameToken) >= 0) return true;
+      return false;
+    });
+  }
+
+  function convertSalesDateToIso(value) {
+    var parsed = parseSalesMonthDay(value);
+    if (!parsed) return "";
+    var now = new Date();
+    var y = now.getFullYear();
+    return y + "-" + (parsed.month < 10 ? "0" + parsed.month : parsed.month) + "-" + (parsed.day < 10 ? "0" + parsed.day : parsed.day);
+  }
+
+  function buildOrderChecklistItems(records) {
+    var today = getTodayIsoDate();
+    var items = [];
+    (records || []).forEach(function (record) {
+      if (isOrderStatusDone(record.status)) return;
+      var due = normalizeOrderDateText(record.due_date || "");
+      var orderDate = normalizeOrderDateText(record.order_date || "");
+      var rowTasks = [];
+      var score = 0;
+      rowTasks.push("매출대장 기입 확인");
+      var salesRows = findMatchingSalesRowsForOrder(record);
+      if (!salesRows.length) {
+        rowTasks.push("매출대장 미기입: 신규/긴급/당겨보냄/불량대체분 사유 선택 필요");
+        score += 35;
+      } else {
+        var hasQtyMissing = salesRows.some(function (sRow) {
+          return !String(sRow.qty || "").trim();
+        });
+        if (hasQtyMissing) {
+          rowTasks.push("수량 기입 필요");
+          score += 20;
+        }
+      }
+      (record.workflow_tasks || []).forEach(function (task) {
+        if (task) rowTasks.push(task);
+      });
+      if (record.is_urgent) {
+        rowTasks.push("긴급건 우선 처리");
+        score += 30;
+      }
+      if (due && due < today) {
+        rowTasks.push("납기 초과: 즉시 확인");
+        score += 40;
+      } else if (due === today) {
+        rowTasks.push("오늘 납기");
+        score += 25;
+      } else if (!due && orderDate === today) {
+        rowTasks.push("오늘 접수건");
+        score += 12;
+      }
+      if (record.has_schedule_change) {
+        rowTasks.push("일정 변경건 확인");
+        score += 15;
+      }
+      items.push({
+        order_id: record.order_id,
+        rowIndex: record.rowIndex,
+        customer_name: record.customer_name,
+        item_summary: record.item_summary,
+        quantity_summary: record.quantity_summary,
+        due_date: due || record.due_date || "-",
+        workflow_label: record.workflow_label || "일반",
+        tasks: dedupeStrings(rowTasks),
+        score: score,
+      });
+    });
+    items.sort(function (a, b) {
+      if (b.score !== a.score) return b.score - a.score;
+      var ad = String(a.due_date || "");
+      var bd = String(b.due_date || "");
+      return ad.localeCompare(bd);
+    });
+    return items;
+  }
+
+  function dedupeStrings(list) {
+    var seen = {};
+    var out = [];
+    (list || []).forEach(function (item) {
+      var text = String(item || "").trim();
+      if (!text) return;
+      if (seen[text]) return;
+      seen[text] = true;
+      out.push(text);
+    });
+    return out;
+  }
+
+  function renderOrderChecklistPanel(records) {
+    var checklist = buildOrderChecklistItems(records || []);
+    var top = checklist.slice(0, 14);
+    var body = top.length
+      ? top.map(function (item) {
+          return (
+            '<div class="clientdoc-card" style="padding:10px;margin-bottom:8px">' +
+              '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px">' +
+                '<strong>' + escapeHtml(item.customer_name || "-") + "</strong>" +
+                '<span class="chip">' + escapeHtml(item.workflow_label || "일반") + "</span>" +
+              "</div>" +
+              '<div class="sub" style="margin-bottom:4px">' + escapeHtml(item.item_summary || "-") + "</div>" +
+              '<div class="sub" style="margin-bottom:6px">수량 ' + escapeHtml(item.quantity_summary || "-") + " / 납기 " + escapeHtml(item.due_date || "-") + "</div>" +
+              '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
+                item.tasks.slice(0, 4).map(function (task) {
+                  return '<span class="chip" style="font-size:11px;padding:2px 6px">' + escapeHtml(task) + "</span>";
+                }).join("") +
+              "</div>" +
+            "</div>"
+          );
+        }).join("")
+      : '<div class="sub">오늘 체크할 발주 작업이 없습니다.</div>';
+    return (
+      '<div class="clientdoc-card" style="margin-top:12px">' +
+        '<div class="clientdoc-head">' +
+          '<div class="clientdoc-title">' + icon("settings") + " 오늘 할 일 체크리스트</div>" +
+          '<div class="sub">발주/납기/예외 workflow 기준 자동 생성</div>' +
+        "</div>" +
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">' +
+          '<span class="chip">전체 ' + formatDisplayNumber(checklist.length) + "건</span>" +
+          '<span class="chip">오늘 ' + escapeHtml(getTodaySalesMonthDayText()) + "</span>" +
+        "</div>" +
+        body +
+      "</div>"
+    );
   }
 
   function getOrderMonthBase(records) {
@@ -11892,6 +12132,7 @@
   function renderOrdersSheetTab() {
     orderState.rows = normalizeOrderRows(orderState.rows, 50);
     var summary = getOrderSummary(orderState.rows);
+    var records = normalizeOrderRowsToRecords(orderState.rows);
     var extraction = orderState.lastExtraction && typeof orderState.lastExtraction === "object" ? orderState.lastExtraction : null;
     var extractionUnresolved = extraction && Array.isArray(extraction.unresolved_fields) ? extraction.unresolved_fields : [];
     return (
@@ -11948,6 +12189,7 @@
           '</div>' +
           '<div id="order-grid-host"></div>' +
         '</div>' +
+        renderOrderChecklistPanel(records) +
       '</div>'
     );
   }
@@ -12029,6 +12271,7 @@
             "</tbody></table>" +
           "</div>" +
         "</div>" +
+        renderOrderChecklistPanel(records) +
       "</div>"
     );
   }
@@ -12097,6 +12340,7 @@
             "</tbody></table>" +
           "</div>" +
         "</div>" +
+        renderOrderChecklistPanel(records) +
       "</div>"
     );
   }
@@ -13169,6 +13413,8 @@
       ".ai-answer{white-space:pre-wrap;background:#fff;border:1px solid var(--border);border-radius:10px;padding:10px;min-height:76px}" +
       ".ai-grid-table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--border)}" +
       ".ai-grid-table th,.ai-grid-table td{border:1px solid var(--border);padding:6px 8px;vertical-align:top;text-align:left;font-size:12px}" +
+      ".role-card.role-card-ai{position:relative;border:1px solid #b7c5ff;box-shadow:0 8px 20px rgba(79,110,255,.14)}" +
+      ".role-card.role-card-ai .ai-tab-badge{position:absolute;top:8px;right:10px;font-size:10px;font-weight:700;color:#2e4fe8;background:#eef2ff;border:1px solid #c8d4ff;border-radius:999px;padding:2px 7px}" +
       "@media (max-width:860px){.ai-edge-panel{width:calc(100vw - 14px)}.ai-edge-toggle{padding:8px 7px}}";
     document.head.appendChild(styleEl);
   }
@@ -13207,7 +13453,7 @@
     return (
       '<div class="stack">' +
       '<label>AI 서버 URL</label>' +
-      '<input type="text" class="field" id="' + prefix + '-endpoint" value="' + escapeAttr(String(managerState.aiEndpoint || "")) + '" placeholder="예: https://.../askCompanyAI" />' +
+      '<input type="text" class="field" id="' + prefix + '-endpoint" value="' + escapeAttr(String(managerState.aiEndpoint || getDefaultAiEndpoint() || "")) + '" placeholder="예: https://.../api/ai/chat" />' +
       "</div>" +
       '<div class="stack">' +
       "<label>문서 업로드</label>" +
@@ -13377,10 +13623,12 @@
     if (!state.role) {
       var h = '<div class="role-grid">';
       roleCards.forEach(function (card) {
+        var isAiRole = card.key === "ai";
         h +=
-          '<button type="button" class="role-card" data-role="' +
+          '<button type="button" class="role-card' + (isAiRole ? " role-card-ai" : "") + '" data-role="' +
           card.key +
           '">' +
+          (isAiRole ? '<span class="ai-tab-badge">AI</span>' : "") +
           '<div class="icon-box-sm" style="display:flex;align-items:center;justify-content:center">' +
           icon(card.icon) +
           "</div>" +
